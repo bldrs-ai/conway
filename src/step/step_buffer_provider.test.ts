@@ -352,3 +352,195 @@ describe('WindowedStepBufferProvider adaptive residency', () => {
         .adaptiveResidencyCapChunks).toBe(8)
   })
 })
+
+describe('WindowedStepBufferProvider recency stamps (Share#2139)', () => {
+
+  const CHUNK = 16
+  const CHUNKS = 64
+
+  /** Tiny seeded LCG (Numerical Recipes constants), so runs are reproducible. */
+  function makeRng(seed: number): (bound: number) => number {
+    let state = seed >>> 0
+
+    return (bound: number): number => {
+      state = (Math.imul(state, 1664525) + 1013904223) >>> 0
+      return Math.floor((state / 4294967296) * bound)
+    }
+  }
+
+  /**
+   * The residency semantics this change replaced, as a reference model:
+   * a Map whose order is recency (touch = delete + set), evicting
+   * first-in-Map-order unpinned chunks down to the cap.
+   */
+  class ReferenceWindow {
+    public readonly order = new Map<number, true>()
+    public readonly pins = new Map<number, number>()
+
+    public touch(chunk: number): void {
+      this.order.delete(chunk)
+      this.order.set(chunk, true)
+    }
+
+    public pin(chunk: number, delta: number): void {
+      this.pins.set(chunk, (this.pins.get(chunk) ?? 0) + delta)
+    }
+
+    public trim(cap: number): void {
+      while (this.order.size > cap) {
+        let victim: number | undefined
+
+        for (const candidate of this.order.keys()) {
+          if ((this.pins.get(candidate) ?? 0) <= 0) {
+            victim = candidate
+            break
+          }
+        }
+
+        if (victim === void 0) {
+          break
+        }
+
+        this.order.delete(victim)
+      }
+    }
+  }
+
+  /** The provider's resident chunk indices, sorted (white-box read of the window). */
+  function residentSet(provider: WindowedStepBufferProvider): number[] {
+    const chunks = (provider as unknown as { chunks_: Map<number, Uint8Array> }).chunks_
+
+    return [...chunks.keys()].sort((a, b) => a - b)
+  }
+
+  const scenarios: [string, number, boolean | undefined, boolean][] = [
+    ['cap 4, fixed, async store', 4, false, false],
+    ['cap 8, fixed, async store', 8, false, false],
+    ['cap 4, adaptive, async store', 4, true, false],
+    ['cap 8, adaptive, async store', 8, true, false],
+    ['cap 4, fixed, sync faulting store', 4, false, true],
+    ['cap 4, adaptive, sync faulting store', 4, true, true],
+  ]
+
+  test.each(scenarios)('resident set matches the Map-order LRU model: %s',
+      async (_name, cap, adaptive, synchronous) => {
+        const store = new InMemoryStepByteStore(makeBytes(CHUNK * CHUNKS), synchronous)
+        const provider = new WindowedStepBufferProvider(store, CHUNK, cap, adaptive)
+        const reference = new ReferenceWindow()
+        const rng = makeRng(0x2139 + cap + (adaptive ? 1 : 0) + (synchronous ? 2 : 0))
+        const pinned: number[] = []
+
+        // Locality-biased stream so there is real recency structure to get wrong,
+        // with enough requests to pass the adaptive policy's 4096-request interval.
+        // Most picks sweep cap + 1 chunks cyclically, LRU's worst case, so the adaptive
+        // policy sees capacity misses and grows the window.
+        let sweep = 0
+        const pick = (): number => rng(CHUNKS)
+        const pickSweep = (): number => rng(10) === 0 ? rng(CHUNKS) : sweep++ % (cap + 1)
+        let maxCap = 0
+
+        for (let step = 0; step < 14000; ++step) {
+          const op = rng(20)
+
+          if (op < 10) {
+            // ensureResident over one or two chunks.
+            const first = pickSweep()
+            const last = Math.min(CHUNKS - 1, first + rng(2))
+            const missing: number[] = []
+
+            for (let chunk = first; chunk <= last; ++chunk) {
+              reference.pin(chunk, 1)
+
+              if (reference.order.has(chunk)) {
+                reference.touch(chunk)
+              } else {
+                missing.push(chunk)
+              }
+            }
+
+            for (const chunk of missing) {
+              reference.touch(chunk)
+            }
+
+            await provider.ensureResident(first * CHUNK, (last - first + 1) * CHUNK)
+            reference.trim(provider.residencyCapChunks)
+
+            for (let chunk = first; chunk <= last; ++chunk) {
+              reference.pin(chunk, -1)
+            }
+          } else if (op < 16) {
+            // acquire of a single chunk: a recency touch when resident, a
+            // fault-in when the store can, an error otherwise.
+            const chunk = pick()
+
+            if (reference.order.has(chunk)) {
+              provider.acquire(chunk * CHUNK, 4)
+              reference.touch(chunk)
+            } else if (synchronous) {
+              provider.acquire(chunk * CHUNK, 4)
+              reference.touch(chunk)
+              reference.trim(provider.residencyCapChunks)
+              // A fault-in that trimming itself evicts (every other chunk pinned)
+              // stays evicted; see touch_.
+              if (!residentSet(provider).includes(chunk)) {
+                reference.order.delete(chunk)
+              }
+            } else {
+              expect(() => provider.acquire(chunk * CHUNK, 4)).toThrow(StepBufferNotResidentError)
+            }
+          } else if (op < 17 || pinned.length === 0) {
+            const chunk = pick()
+
+            provider.pinRange(chunk * CHUNK, CHUNK)
+            reference.pin(chunk, 1)
+            pinned.push(chunk)
+          } else {
+            const chunk = pinned.splice(rng(pinned.length), 1)[0]
+
+            provider.unpinRange(chunk * CHUNK, CHUNK)
+            reference.pin(chunk, -1)
+            provider.trimToCap()
+            reference.trim(provider.residencyCapChunks)
+          }
+
+          maxCap = Math.max(maxCap, provider.residencyCapChunks)
+
+          expect([...reference.order.keys()].sort((a, b) => a - b))
+              .toEqual(residentSet(provider))
+        }
+
+        if (adaptive && !synchronous) {
+          // The async adaptive variants only prove anything if the window really moved
+          // (the sync ones' random faults dilute the sweep, so they may not grow).
+          expect(maxCap).toBeGreaterThan(cap)
+        }
+      })
+
+  test('acquire on resident chunks never deletes from the window map', async () => {
+    const provider = new WindowedStepBufferProvider(
+        new InMemoryStepByteStore(makeBytes(CHUNK * 8)), CHUNK, 4)
+
+    for (let chunk = 0; chunk < 4; ++chunk) {
+      await provider.ensureResident(chunk * CHUNK, 1)
+    }
+
+    const originalDelete = Map.prototype.delete
+    let deletes = 0
+
+    Map.prototype.delete = function(this: Map<unknown, unknown>, key: unknown): boolean {
+      ++deletes
+      return originalDelete.call(this, key)
+    }
+
+    try {
+      for (let call = 0; call < 1000; ++call) {
+        provider.acquire((call % 4) * CHUNK + 1, 4)
+      }
+    } finally {
+      Map.prototype.delete = originalDelete
+    }
+
+    expect(deletes).toBe(0)
+    expect(residentSet(provider)).toEqual([0, 1, 2, 3])
+  })
+})

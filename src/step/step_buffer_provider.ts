@@ -499,8 +499,21 @@ export class WindowedStepBufferProvider implements StepBufferProvider {
   /** Of those reads, the ones a larger window would have avoided. */
   private intervalCapacityMisses_ = 0
 
-  /** Resident chunks by chunk index; Map order doubles as LRU order. */
+  /**
+   * Resident chunks by chunk index. Insertion order is NOT recency; the
+   * LRU order lives in {@link lastUse_} (see {@link touch_}).
+   */
   private readonly chunks_ = new Map< number, Uint8Array >()
+
+  /**
+   * Per-chunk last-use stamp, indexed by chunk index and sized from the
+   * store at construction. A resident chunk's stamp is its recency;
+   * {@link oldestUnpinned_} picks the eviction victim from it.
+   */
+  private readonly lastUse_: Float64Array
+
+  /** Monotonic source of {@link lastUse_} stamps; every stamp is unique. */
+  private useClock_ = 0
 
   /** In-flight chunk loads, de-duplicated by chunk index. */
   private readonly loading_ = new Map< number, Promise< Uint8Array > >()
@@ -548,6 +561,8 @@ export class WindowedStepBufferProvider implements StepBufferProvider {
 
     this.chunkBytes_        = chunkBytes
     this.maxResidentChunks_ = startingCap
+    this.lastUse_           =
+      new Float64Array( Math.max( 1, Math.ceil( store_.byteLength / chunkBytes ) ) )
 
     if ( !adaptive ) {
 
@@ -624,12 +639,65 @@ export class WindowedStepBufferProvider implements StepBufferProvider {
   /**
    * Touch a chunk for LRU recency.
    *
+   * Recency is a stamp write, not a Map delete + re-insert. `acquire`
+   * calls this on every read (9.64 M times loading an 860 MB IFC), and
+   * the delete/set pair leaves tombstones whose rehashes grow with the
+   * window: measured 0.83 s of `touch_` at the default 16 chunks but
+   * 4.97 s at a file-sized 216-chunk window, which made a larger window
+   * slower (Share#2139). Eviction order is unchanged; see
+   * {@link oldestUnpinned_}.
+   *
    * @param chunkIndex The chunk to touch.
+   */
+  private touch_( chunkIndex: number ): void {
+    this.lastUse_[ chunkIndex ] = ++this.useClock_
+  }
+
+  /**
+   * Add a chunk to the window, as most-recently used.
+   *
+   * A chunk already resident keeps its recency: that is the Map `set`
+   * semantics this replaced (an in-flight async load landing after a
+   * synchronous fault-in of the same chunk replaces the bytes without
+   * moving the entry).
+   *
+   * @param chunkIndex The chunk.
    * @param chunk The chunk bytes.
    */
-  private touch_( chunkIndex: number, chunk: Uint8Array ): void {
-    this.chunks_.delete( chunkIndex )
+  private insert_( chunkIndex: number, chunk: Uint8Array ): void {
+
+    if ( !this.chunks_.has( chunkIndex ) ) {
+      this.touch_( chunkIndex )
+    }
+
     this.chunks_.set( chunkIndex, chunk )
+  }
+
+  /**
+   * The least-recently-used resident chunk that no pin protects.
+   *
+   * A linear scan: evictions are rare next to touches (about 772 per
+   * large load) and the window is at most a few dozen chunks.
+   *
+   * @return {number | undefined} The victim, or undefined when every
+   * resident chunk is pinned.
+   */
+  private oldestUnpinned_(): number | undefined {
+
+    let victim: number | undefined
+    let victimStamp = Infinity
+
+    for ( const candidate of this.chunks_.keys() ) {
+
+      const stamp = this.lastUse_[ candidate ]
+
+      if ( stamp < victimStamp && ( this.ensurePins_.get( candidate ) ?? 0 ) <= 0 ) {
+        victim      = candidate
+        victimStamp = stamp
+      }
+    }
+
+    return victim
   }
 
   /**
@@ -655,7 +723,7 @@ export class WindowedStepBufferProvider implements StepBufferProvider {
       const chunk = this.chunks_.get( firstChunk ) ??
         this.faultInSync_( firstChunk, address, length )
 
-      this.touch_( firstChunk, chunk )
+      this.touch_( firstChunk )
 
       return { buffer: chunk, offset: firstChunk * chunkBytes }
     }
@@ -670,7 +738,7 @@ export class WindowedStepBufferProvider implements StepBufferProvider {
       const chunk = this.chunks_.get( chunkIndex ) ??
         this.faultInSync_( chunkIndex, address, length )
 
-      this.touch_( chunkIndex, chunk )
+      this.touch_( chunkIndex )
 
       const chunkBase  = chunkIndex * chunkBytes
       const copyFrom   = Math.max( address, chunkBase )
@@ -732,7 +800,7 @@ export class WindowedStepBufferProvider implements StepBufferProvider {
 
     ++this.syncFaults_
 
-    this.chunks_.set( chunkIndex, chunk )
+    this.insert_( chunkIndex, chunk )
     this.trimToCap()
 
     return chunk
@@ -828,14 +896,12 @@ export class WindowedStepBufferProvider implements StepBufferProvider {
       return
     }
 
-    for ( const candidate of this.chunks_.keys() ) {
+    while ( this.chunks_.size > this.maxResidentChunks_ ) {
 
-      if ( this.chunks_.size <= this.maxResidentChunks_ ) {
+      const candidate = this.oldestUnpinned_()
+
+      if ( candidate === void 0 ) {
         break
-      }
-
-      if ( ( this.ensurePins_.get( candidate ) ?? 0 ) > 0 ) {
-        continue
       }
 
       this.chunks_.delete( candidate )
@@ -875,7 +941,7 @@ export class WindowedStepBufferProvider implements StepBufferProvider {
 
         if ( resident !== void 0 ) {
 
-          this.touch_( chunkIndex, resident )
+          this.touch_( chunkIndex )
           this.notePolicyRequest_( chunkIndex, false )
           continue
         }
@@ -893,7 +959,7 @@ export class WindowedStepBufferProvider implements StepBufferProvider {
 
             tagBufferBase( chunk, chunkBase )
 
-            this.chunks_.set( chunkIndex, chunk )
+            this.insert_( chunkIndex, chunk )
             this.loading_.delete( chunkIndex )
 
             return chunk
