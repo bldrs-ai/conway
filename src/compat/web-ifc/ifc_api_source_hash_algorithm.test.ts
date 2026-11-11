@@ -20,12 +20,12 @@
 //  5. asked for the block digest with no WebCrypto, an open records FNV and
 //     says so, rather than failing.
 import * as fs from 'fs'
+import { createHash } from 'crypto'
 
 import { afterEach, beforeAll, describe, expect, jest, test } from '@jest/globals'
 
 import { IfcAPI, Loadersettings } from './ifc_api'
 import { InMemoryStepByteStore } from '../../step/step_buffer_provider'
-import { BufferByteSource } from '../../step/parsing/byte_source'
 import {
   hashSource,
   readSidecarSourceIdentity,
@@ -33,7 +33,7 @@ import {
   SIDECAR_HASH_SHA256_BLOCKS,
   sidecarMatchesSource,
 } from '../../step/parsing/index_sidecar'
-import { hashSourceAsync } from '../../step/parsing/source_hash'
+import { SOURCE_HASH_BLOCK_BYTES } from '../../step/parsing/source_hash'
 
 
 // Header offsets (index_sidecar.ts §"v3 layout"): magic, version,
@@ -73,6 +73,31 @@ afterEach( () => {
  */
 function fixture( name: string ): Uint8Array {
   return new Uint8Array( fs.readFileSync( `data/${name}` ) )
+}
+
+
+/**
+ * The `'sha256Blocks'` digest by its definition (`Sha256BlockFold`),
+ * computed with node:crypto rather than the code under test.
+ *
+ * @param bytes The source.
+ * @return {number} The digest.
+ */
+function blockDigest( bytes: Uint8Array ): number {
+
+  const chain = createHash( 'sha256' )
+  const length = Buffer.alloc( 8 )
+
+  length.writeDoubleLE( bytes.byteLength, 0 )
+  chain.update( length )
+
+  for ( let at = 0; at < bytes.byteLength; at += SOURCE_HASH_BLOCK_BYTES ) {
+    chain.update( createHash( 'sha256' )
+        .update( bytes.subarray( at, Math.min( at + SOURCE_HASH_BLOCK_BYTES, bytes.byteLength ) ) )
+        .digest() )
+  }
+
+  return chain.digest().readUInt32LE( 0 )
 }
 
 
@@ -201,8 +226,7 @@ describe.each( FIXTURES )( 'SOURCE_HASH_ALGORITHM sha256Blocks on %s (bldrs-ai/S
         expect( identitySlots( fnv ) ).toEqual(
             { sourceHash: hashSource( bytes ), hashAlgorithm: SIDECAR_HASH_FNV1A_32 } )
         expect( identitySlots( blocks ) ).toEqual( {
-          sourceHash: await hashSourceAsync(
-              new BufferByteSource( bytes ), void 0, { algorithm: 'sha256Blocks' } ),
+          sourceHash: blockDigest( bytes ),
           hashAlgorithm: SIDECAR_HASH_SHA256_BLOCKS,
         } )
         expect( blocks.byteLength ).toBe( fnv.byteLength )
@@ -273,8 +297,7 @@ describe( 'the classic resident IFC opens (bldrs-ai/Share#2092)', () => {
     api.CloseModel( asyncID )
 
     expect( identitySlots( asyncSidecar ) ).toEqual( {
-      sourceHash: await hashSourceAsync(
-          new BufferByteSource( bytes ), void 0, { algorithm: 'sha256Blocks' } ),
+      sourceHash: blockDigest( bytes ),
       hashAlgorithm: SIDECAR_HASH_SHA256_BLOCKS,
     } )
     expect( ( await reopen( bytes, asyncSidecar ) ).modelID ).toBeGreaterThanOrEqual( 0 )
