@@ -1185,9 +1185,41 @@ Deliberately small first step; each has a measurable exit.
     only an engine caller can supply a hash (`exportIfcIndexSidecar`'s
     `sourceHash`).
     The fold is `Math.imul`, because `indexing/hashing.ts`'s shift-and-add
-    `fnv1a` measured ~6× slower in Node 22. A faster digest is a
-    format-version question, tracked with the sampled digest in
-    conway#758. A mismatch at open is an
+    `fnv1a` measured ~6× slower in Node 22.
+
+    **A native digest, as a `hashAlgorithm` id (bldrs-ai/Share#2092).**
+    The FNV fold is one serial xor → `Math.imul` chain per byte, so it
+    runs at the multiply's latency even fully optimised (~1.2 s of V8 CPU
+    on PSB, 902 MB) and several times slower in any lower JIT tier. In
+    Firefox's engine worker, which discarded all its JIT code at 9 of 11
+    major GCs of a PSB parse, the hash and the sidecar export together
+    measured ~10 s of a 40.7 s parse (30.8 s with neither); the export
+    runs after the pump, outside Parsing, so the parse's share is the
+    hash's. `SOURCE_HASH_ALGORITHM: 'sha256Blocks'` (engine:
+    `sourceHashAlgorithm`) records `hashAlgorithm` 2 instead: SHA-256
+    (`crypto.subtle.digest`) of each 4 MiB block cut at file offsets,
+    chained under the length and truncated to the 32-bit slot
+    (`source_hash.ts#Sha256BlockFold`). `HashingByteSource` hands each
+    read's fresh bytes to the digest a block at a time (the call copies
+    them before it returns, per WebCrypto, so the parse's reused window is
+    safe); no JS loop touches the bytes, which the tests count rather than
+    time (`Math.imul` runs for the ~0.5 MB sampled digest only). At most
+    eight block digests run before a read waits. The asynchronous opens
+    take it, IFC and AP214, buffered and windowed; the synchronous ones
+    and a platform without WebCrypto record FNV-1a, and the sidecar says
+    which. No version bump: a verify runs the id the sidecar carries, so
+    persisted FNV sidecars still verify; without WebCrypto an id-2 sidecar
+    is stale (`reason: 'algorithm'`), never trusted unverified; and a
+    conway that predates id 2 refuses one (its FNV verify does not match;
+    without a verify its decode throws on the id). Node numbers for PSB
+    are in the PR (bldrs-ai/conway, branch `claude/source-hash-off-parse`);
+    no Firefox number exists for it yet. A caller-supplied digest (the
+    page already hashes the file for its GLB cache key) was considered and
+    not taken: on a reopen that digest is a record trusted by size,
+    lastModified and a 128 KiB probe, which is weaker than the full verify
+    Share chose over `'sampled'`, and some sources have none.
+
+    A mismatch at open is an
     `IndexSidecarStaleError` (`reason: 'length' | 'hash'`), which the
     compat surface records as load status `INDEX_STALE`. That status is
     the "parse instead" signal. The compat open checks the sidecar
