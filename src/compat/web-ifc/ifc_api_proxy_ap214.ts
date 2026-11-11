@@ -43,7 +43,11 @@ import {
 import { extractModelInfo } from '../../loaders/loading_utilities'
 import { StepHeader } from '../../step/parsing/step_parser'
 import { BufferByteSource, StoreByteSource } from '../../step/parsing/byte_source'
-import { HashingByteSource } from '../../step/parsing/source_hash'
+import {
+  HashingByteSource,
+  sidecarHashAlgorithmId,
+  sourceHashOptionsFor,
+} from '../../step/parsing/source_hash'
 import {
   hashSampledBuffer,
   hashSource,
@@ -874,7 +878,9 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
       } : parseTick
 
     const hashingSource = settings?.RECORD_SOURCE_HASH === true ?
-      new HashingByteSource(new StoreByteSource(store)) : void 0
+      new HashingByteSource(
+          new StoreByteSource(store),
+          sourceHashOptionsFor(settings.SOURCE_HASH_ALGORITHM)) : void 0
 
     let result: ParseResult
     let stepHeader: StepHeader
@@ -922,6 +928,8 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
     model.trackCapturedSourceViews = true
 
     model.indexedSourceHash = await hashingSource?.finishAsync()
+    model.indexedSourceHashAlgorithm = hashingSource !== void 0 ?
+      sidecarHashAlgorithmId(hashingSource.algorithm) : void 0
     model.indexedSampledHash = hashingSource?.sampledHash
 
     statistics?.setParseTime(parseEndTime - parseStartTime)
@@ -979,6 +987,7 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
     model.trackCapturedSourceViews = true
 
     model.indexedSourceHash = restored.sourceHash
+    model.indexedSourceHashAlgorithm = restored.hashAlgorithm
     model.indexedSampledHash = restored.sampledHash
 
     const restoreEndTime = Date.now()
@@ -1076,7 +1085,9 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
     // RECORD_SOURCE_HASH folds the source digests into the parse's own pass,
     // for the index sidecar export (conway#757; the IFC proxy's twin).
     const hashingSource = settings?.RECORD_SOURCE_HASH === true ?
-      new HashingByteSource( new BufferByteSource(data) ) : void 0
+      new HashingByteSource(
+          new BufferByteSource(data),
+          sourceHashOptionsFor( settings.SOURCE_HASH_ALGORITHM ) ) : void 0
 
     try {
       ( { result } = await buildIndexStreamingAsync(
@@ -1109,6 +1120,8 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
     const model = new AP214StepModel(data, columns)
 
     model.indexedSourceHash = await hashingSource?.finishAsync()
+    model.indexedSourceHashAlgorithm = hashingSource !== void 0 ?
+      sidecarHashAlgorithmId(hashingSource.algorithm) : void 0
     model.indexedSampledHash = hashingSource?.sampledHash
 
     statistics?.setParseTime(parseEndTime - parseStartTime)

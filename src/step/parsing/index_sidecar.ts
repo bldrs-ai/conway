@@ -27,8 +27,11 @@ import EntityTypesIfc, { EntityTypesIfcCount } from '../../ifc/ifc4_gen/entity_t
  *   schemaTypeCount     u32  that enumeration's size when written
  *   schemaTypeDigest    u32  FNV-1a of its ordinal → name mapping
  *                            (sidecarSchemaStamp)
- *   hashAlgorithm       u32  what `sourceHash` and `sampledHash` are
- *                            (1 = FNV-1a 32, chained)
+ *   hashAlgorithm       u32  what `sourceHash` is (1 = FNV-1a 32,
+ *                            chained; 2 = SHA-256 of 4 MiB blocks,
+ *                            chained, truncated — source_hash.ts
+ *                            #Sha256BlockFold). `sampledHash` is FNV-1a
+ *                            under both
  *   sampledHash         u32  digest of the sampled source blocks
  *                            (sampledSourceSpans), 0 = not recorded
  *   fieldMaskCount      u32  rows in the field-mask table
@@ -221,6 +224,28 @@ const FLAG_FIELD_MASKS = 2
 /** `hashAlgorithm`: chained FNV-1a 32 ({@link hashSource}). */
 export const SIDECAR_HASH_FNV1A_32 = 1
 
+/**
+ * `hashAlgorithm`: native SHA-256 over 4 MiB blocks, chained and truncated
+ * to 32 bits (`source_hash.ts#Sha256BlockFold`, bldrs-ai/Share#2092). The
+ * sampled digest stays FNV-1a. Added without a version bump, which is what
+ * the slot is for: a reader that predates it refuses the blob (its full
+ * verify computes FNV, which does not match, so the open is stale; without
+ * a verify, its decode throws on the id), and this reader still verifies
+ * every id-1 sidecar already persisted.
+ */
+export const SIDECAR_HASH_SHA256_BLOCKS = 2
+
+/**
+ * Is `id` a `hashAlgorithm` this reader can decode?
+ *
+ * @param id The slot's value.
+ * @return {boolean} True for {@link SIDECAR_HASH_FNV1A_32} and
+ * {@link SIDECAR_HASH_SHA256_BLOCKS}.
+ */
+export function isKnownSidecarHashAlgorithm( id: number ): boolean {
+  return id === SIDECAR_HASH_FNV1A_32 || id === SIDECAR_HASH_SHA256_BLOCKS
+}
+
 
 /**
  * Which type enumeration a sidecar's `typeID` column indexes. One value per
@@ -300,6 +325,12 @@ export interface SidecarExtras {
   sampledHash?: number
 
   /**
+   * The `hashAlgorithm` id `sourceHash` was taken with (default
+   * {@link SIDECAR_HASH_FNV1A_32}).
+   */
+  hashAlgorithm?: number
+
+  /**
    * Decoded-field counts by express ID (`StepModelBase.setFieldMasks`), for
    * an index translated by the IFC4-compatible IFC4X3 route.
    */
@@ -345,7 +376,7 @@ const IS_LITTLE_ENDIAN =
 
 
 /** Which half of the trust gate an {@link IndexSidecarStaleError} failed. */
-export type IndexSidecarStaleReason = 'length' | 'hash' | 'schema'
+export type IndexSidecarStaleReason = 'length' | 'hash' | 'schema' | 'algorithm'
 
 
 /**
@@ -375,6 +406,10 @@ export class IndexSidecarStaleError extends Error {
     super( reason === 'length' ?
       `Sidecar was built against ${expected} bytes but the store holds ` +
       `${actual}` :
+      reason === 'algorithm' ?
+        `Sidecar's source hash (algorithm ${expected}) cannot be verified ` +
+        'here (no crypto.subtle.digest, or an unknown algorithm); rebuild ' +
+        'it with a parse' :
       reason === 'schema' ?
         `Sidecar indexes a different type enumeration (sidecar schema ` +
         `${expected}, this open ${actual}); rebuild it with a parse` :
@@ -418,6 +453,13 @@ export interface SidecarSourceIdentity {
 
   /** Hash of the source bytes (see {@link hashSource}). */
   sourceHash: number
+
+  /**
+   * The `hashAlgorithm` id `sourceHash` was taken with
+   * ({@link SIDECAR_HASH_FNV1A_32} or {@link SIDECAR_HASH_SHA256_BLOCKS});
+   * absent reads as FNV, the only id before bldrs-ai/Share#2092.
+   */
+  hashAlgorithm?: number
 
   /**
    * Sampled digest of the source ({@link hashSampledSource}), when the
@@ -945,7 +987,12 @@ export function serializeIndexSidecarFromColumns<TypeIDType extends number>(
     extras?: SidecarExtras ): Uint8Array {
 
   const schema = extras?.schema ?? IFC_SIDECAR_SCHEMA
+  const hashAlgorithm = extras?.hashAlgorithm ?? SIDECAR_HASH_FNV1A_32
   const fieldMasks = extras?.fieldMasks
+
+  if ( !isKnownSidecarHashAlgorithm( hashAlgorithm ) ) {
+    throw new Error( `Unknown sidecar hash algorithm ${hashAlgorithm}` )
+  }
   const fieldMaskCount = fieldMasks?.size ?? 0
 
   requireAddressableSource( sourceByteLength )
@@ -1030,7 +1077,7 @@ export function serializeIndexSidecarFromColumns<TypeIDType extends number>(
   view.setUint32( offset, schema.schema, true ); offset += U32_BYTES
   view.setUint32( offset, schema.typeCount, true ); offset += U32_BYTES
   view.setUint32( offset, schema.typeDigest >>> 0, true ); offset += U32_BYTES
-  view.setUint32( offset, SIDECAR_HASH_FNV1A_32, true ); offset += U32_BYTES
+  view.setUint32( offset, hashAlgorithm, true ); offset += U32_BYTES
   view.setUint32( offset, ( extras?.sampledHash ?? 0 ) >>> 0, true ); offset += U32_BYTES
   view.setUint32( offset, fieldMaskCount, true ); offset += U32_BYTES
 
@@ -1200,6 +1247,7 @@ function readIdentityFields( view: DataView ): SidecarSourceIdentity {
   return {
     sourceByteLength: view.getFloat64( U32_BYTES * 2, true ),
     sourceHash: view.getUint32( U32_BYTES * 2 + F64_BYTES, true ),
+    hashAlgorithm: view.getUint32( SCHEMA_OFFSET + U32_BYTES * 3, true ),
     sampledHash: sampledHash === 0 ? void 0 : sampledHash,
     schema: {
       schema: view.getUint32( SCHEMA_OFFSET, true ) as SidecarSchema,
@@ -1262,7 +1310,7 @@ export function deserializeIndexSidecarToColumns<TypeIDType extends number>(
   const hashAlgorithm = view.getUint32( SCHEMA_OFFSET + U32_BYTES * 3, true )
   const fieldMaskCount = view.getUint32( offset, true ); offset += U32_BYTES
 
-  if ( hashAlgorithm !== SIDECAR_HASH_FNV1A_32 ) {
+  if ( !isKnownSidecarHashAlgorithm( hashAlgorithm ) ) {
     throw new Error( `Unsupported sidecar hash algorithm ${hashAlgorithm}` )
   }
 
@@ -1352,6 +1400,7 @@ export function deserializeIndexSidecarToColumns<TypeIDType extends number>(
     version,
     sourceByteLength,
     sourceHash,
+    hashAlgorithm,
     sampledHash: identity.sampledHash,
     schema: identity.schema,
     fieldMasks,
