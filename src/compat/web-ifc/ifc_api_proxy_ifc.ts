@@ -62,6 +62,7 @@ import {
   hashSampledBuffer,
   hashSource,
   IndexSidecarUnsupportedError,
+  SIDECAR_HASH_FNV1A_32,
 } from '../../step/parsing/index_sidecar'
 import ParsingBuffer from '../../parsing/parsing_buffer'
 import { BufferByteSource, StoreByteSource } from '../../step/parsing/byte_source'
@@ -1219,6 +1220,9 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     if ( model !== void 0 && settings?.RECORD_SOURCE_HASH === true &&
       !IfcApiProxyIfc.isIfc4x3Header( stepHeader ) ) {
       model.indexedSourceHash = hashSource( data )
+      // The synchronous open cannot await a native digest: FNV-1a, whatever
+      // SOURCE_HASH_ALGORITHM asks for, and labelled as such.
+      model.indexedSourceHashAlgorithm = SIDECAR_HASH_FNV1A_32
       model.indexedSampledHash = hashSampledBuffer( data )
     }
 

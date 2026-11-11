@@ -251,11 +251,22 @@ export interface Loadersettings {
    *    JIT does not keep it optimised (the Firefox engine worker).
    *  - `'sha256Blocks'`: native SHA-256 (`crypto.subtle.digest`) of each
    *    4 MiB block, chained. The parse's thread only hands each block to
-   *    the digest; no JS loop touches the bytes. Recorded by the
-   *    asynchronous opens (`OpenModelStreamed`, `OpenModelStream`,
-   *    `OpenModelAsync`, IFC and STEP); the synchronous `OpenModel` and a
-   *    platform without WebCrypto record FNV-1a instead, and the sidecar
-   *    says which.
+   *    the digest; no JS loop touches the bytes.
+   *
+   * What each entry point records when `'sha256Blocks'` is asked for, the
+   * same for IFC and STEP (AP214/AP203/AP242):
+   *
+   * | Entry point | Records |
+   * |---|---|
+   * | `OpenModelStreamed` (streamed columnar parse) | block digest |
+   * | `OpenModelStreamed` → classic fallback after a failed streamed open (`fromAsync`) | block digest |
+   * | `OpenModelAsync` | block digest |
+   * | `OpenModelStream` (windowed over a store) | block digest |
+   * | `OpenModel` (synchronous: cannot await a native digest) | FNV-1a |
+   * | `OpenModelFromIndex` | the sidecar's own digest and id, adopted |
+   *
+   * With no WebCrypto every parsing entry point records FNV-1a. The
+   * sidecar's `hashAlgorithm` is always the digest actually computed.
    *
    * A sidecar's verify (`VERIFY_INDEX_SOURCE_HASH: true`) always runs the
    * algorithm the sidecar names, whatever this is set to, so sidecars of

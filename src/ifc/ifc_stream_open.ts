@@ -229,6 +229,10 @@ export function openStreamedIfcModel(
   const model = new IfcStepModel( void 0, columns, provider )
 
   model.indexedSourceHash = hashing?.finish()
+  // The synchronous hasher is FNV-1a only (`sourceHashAlgorithm` is for the
+  // asynchronous open), labelled as such.
+  model.indexedSourceHashAlgorithm =
+    hashing !== void 0 ? sidecarHashAlgorithmId( 'fnv1a32' ) : void 0
   model.indexedSampledHash = hashing?.sampledHash
 
   return {

@@ -25,6 +25,8 @@ import { createHash } from 'crypto'
 import { afterEach, beforeAll, describe, expect, jest, test } from '@jest/globals'
 
 import { IfcAPI, Loadersettings } from './ifc_api'
+import { IfcApiProxyIfc } from './ifc_api_proxy_ifc'
+import { IfcApiProxyAP214 } from './ifc_api_proxy_ap214'
 import { InMemoryStepByteStore } from '../../step/step_buffer_provider'
 import {
   hashSource,
@@ -292,32 +294,77 @@ describe.each( FIXTURES )( 'SOURCE_HASH_ALGORITHM sha256Blocks on %s (bldrs-ai/S
 } )
 
 
-describe( 'the classic resident IFC opens (bldrs-ai/Share#2092)', () => {
+describe.each( FIXTURES )( 'every open entry point labels what it computed, on %s', ( name ) => {
 
-  test( 'OpenModelAsync records the block digest; the synchronous OpenModel records FNV', async () => {
+  // codex review of conway#783: AP214's cooperative classic open hashed FNV
+  // whatever the setting asked. Every ASYNC entry point now takes the block
+  // digest for both formats — including the classic fallback a failed
+  // streamed open lands in — and the synchronous OpenModel takes FNV; each
+  // sidecar's hashAlgorithm is the digest actually computed, so it reopens
+  // with the full verify and is refused over a same-length rewrite.
+  const RESIDENT = { ...BLOCKS, DEFER_GEOMETRY: false, STREAMING_CONSUMER: false }
 
-    const bytes = fixture( 'index.ifc' )
-    const resident = { ...BLOCKS, DEFER_GEOMETRY: false, STREAMING_CONSUMER: false }
+  /**
+   * Export, then the two reopens every sidecar must pass.
+   *
+   * @param bytes The source.
+   * @param modelID An open model of it.
+   * @param expected The digest and id the sidecar must carry.
+   */
+  async function expectSidecar(
+      bytes: Uint8Array,
+      modelID: number,
+      expected: { sourceHash: number, hashAlgorithm: number } ) {
 
-    const asyncID = await api.OpenModelAsync( bytes.slice(), resident )
-    const asyncSidecar = ( await api.ExportIndexSidecar( asyncID ) )!
+    expect( modelID ).toBeGreaterThanOrEqual( 0 )
 
-    api.CloseModel( asyncID )
+    const sidecar = ( await api.ExportIndexSidecar( modelID ) )!
 
-    expect( identitySlots( asyncSidecar ) ).toEqual( {
-      sourceHash: blockDigest( bytes ),
-      hashAlgorithm: SIDECAR_HASH_SHA256_BLOCKS,
-    } )
-    expect( ( await reopen( bytes, asyncSidecar ) ).modelID ).toBeGreaterThanOrEqual( 0 )
+    api.CloseModel( modelID )
 
-    // A synchronous open cannot await a native digest, so it takes FNV and
-    // the sidecar says so.
-    const syncID = api.OpenModel( bytes.slice(), resident )
-    const syncSidecar = ( await api.ExportIndexSidecar( syncID ) )!
+    expect( identitySlots( sidecar ) ).toEqual( expected )
+    expect( ( await reopen( bytes, sidecar ) ).modelID ).toBeGreaterThanOrEqual( 0 )
 
-    api.CloseModel( syncID )
+    const stale = await reopen( rewrite( bytes ), sidecar )
 
-    expect( identitySlots( syncSidecar ) ).toEqual(
+    expect( stale.modelID ).toBe( -1 )
+    expect( stale.status ).toBe( 'INDEX_STALE' )
+  }
+
+  test( 'OpenModelAsync records the block digest', async () => {
+
+    const bytes = fixture( name )
+
+    await expectSidecar( bytes, await api.OpenModelAsync( bytes.slice(), RESIDENT ),
+        { sourceHash: blockDigest( bytes ), hashAlgorithm: SIDECAR_HASH_SHA256_BLOCKS } )
+  } )
+
+  test( 'the classic fallback after a failed streamed open records the block digest', async () => {
+
+    const bytes = fixture( name )
+
+    // Fail both formats' streamed opens, so OpenModelStreamed lands in
+    // fromAsync exactly as it does when a streamed parse throws.
+    const failure = () => Promise.reject( new Error( 'streamed open failed (test)' ) )
+
+    jest.spyOn( IfcApiProxyIfc, 'createDeferred' ).mockImplementation( failure )
+    jest.spyOn( IfcApiProxyAP214, 'createDeferred' ).mockImplementation( failure )
+    jest.spyOn( console, 'warn' ).mockImplementation( () => {} )
+
+    const modelID = await api.OpenModelStreamed( bytes.slice(), BLOCKS )
+
+    expect( IfcApiProxyIfc.createDeferred ).toHaveBeenCalledTimes( name.endsWith( '.ifc' ) ? 1 : 0 )
+    expect( IfcApiProxyAP214.createDeferred ).toHaveBeenCalledTimes( name.endsWith( '.ifc' ) ? 0 : 1 )
+
+    await expectSidecar( bytes, modelID,
+        { sourceHash: blockDigest( bytes ), hashAlgorithm: SIDECAR_HASH_SHA256_BLOCKS } )
+  } )
+
+  test( 'the synchronous OpenModel records FNV, labelled FNV', async () => {
+
+    const bytes = fixture( name )
+
+    await expectSidecar( bytes, api.OpenModel( bytes.slice(), RESIDENT ),
         { sourceHash: hashSource( bytes ), hashAlgorithm: SIDECAR_HASH_FNV1A_32 } )
   } )
 } )
