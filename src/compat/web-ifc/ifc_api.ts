@@ -259,7 +259,10 @@ export interface Loadersettings {
    *
    * A sidecar's verify (`VERIFY_INDEX_SOURCE_HASH: true`) always runs the
    * algorithm the sidecar names, whatever this is set to, so sidecars of
-   * either kind already persisted keep verifying. A conway that predates
+   * either kind already persisted keep verifying. An id-2 sidecar with no
+   * WebCrypto here is `INDEX_STALE` under `true`; `'sampled'` still
+   * verifies it (the sampled digest is FNV under both) and `false` checks
+   * its length, as for any sidecar. A conway that predates
    * `'sha256Blocks'` refuses such a sidecar (stale, or a decode error
    * without a verify) and parses — it never accepts it unverified.
    */

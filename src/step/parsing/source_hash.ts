@@ -176,9 +176,16 @@ export function sidecarHashAlgorithmId( algorithm: SourceHashAlgorithm ): number
  * Feeding costs the caller's thread one `digest` call per block — the call
  * copies the block before it returns, so a read buffer the parse reuses at
  * once is safe to pass — plus a `set` into a staging block for a block that
- * straddles two reads. No byte is touched by a JS loop. At most
- * {@link MAX_BLOCK_DIGESTS_IN_FLIGHT} digests are left running; a feeder
- * that can await calls {@link settle} after each fold to stay inside that.
+ * straddles two reads. No byte is touched by a JS loop.
+ *
+ * **At most {@link MAX_BLOCK_DIGESTS_IN_FLIGHT} block digests are ever
+ * running**, whatever the read size: {@link fold} waits for the oldest
+ * before starting one that would exceed the bound, block by block, so a
+ * multi-block read (a 16 MiB window refill, a grown window, one
+ * whole-buffer read) cannot submit past it before any wait runs (codex
+ * review of conway#783). Waiting changes only when a block's digest
+ * starts, never its bytes: the caller's buffer is not touched until `fold`
+ * resolves, and block N is always the source's Nth 4 MiB.
  */
 export class Sha256BlockFold {
 
@@ -225,22 +232,35 @@ export class Sha256BlockFold {
 
   /**
    * Fold `bytes[from, to)`, the next bytes of the source in file order.
+   * Resolves once every complete block in it has been handed to the digest;
+   * the caller must leave `bytes[from, to)` unchanged until then.
    *
    * @param bytes The buffer.
    * @param from First index in `bytes`.
    * @param to One past the last index in `bytes`.
    */
-  public fold( bytes: Uint8Array, from: number, to: number ): void {
+  public async fold( bytes: Uint8Array, from: number, to: number ): Promise< void > {
 
     let at = from
 
     while ( at < to ) {
+
+      // Each pass completes at most one block (straight through, or by
+      // finishing the staged one), so waiting here, before it, is what
+      // keeps the running count at or under the bound.
+      const completes =
+        to - at >= SOURCE_HASH_BLOCK_BYTES - this.stagingFill_
+
+      if ( completes && this.inFlight_ >= MAX_BLOCK_DIGESTS_IN_FLIGHT ) {
+        await this.settle( MAX_BLOCK_DIGESTS_IN_FLIGHT - 1 )
+      }
 
       if ( this.stagingFill_ === 0 && to - at >= SOURCE_HASH_BLOCK_BYTES ) {
 
         // A whole block in this read: straight to the digest, no JS copy.
         this.submit_( bytes.subarray( at, at + SOURCE_HASH_BLOCK_BYTES ) )
         at += SOURCE_HASH_BLOCK_BYTES
+        this.fed_ += SOURCE_HASH_BLOCK_BYTES
         continue
       }
 
@@ -256,9 +276,9 @@ export class Sha256BlockFold {
         this.submit_( staging )
         this.stagingFill_ = 0
       }
-    }
 
-    this.fed_ += to - from
+      this.fed_ += take
+    }
   }
 
   /**
@@ -291,6 +311,9 @@ export class Sha256BlockFold {
     }
 
     if ( this.stagingFill_ > 0 ) {
+
+      // The short last block counts against the bound like any other.
+      await this.settle( MAX_BLOCK_DIGESTS_IN_FLIGHT - 1 )
       this.submit_( this.staging_!.subarray( 0, this.stagingFill_ ) )
       this.stagingFill_ = 0
     }
@@ -461,8 +484,8 @@ function blockFoldFor(
  * read's fresh bytes go to the native digest, a 4 MiB block at a time, and
  * no JS loop runs over them — the sequential-read contract and the tail
  * are unchanged, and so is the sampled digest (FNV-1a over ~0.5 MB). The
- * read awaits the oldest block digest only when more than
- * {@link MAX_BLOCK_DIGESTS_IN_FLIGHT} are running.
+ * read awaits the oldest block digest only when
+ * {@link MAX_BLOCK_DIGESTS_IN_FLIGHT} are already running.
  */
 export class HashingByteSource implements AsyncByteSource {
 
@@ -558,11 +581,12 @@ export class HashingByteSource implements AsyncByteSource {
       this.foldFresh_( into, fresh, intoOffset + got )
       this.covered_ = end
 
-      // Back-pressure only: the digests run at native speed, far ahead of
-      // the parse, so this rarely waits — and an FNV read never awaits
-      // anything it did not await before.
-      if ( this.blocks_ !== void 0 && this.blocks_.inFlight > MAX_BLOCK_DIGESTS_IN_FLIGHT ) {
-        await this.blocks_.settle()
+      // The block digest's own back-pressure (Sha256BlockFold#fold): it
+      // waits only when the bound is reached, and `into` is not handed back
+      // until it resolves. An FNV read never awaits anything it did not
+      // await before.
+      if ( this.blocks_ !== void 0 ) {
+        await this.blocks_.fold( into, fresh, intoOffset + got )
       }
     }
 
@@ -598,7 +622,7 @@ export class HashingByteSource implements AsyncByteSource {
         this.covered_ += got
 
         if ( this.blocks_ !== void 0 ) {
-          await this.blocks_.settle()
+          await this.blocks_.fold( chunk, 0, got )
         }
       }
     }
@@ -608,7 +632,8 @@ export class HashingByteSource implements AsyncByteSource {
 
   /**
    * Fold `bytes[from, to)`, which holds the source from `covered_` on, into
-   * both digests.
+   * the synchronous digests: the sampled one, and FNV-1a when that is the
+   * whole-source digest (the block digest is fed by the caller, awaited).
    *
    * @param bytes The buffer.
    * @param from First index.
@@ -616,9 +641,7 @@ export class HashingByteSource implements AsyncByteSource {
    */
   private foldFresh_( bytes: Uint8Array, from: number, to: number ): void {
 
-    if ( this.blocks_ !== void 0 ) {
-      this.blocks_.fold( bytes, from, to )
-    } else {
+    if ( this.blocks_ === void 0 ) {
       this.hash_ = foldFnv1a( bytes, from, to, this.hash_ )
     }
 
@@ -786,8 +809,7 @@ export async function hashSourceAsync(
     }
 
     if ( blocks !== void 0 ) {
-      blocks.fold( chunk, 0, got )
-      await blocks.settle()
+      await blocks.fold( chunk, 0, got )
     } else {
       hash = foldFnv1a( chunk, 0, got, hash )
     }

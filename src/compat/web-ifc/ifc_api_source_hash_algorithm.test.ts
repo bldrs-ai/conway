@@ -109,7 +109,9 @@ function blockDigest( bytes: Uint8Array ): number {
  */
 function rewrite( bytes: Uint8Array ): Uint8Array {
 
-  const at = new TextDecoder().decode( bytes ).indexOf( '\'', 200 ) + 1
+  // A quoted string's first letter, so the rewrite is a valid file with
+  // the same record bounds (an empty string's closing quote is not).
+  const at = new TextDecoder().decode( bytes ).slice( 200 ).search( /'[A-Za-z]/ ) + 201
   const rewritten = bytes.slice()
 
   rewritten[ at ] = rewritten[ at ] === 0x41 ? 0x42 : 0x41
@@ -150,16 +152,22 @@ async function exportedSidecar(
  * @param bytes What the store holds.
  * @param sidecar The sidecar.
  * @param settings Open settings (the verify is added).
+ * @param verify `VERIFY_INDEX_SOURCE_HASH` (default the full check).
  * @return {Promise<object>} The id, status, and the reopened model's export.
  */
-async function reopen( bytes: Uint8Array, sidecar: Uint8Array, settings: Loadersettings = FNV ) {
+async function reopen(
+    bytes: Uint8Array,
+    sidecar: Uint8Array,
+    settings: Loadersettings = FNV,
+    verify: boolean | 'sampled' = true ) {
 
   jest.spyOn( console, 'warn' ).mockImplementation( () => {} )
+  jest.spyOn( console, 'error' ).mockImplementation( () => {} )
 
   const attemptedID = api.globalModelIDCounter
   const modelID = await api.OpenModelFromIndex(
       new InMemoryStepByteStore( bytes, true ), sidecar,
-      { ...settings, VERIFY_INDEX_SOURCE_HASH: true } )
+      { ...settings, VERIFY_INDEX_SOURCE_HASH: verify } )
   const status = api.getStatistics( attemptedID )?.getLoadStatus()
   const reason = api.getStatistics( attemptedID )?.getLoadFailureReason() as string | undefined
   const reexported = modelID >= 0 ? await api.ExportIndexSidecar( modelID ) : void 0
@@ -365,5 +373,79 @@ describe( 'asked for the block digest with no WebCrypto, an open records FNV', (
     expect( identitySlots( sidecar ) ).toEqual(
         { sourceHash: hashSource( bytes ), hashAlgorithm: SIDECAR_HASH_FNV1A_32 } )
     expect( ( await reopen( bytes, sidecar ) ).modelID ).toBeGreaterThanOrEqual( 0 )
+  } )
+} )
+
+
+describe( 'each verify mode × each hashAlgorithm (codex review of conway#783)', () => {
+
+  // What step_index_open.ts#assertSidecarDescribesStore documents. The
+  // sampled digest is FNV under every known id, so 'sampled' verifies an
+  // id-2 sidecar with no WebCrypto, and `false` checks the length alone; an
+  // unknown id is stale in every mode, before the decode would fail it as a
+  // plain error. Every 'opens' row also reopens over a same-length rewrite,
+  // which the hash-checking modes must refuse and `false` must not — so a
+  // mode that silently skipped its check fails here too. (index.ifc is
+  // shorter than the sampled spans, so 'sampled' covers the rewritten byte.)
+  type Case = 'id 1' | 'id 2, WebCrypto' | 'id 2, no WebCrypto' | 'unknown id'
+  type Mode = true | 'sampled' | false
+
+  const EXPECTED: Record< string, Record< Case, 'opens' | 'stale' > > = {
+    true: {
+      'id 1': 'opens', 'id 2, WebCrypto': 'opens',
+      'id 2, no WebCrypto': 'stale', 'unknown id': 'stale',
+    },
+    sampled: {
+      'id 1': 'opens', 'id 2, WebCrypto': 'opens',
+      'id 2, no WebCrypto': 'opens', 'unknown id': 'stale',
+    },
+    false: {
+      'id 1': 'opens', 'id 2, WebCrypto': 'opens',
+      'id 2, no WebCrypto': 'opens', 'unknown id': 'stale',
+    },
+  }
+
+  const MODES: Mode[] = [ true, 'sampled', false ]
+  const CASES: Case[] = [ 'id 1', 'id 2, WebCrypto', 'id 2, no WebCrypto', 'unknown id' ]
+  const ROWS = MODES.flatMap( ( mode ) => CASES.map( ( which ) => [ mode, which ] as const ) )
+
+  test.each( ROWS )( 'verify %s, %s', async ( mode, which ) => {
+
+    const bytes = fixture( 'index.ifc' )
+    let sidecar = await exportedSidecar( bytes, 'windowed', which === 'id 1' ? FNV : BLOCKS )
+
+    expect( identitySlots( sidecar ).hashAlgorithm )
+        .toBe( which === 'id 1' ? SIDECAR_HASH_FNV1A_32 : SIDECAR_HASH_SHA256_BLOCKS )
+
+    if ( which === 'unknown id' ) {
+      sidecar = sidecar.slice()
+      new DataView( sidecar.buffer ).setUint32( HASH_ALGORITHM_OFFSET, 7, true )
+    }
+
+    const attempt = ( over: Uint8Array ) => which === 'id 2, no WebCrypto' ?
+      withoutWebCrypto( () => reopen( over, sidecar, FNV, mode ) ) :
+      reopen( over, sidecar, FNV, mode )
+
+    const outcome = await attempt( bytes )
+    const expected = EXPECTED[ String( mode ) ][ which ]
+
+    if ( expected === 'stale' ) {
+      expect( outcome.modelID ).toBe( -1 )
+      expect( outcome.status ).toBe( 'INDEX_STALE' )
+      expect( outcome.reason ).toMatch( /cannot be verified here/ )
+      return
+    }
+
+    expect( outcome.modelID ).toBeGreaterThanOrEqual( 0 )
+
+    const rewritten = await attempt( rewrite( bytes ) )
+
+    if ( mode === false ) {
+      expect( rewritten.modelID ).toBeGreaterThanOrEqual( 0 )
+    } else {
+      expect( rewritten.modelID ).toBe( -1 )
+      expect( rewritten.status ).toBe( 'INDEX_STALE' )
+      expect( rewritten.reason ).toMatch( /hash does not match/ )
+    }
   } )
 } )

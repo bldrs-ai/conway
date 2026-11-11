@@ -172,11 +172,16 @@ import EntityTypesIfc, { EntityTypesIfcCount } from '../../ifc/ifc4_gen/entity_t
  * ~1.2 s of V8 CPU on a 902 MB model, cost about 10 s of PSB's parse in
  * Firefox's engine worker; the block digest runs no JS loop over the bytes
  * at all. A verify always runs the id the sidecar carries, so FNV sidecars
- * persisted before id 2 keep verifying; a reader without WebCrypto refuses
- * an id-2 sidecar as stale (`'algorithm'`) rather than trust it unverified;
- * and a reader that predates id 2 refuses it too (its verify computes FNV,
- * which does not match — and without a verify its decode throws on the id).
- * The sampled digest is FNV-1a under both ids.
+ * persisted before id 2 keep verifying. The sampled digest is FNV-1a under
+ * both ids, so what each verify mode does is (`step_index_open.ts`
+ * #assertSidecarDescribesStore has the table): an id this reader does not
+ * know is stale (`'algorithm'`) in every mode, before any decode; id 2 with
+ * no WebCrypto is stale under the full check (`true`), which would need the
+ * block digest, while `'sampled'` still verifies it (sampled FNV) and
+ * `false` checks its length, exactly as those modes treat id 1. A reader
+ * that predates id 2 refuses it under `true` (its FNV does not match) and
+ * fails its decode otherwise (a plain error, not `INDEX_STALE`: that
+ * reader knows no `'algorithm'` reason).
  *
  * ## The producer: export from an open model (conway#756)
  *

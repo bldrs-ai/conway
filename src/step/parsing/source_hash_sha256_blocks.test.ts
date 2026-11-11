@@ -319,11 +319,47 @@ describe( 'the block digests left running are bounded', () => {
     }
 
     expect( await hashing.finishAsync() ).toBe( referenceDigest( bytes ) )
-    // The bound, plus the block the read that waits has just started.
-    expect( counts.maxInFlight ).toBeLessThanOrEqual( MAX_BLOCK_DIGESTS_IN_FLIGHT + 1 )
+    expect( counts.maxInFlight ).toBeLessThanOrEqual( MAX_BLOCK_DIGESTS_IN_FLIGHT )
     // ...and the feeder did run ahead of the digests, or the bound was
     // never exercised.
-    expect( counts.maxInFlight ).toBeGreaterThan( 1 )
+    expect( counts.maxInFlight ).toBe( MAX_BLOCK_DIGESTS_IN_FLIGHT )
+  } )
+
+  // codex review of conway#783: the bound held only between reads, so a
+  // read of several blocks (a 16 MiB window refill, a grown window, one
+  // whole-buffer pass) submitted all of them before any wait — 8 pending
+  // plus 4 more. The fold now waits block by block.
+  test.each( [
+    [ 'multi-block reads (16 MiB windows)', 4 * BLOCK ],
+    [ 'one read of the whole source', 12 * BLOCK ],
+    [ 'reads that straddle blocks (6 MiB + 1)', 6 * 1024 * 1024 + 1 ],
+  ] )( '%s never exceed the bound either', async ( _name, readBytes ) => {
+
+    const bytes = new Uint8Array( 12 * BLOCK + 3 )
+
+    for ( let block = 0; block < 12; ++block ) {
+      bytes.fill( block + 1, block * BLOCK, ( block + 1 ) * BLOCK )
+    }
+
+    const { provider, counts } = countingProvider()
+    const hashing = new HashingByteSource(
+        new BufferByteSource( bytes ), { algorithm: 'sha256Blocks', provider } )
+    const window = new Uint8Array( readBytes )
+
+    for ( let at = 0; at < bytes.byteLength; at += readBytes ) {
+      await hashing.read( at, readBytes, window, 0 )
+    }
+
+    expect( await hashing.finishAsync() ).toBe( referenceDigest( bytes ) )
+    expect( counts.maxInFlight ).toBeLessThanOrEqual( MAX_BLOCK_DIGESTS_IN_FLIGHT )
+    expect( counts.maxInFlight ).toBe( MAX_BLOCK_DIGESTS_IN_FLIGHT )
+
+    // The verify's chunked pass, with a chunk of several blocks.
+    const verify = countingProvider()
+
+    expect( await hashSourceAsync( new BufferByteSource( bytes ), readBytes,
+        { algorithm: 'sha256Blocks', provider: verify.provider } ) ).toBe( referenceDigest( bytes ) )
+    expect( verify.counts.maxInFlight ).toBeLessThanOrEqual( MAX_BLOCK_DIGESTS_IN_FLIGHT )
   } )
 
   test( 'a failed block digest fails the hash', async () => {
