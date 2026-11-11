@@ -2355,6 +2355,12 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
    * the original file already sitting in OPFS). See
    * StepModelBase.spillSourceToExternalStore.
    *
+   * Supported between `ExtractGeometryBatchAsync` calls, or while a batch
+   * is still in its prep phase. Those are the only places a spill can land:
+   * on a resident source the only macrotask yields inside an async batch
+   * are in prep, before the worklists and the aggregate stepper exist, and
+   * the aggregate pager is dropped below only if a stepper already exists.
+   *
    * @param store The external byte store.
    * @param chunkBytes Optional window size in bytes.
    * @param maxResidentChunks Optional residency cap in windows.
@@ -3363,9 +3369,9 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
           (this.demandAggregateStepper_ !== void 0 ||
             this.demandAggregatesCursor_ < aggregates.length)) {
 
-        const relAggregate = this.relAggregateAt_(this.demandAggregatesCursor_)
-
         if (this.demandAggregateStepper_ === void 0) {
+
+          const relAggregate = this.relAggregateAt_(this.demandAggregatesCursor_)
 
           this.demandAggregatePager_ =
             await this.conwayGeometry_.beginAggregateExtract(
@@ -3381,7 +3387,7 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
           // stepper is on.
           this.demandAggregatePager_ =
             await this.conwayGeometry_.beginAggregateExtract(
-                relAggregate, budget)
+                this.relAggregateAt_(this.demandAggregatesCursor_), budget)
         }
 
         // Per step, not per relationship: this is the await that spends the
@@ -3398,7 +3404,8 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
           done = this.demandAggregateStepper_.next().done === true
         } catch (error) {
           Logger.error(
-              `Error extracting aggregate ${relAggregate.expressID}: ` +
+              'Error extracting aggregate ' +
+              `${this.relAggregateAt_(this.demandAggregatesCursor_).expressID}: ` +
               `${error instanceof Error ? error.message : String(error)}`)
           done = true
         }

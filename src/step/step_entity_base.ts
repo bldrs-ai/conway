@@ -1320,6 +1320,11 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
       }
 
       if ( classReference.buffer === void 0 ) {
+        // Populates the model's CURRENT descriptor, where the neighbouring
+        // paths populate the entity's own (the Raw variants). That is the
+        // same object here: complex entries are reset in place and survive
+        // invalidate(true). If complexEntries_ were ever rebuilt on
+        // invalidate, this branch would need populateBufferEntryRaw too.
         this.model.populateBufferEntry( this.localID )
       }
 
