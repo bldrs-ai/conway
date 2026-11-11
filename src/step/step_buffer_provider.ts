@@ -507,12 +507,11 @@ export class WindowedStepBufferProvider implements StepBufferProvider {
 
   /**
    * Per-chunk last-use stamp, indexed by chunk index and sized from the
-   * store at construction and grown by {@link touch_} for any index past
-   * it (a read beyond the end still faults a chunk in). A resident
-   * chunk's stamp is its recency;
-   * {@link oldestUnpinned_} picks the eviction victim from it.
+   * store at construction. A resident chunk's stamp is its recency;
+   * {@link oldestUnpinned_} picks the eviction victim from it. It never
+   * grows: a chunk index outside it has no stamp and is evicted first.
    */
-  private lastUse_: Float64Array
+  private readonly lastUse_: Float64Array
 
   /** Monotonic source of {@link lastUse_} stamps; every stamp is unique. */
   private useClock_ = 0
@@ -649,32 +648,16 @@ export class WindowedStepBufferProvider implements StepBufferProvider {
    * slower (Share#2139). Eviction order is unchanged; see
    * {@link oldestUnpinned_}.
    *
+   * A write to an index outside the stamp array (a negative or
+   * past-the-end chunk, which only an address outside the store produces)
+   * is a silent typed-array no-op; that is intended, see
+   * {@link oldestUnpinned_}.
+   *
    * @param chunkIndex The chunk to touch.
    */
   private touch_( chunkIndex: number ): void {
 
-    if ( chunkIndex >= this.lastUse_.length ) {
-      this.growStamps_( chunkIndex )
-    }
-
     this.lastUse_[ chunkIndex ] = ++this.useClock_
-  }
-
-  /**
-   * Grow the stamp store to cover a chunk index past its end. Typed
-   * arrays drop out-of-range writes silently, which would leave the chunk
-   * with no stamp and so never a victim. Off the hot path: only a read
-   * beyond the store's end gets here.
-   *
-   * @param chunkIndex The index that must fit.
-   */
-  private growStamps_( chunkIndex: number ): void {
-
-    const grown = new Float64Array(
-        Math.max( chunkIndex + 1, this.lastUse_.length * 2 ) )
-
-    grown.set( this.lastUse_ )
-    this.lastUse_ = grown
   }
 
   /**
@@ -713,7 +696,12 @@ export class WindowedStepBufferProvider implements StepBufferProvider {
 
     for ( const candidate of this.chunks_.keys() ) {
 
-      const stamp = this.lastUse_[ candidate ]
+      // Only an address outside the store gives a chunk index with no
+      // stamp slot. Main kept such a chunk in LRU order; here it reads as
+      // stamp 0 (real stamps start at 1: the clock pre-increments) and is
+      // simply evicted first, which bounds memory and never strands a
+      // window slot.
+      const stamp = this.lastUse_[ candidate ] ?? 0
 
       if ( stamp < victimStamp && ( this.ensurePins_.get( candidate ) ?? 0 ) <= 0 ) {
         victim      = candidate

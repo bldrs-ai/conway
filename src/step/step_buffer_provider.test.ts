@@ -568,6 +568,31 @@ describe('WindowedStepBufferProvider recency stamps (Share#2139)', () => {
     expect(residentSet(provider)).toEqual([2, 3])
   })
 
+  test('a negative address (chunk index -1) is still evictable', () => {
+    const provider = new WindowedStepBufferProvider(
+        new InMemoryStepByteStore(makeBytes(64), true), CHUNK, 2)
+
+    provider.acquire(-5, 4)
+    for (let chunk = 0; chunk <= 3; ++chunk) {
+      provider.acquire(chunk * CHUNK, 4)
+    }
+
+    expect(residentSet(provider)).toEqual([2, 3])
+  })
+
+  test('a wild huge address neither throws nor outgrows the window', () => {
+    const provider = new WindowedStepBufferProvider(
+        new InMemoryStepByteStore(makeBytes(64), true), CHUNK, 2)
+
+    expect(() => provider.acquire(1e15, 4)).not.toThrow()
+    for (let chunk = 0; chunk <= 3; ++chunk) {
+      provider.acquire(chunk * CHUNK, 4)
+    }
+
+    expect(provider.residentChunkCount).toBeLessThanOrEqual(2)
+    expect(residentSet(provider)).toEqual([2, 3])
+  })
+
   test('a fault-in that its own trim evicts stays evicted, and re-faults on the next acquire', () => {
     const cap = 3
     const bytes = makeBytes(CHUNK * 10)
