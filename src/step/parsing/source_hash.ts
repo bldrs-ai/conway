@@ -137,13 +137,13 @@ export function nativeDigestProvider(): SourceDigestProvider | undefined {
  * `'fnv1a32'` (which is also the default).
  *
  * @param requested What the caller asked for.
- * @param provider The digest provider (default: {@link nativeDigestProvider}).
+ * @param provider The digest provider there is, if any (an open passes
+ * {@link nativeDigestProvider}'s).
  * @return {SourceHashAlgorithm} What to record.
  */
 export function resolveSourceHashAlgorithm(
     requested: SourceHashAlgorithm | undefined,
-    provider: SourceDigestProvider | undefined = nativeDigestProvider() ):
-    SourceHashAlgorithm {
+    provider: SourceDigestProvider | undefined ): SourceHashAlgorithm {
 
   return requested === 'sha256Blocks' && provider !== void 0 ? 'sha256Blocks' : 'fnv1a32'
 }
@@ -373,7 +373,7 @@ export interface SourceHashOptions {
 export function sourceHashOptionsFor(
     requested: SourceHashAlgorithm | undefined ): SourceHashOptions {
 
-  return { algorithm: resolveSourceHashAlgorithm( requested ) }
+  return { algorithm: resolveSourceHashAlgorithm( requested, nativeDigestProvider() ) }
 }
 
 
@@ -453,6 +453,16 @@ function blockFoldFor(
  * {@link finishAsync} closes the remaining tail — a parse that stops at
  * `END-ISO-10303-21` before the window reaches EOF leaves bytes unread,
  * and the digest has to cover them to equal `hashSource`.
+ *
+ * ## Which digest
+ *
+ * FNV-1a by default. With `{ algorithm: 'sha256Blocks' }` the whole-source
+ * digest is a {@link Sha256BlockFold} instead (bldrs-ai/Share#2092): each
+ * read's fresh bytes go to the native digest, a 4 MiB block at a time, and
+ * no JS loop runs over them — the sequential-read contract and the tail
+ * are unchanged, and so is the sampled digest (FNV-1a over ~0.5 MB). The
+ * read awaits the oldest block digest only when more than
+ * {@link MAX_BLOCK_DIGESTS_IN_FLIGHT} are running.
  */
 export class HashingByteSource implements AsyncByteSource {
 
@@ -549,8 +559,11 @@ export class HashingByteSource implements AsyncByteSource {
       this.covered_ = end
 
       // Back-pressure only: the digests run at native speed, far ahead of
-      // the parse, so this rarely waits.
-      await this.blocks_?.settle()
+      // the parse, so this rarely waits — and an FNV read never awaits
+      // anything it did not await before.
+      if ( this.blocks_ !== void 0 && this.blocks_.inFlight > MAX_BLOCK_DIGESTS_IN_FLIGHT ) {
+        await this.blocks_.settle()
+      }
     }
 
     return got
@@ -583,7 +596,10 @@ export class HashingByteSource implements AsyncByteSource {
 
         this.foldFresh_( chunk, 0, got )
         this.covered_ += got
-        await this.blocks_?.settle()
+
+        if ( this.blocks_ !== void 0 ) {
+          await this.blocks_.settle()
+        }
       }
     }
 
@@ -614,7 +630,8 @@ export class HashingByteSource implements AsyncByteSource {
 /**
  * The synchronous twin of {@link HashingByteSource}, for the synchronous
  * streaming build (`openStreamedIfcModel`): same sequential-read contract,
- * same digest, a synchronous {@link finish}.
+ * same digest, a synchronous {@link finish}. FNV-1a only: a native digest
+ * resolves asynchronously, which a synchronous open cannot wait for.
  */
 export class HashingSyncByteSource implements ByteSource {
 

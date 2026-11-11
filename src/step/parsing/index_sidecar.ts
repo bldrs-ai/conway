@@ -159,7 +159,24 @@ import EntityTypesIfc, { EntityTypesIfcCount } from '../../ifc/ifc4_gen/entity_t
  *    coordinator half of this gate has its hash in hand when the parse
  *    ends.
  *  - **Revisit** (a persisted sidecar, where the file really may have
- *    changed): full {@link sidecarMatchesSource} against `hashSource`.
+ *    changed): full {@link sidecarMatchesSource} against a fresh digest of
+ *    the store, taken with the algorithm the sidecar names.
+ *
+ * ## Which digest (`hashAlgorithm`, bldrs-ai/Share#2092)
+ *
+ * Id 1 is the chained FNV-1a above: a per-byte JS loop. Id 2
+ * ({@link SIDECAR_HASH_SHA256_BLOCKS}) is a native SHA-256 of each 4 MiB
+ * block, chained and truncated to the same 32-bit slot
+ * (`source_hash.ts#Sha256BlockFold`), recorded when an open is asked for it
+ * (`SOURCE_HASH_ALGORITHM: 'sha256Blocks'`). It exists because the FNV loop,
+ * ~1.2 s of V8 CPU on a 902 MB model, cost about 10 s of PSB's parse in
+ * Firefox's engine worker; the block digest runs no JS loop over the bytes
+ * at all. A verify always runs the id the sidecar carries, so FNV sidecars
+ * persisted before id 2 keep verifying; a reader without WebCrypto refuses
+ * an id-2 sidecar as stale (`'algorithm'`) rather than trust it unverified;
+ * and a reader that predates id 2 refuses it too (its verify computes FNV,
+ * which does not match — and without a verify its decode throws on the id).
+ * The sampled digest is FNV-1a under both ids.
  *
  * ## The producer: export from an open model (conway#756)
  *
@@ -1426,7 +1443,8 @@ export function deserializeIndexSidecarToColumns<TypeIDType extends number>(
  *
  * @param sidecar The decoded sidecar's source identity.
  * @param sourceByteLength The actual source length.
- * @param sourceHash The actual source hash.
+ * @param sourceHash The actual source hash, taken with the algorithm the
+ * sidecar names (`sidecar.hashAlgorithm`).
  * @return {boolean} True if the sidecar matches the source.
  */
 export function sidecarMatchesSource(
