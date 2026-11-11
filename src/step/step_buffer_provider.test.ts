@@ -469,24 +469,35 @@ describe('WindowedStepBufferProvider recency stamps (Share#2139)', () => {
               reference.pin(chunk, -1)
             }
           } else if (op < 16) {
-            // acquire of a single chunk: a recency touch when resident, a
-            // fault-in when the store can, an error otherwise.
+            // acquire of one chunk, or a range straddling into the next: a recency
+            // touch when resident, a fault-in when the store can, an error otherwise.
             const chunk = pick()
+            const straddle = rng(4) === 0 && chunk < CHUNKS - 1
 
-            if (reference.order.has(chunk)) {
-              provider.acquire(chunk * CHUNK, 4)
-              reference.touch(chunk)
-            } else if (synchronous) {
-              provider.acquire(chunk * CHUNK, 4)
-              reference.touch(chunk)
-              reference.trim(provider.residencyCapChunks)
-              // A fault-in that trimming itself evicts (every other chunk pinned)
-              // stays evicted; see touch_.
-              if (!residentSet(provider).includes(chunk)) {
-                reference.order.delete(chunk)
+            const address = chunk * CHUNK + (straddle ? CHUNK - 2 : 1)
+            const length = straddle ? 4 : 3
+            let threw = false
+
+            // The provider walks the covering chunks in order; so does the model.
+            for (let covered = chunk; covered <= chunk + (straddle ? 1 : 0); ++covered) {
+              if (reference.order.has(covered)) {
+                reference.touch(covered)
+              } else if (synchronous) {
+                reference.touch(covered)
+                reference.trim(provider.residencyCapChunks)
+                // Trimming can evict the chunk just faulted in (every other chunk
+                // pinned); the model's trim does too, and it stays evicted (see
+                // faultInSync_). The cap only changes in ensureResident.
+              } else {
+                threw = true
+                break
               }
+            }
+
+            if (threw) {
+              expect(() => provider.acquire(address, length)).toThrow(StepBufferNotResidentError)
             } else {
-              expect(() => provider.acquire(chunk * CHUNK, 4)).toThrow(StepBufferNotResidentError)
+              provider.acquire(address, length)
             }
           } else if (op < 17 || pinned.length === 0) {
             const chunk = pick()
@@ -542,5 +553,59 @@ describe('WindowedStepBufferProvider recency stamps (Share#2139)', () => {
 
     expect(deletes).toBe(0)
     expect(residentSet(provider)).toEqual([0, 1, 2, 3])
+  })
+
+  test('a chunk index past the end of the store is still evictable', () => {
+    const provider = new WindowedStepBufferProvider(
+        new InMemoryStepByteStore(makeBytes(64), true), CHUNK, 2)
+
+    // 64 bytes is chunks 0..3; address 200 is chunk 12, which the store serves empty.
+    provider.acquire(200, 4)
+    for (let chunk = 0; chunk <= 3; ++chunk) {
+      provider.acquire(chunk * CHUNK, 4)
+    }
+
+    expect(residentSet(provider)).toEqual([2, 3])
+  })
+
+  test('a fault-in that its own trim evicts stays evicted, and re-faults on the next acquire', () => {
+    const cap = 3
+    const bytes = makeBytes(CHUNK * 10)
+    const provider = new WindowedStepBufferProvider(new InMemoryStepByteStore(bytes, true), CHUNK, cap)
+
+    for (let chunk = 0; chunk < cap; ++chunk) {
+      provider.acquire(chunk * CHUNK, 4)
+      provider.pinRange(chunk * CHUNK, CHUNK)
+    }
+
+    const faultsBefore = provider.syncFaultCount
+    const first = provider.acquire(7 * CHUNK + 2, 4)
+
+    expect(Array.from(first.buffer.subarray(2, 6))).toEqual(Array.from(bytes.subarray(7 * CHUNK + 2, 7 * CHUNK + 6)))
+    expect(provider.residentChunkCount).toBeLessThanOrEqual(cap)
+    expect(residentSet(provider)).toEqual([0, 1, 2])
+
+    const second = provider.acquire(7 * CHUNK + 2, 4)
+
+    expect(Array.from(second.buffer.subarray(2, 6))).toEqual(Array.from(bytes.subarray(7 * CHUNK + 2, 7 * CHUNK + 6)))
+    expect(provider.syncFaultCount).toBe(faultsBefore + 2)
+    expect(provider.residentChunkCount).toBeLessThanOrEqual(cap)
+  })
+
+  test('a straddling acquire faults in both chunks and evicts the least recently used unpinned chunk', () => {
+    const bytes = makeBytes(CHUNK * 10)
+    const provider = new WindowedStepBufferProvider(new InMemoryStepByteStore(bytes, true), CHUNK, 3)
+
+    provider.acquire(0 * CHUNK, 1)
+    provider.acquire(1 * CHUNK, 1)
+    provider.acquire(2 * CHUNK, 1)
+    provider.acquire(0 * CHUNK, 1) // order, oldest first: 1, 2, 0
+
+    const merged = provider.acquire(5 * CHUNK - 3, 6) // chunks 4 and 5
+
+    expect(Array.from(merged.buffer)).toEqual(Array.from(bytes.subarray(5 * CHUNK - 3, 5 * CHUNK + 3)))
+    expect(stepBufferBase(merged.buffer)).toBe(5 * CHUNK - 3)
+    // Chunk 4 evicts 1, chunk 5 evicts 2: the residents are 0, 4, 5.
+    expect(residentSet(provider)).toEqual([0, 4, 5])
   })
 })

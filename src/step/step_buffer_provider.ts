@@ -507,10 +507,12 @@ export class WindowedStepBufferProvider implements StepBufferProvider {
 
   /**
    * Per-chunk last-use stamp, indexed by chunk index and sized from the
-   * store at construction. A resident chunk's stamp is its recency;
+   * store at construction and grown by {@link touch_} for any index past
+   * it (a read beyond the end still faults a chunk in). A resident
+   * chunk's stamp is its recency;
    * {@link oldestUnpinned_} picks the eviction victim from it.
    */
-  private readonly lastUse_: Float64Array
+  private lastUse_: Float64Array
 
   /** Monotonic source of {@link lastUse_} stamps; every stamp is unique. */
   private useClock_ = 0
@@ -650,7 +652,29 @@ export class WindowedStepBufferProvider implements StepBufferProvider {
    * @param chunkIndex The chunk to touch.
    */
   private touch_( chunkIndex: number ): void {
+
+    if ( chunkIndex >= this.lastUse_.length ) {
+      this.growStamps_( chunkIndex )
+    }
+
     this.lastUse_[ chunkIndex ] = ++this.useClock_
+  }
+
+  /**
+   * Grow the stamp store to cover a chunk index past its end. Typed
+   * arrays drop out-of-range writes silently, which would leave the chunk
+   * with no stamp and so never a victim. Off the hot path: only a read
+   * beyond the store's end gets here.
+   *
+   * @param chunkIndex The index that must fit.
+   */
+  private growStamps_( chunkIndex: number ): void {
+
+    const grown = new Float64Array(
+        Math.max( chunkIndex + 1, this.lastUse_.length * 2 ) )
+
+    grown.set( this.lastUse_ )
+    this.lastUse_ = grown
   }
 
   /**
@@ -801,6 +825,11 @@ export class WindowedStepBufferProvider implements StepBufferProvider {
     ++this.syncFaults_
 
     this.insert_( chunkIndex, chunk )
+
+    // If every other resident chunk is pinned, this trim evicts the chunk
+    // just faulted in. It stays evicted: the caller still holds its bytes
+    // and the next acquire re-faults it. (The pre-stamp code's touch_ then
+    // re-inserted it, leaving the window at cap + 1.)
     this.trimToCap()
 
     return chunk
