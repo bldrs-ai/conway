@@ -148,7 +148,8 @@ interface DemandPassthrough {
   ensureDemandWorklists_(): void
   ensureDemandWorklistsAsync_(): Promise< void >
   demandProducts_?: number[]
-  demandAggregates_?: { localID: number }[]
+  // Local IDs (bldrs-ai/Share#2139: entities held here pinned a spilled source).
+  demandAggregates_?: number[]
   conwayGeometry_: { aggregateTargetLocalIDs(): Set< number > }
 }
 
@@ -331,7 +332,7 @@ describe( 'dispatch keys on a windowed source', () => {
 
         const expectedProducts = ( whole.passthrough.demandProducts_ ?? [] ).slice()
         const expectedAggregates =
-          ( whole.passthrough.demandAggregates_ ?? [] ).map( ( each ) => each.localID )
+          ( whole.passthrough.demandAggregates_ ?? [] ).slice()
 
         expect( expectedProducts.length ).toBeGreaterThan( 0 )
 
@@ -351,8 +352,7 @@ describe( 'dispatch keys on a windowed source', () => {
 
           unionProducts.push( ...( shardModel.passthrough.demandProducts_ ?? [] ) )
           unionAggregates.push(
-              ...( shardModel.passthrough.demandAggregates_ ?? [] )
-                  .map( ( each ) => each.localID ) )
+              ...( shardModel.passthrough.demandAggregates_ ?? [] ) )
 
           api.CloseModel( shardModel.modelID )
         }
@@ -571,8 +571,7 @@ async function worklistsUnderSeed( seed: string | undefined ):
     passthrough.ensureDemandWorklists_()
 
     const products = [ ...( passthrough.demandProducts_ ?? [] ) ]
-    const aggregates = ( passthrough.demandAggregates_ ?? [] )
-        .map( ( relAggregate ) => relAggregate.localID )
+    const aggregates = [ ...( passthrough.demandAggregates_ ?? [] ) ]
 
     api.CloseModel( modelID )
 

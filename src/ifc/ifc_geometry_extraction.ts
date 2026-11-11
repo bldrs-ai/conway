@@ -467,10 +467,15 @@ export class IfcGeometryExtraction {
   private csgDepth: number = 0
 
   /**
-   * IfcGridAxis local ID -> the IfcGrid that lists it, built on the first
-   * IfcGridPlacement a model contains (see `gridByAxis`).
+   * IfcGridAxis local ID -> local ID of the IfcGrid that lists it, built on
+   * the first IfcGridPlacement a model contains (see `gridByAxis`).
+   *
+   * IDs rather than entities: an entity held here outlives the model's
+   * descriptor cache, and its memoised placement and axis curves keep their
+   * descriptors' views of the source, which pinned a buffered open's whole
+   * source past `spillSourceToExternalStore` (bldrs-ai/Share#2139).
    */
-  private gridByAxis_?: Map<number, IfcGrid>
+  private gridByAxis_?: Map<number, number>
 
   /**
    * Construct a geometry extraction from an IFC step model and conway model
@@ -6029,27 +6034,30 @@ export class IfcGeometryExtraction {
 
     if (gridByAxis === void 0) {
 
-      gridByAxis = new Map<number, IfcGrid>()
+      gridByAxis = new Map<number, number>()
 
       for (const grid of this.model.types(IfcGrid)) {
 
         for (const gridAxis of grid.UAxes) {
-          gridByAxis.set(gridAxis.localID, grid)
+          gridByAxis.set(gridAxis.localID, grid.localID)
         }
 
         for (const gridAxis of grid.VAxes) {
-          gridByAxis.set(gridAxis.localID, grid)
+          gridByAxis.set(gridAxis.localID, grid.localID)
         }
 
         for (const gridAxis of grid.WAxes ?? []) {
-          gridByAxis.set(gridAxis.localID, grid)
+          gridByAxis.set(gridAxis.localID, grid.localID)
         }
       }
 
       this.gridByAxis_ = gridByAxis
     }
 
-    return gridByAxis.get(axis.localID)
+    const gridLocalID = gridByAxis.get(axis.localID)
+
+    return gridLocalID === void 0 ?
+      void 0 : this.model.getElementByLocalID(gridLocalID) as IfcGrid
   }
 
   /**

@@ -684,6 +684,18 @@ implements Iterable<BaseEntity>, Model {
               mapped.vtable      = void 0
               mapped.vtableCount = void 0
               mapped.vtableIndex = void 0
+
+              // Set by each generated constructor that consumes the class
+              // reference, and read by the multi-mapping materialisation
+              // to skip one already consumed. `multiEntity` was dropped
+              // just above, so the next read rebuilds every sub-entity: a
+              // flag left set made it skip them all and answer nothing.
+              // Seen as AP214 assembly placements (complex
+              // REPRESENTATION_RELATIONSHIP_WITH_TRANSFORMATION records)
+              // vanishing from a demand pump run after any read of them
+              // and an `invalidate(true)` — a property sweep then a spill,
+              // or ReleaseEntityCache (bldrs-ai/Share#2139).
+              mapped.visitedMulti = void 0
             }
           }
         }
@@ -1147,7 +1159,24 @@ implements Iterable<BaseEntity>, Model {
       throw new Error(`Invalid localID ${localID}`)
     }
 
-    const element = this.entry(localID)
+    this.populateBufferEntryRaw( this.entry(localID) )
+  }
+
+
+  /**
+   * Force the population of the buffer entry for a particular descriptor —
+   * the {@link populateVtableEntryRaw} twin of {@link populateBufferEntry}.
+   *
+   * An entity reads through the descriptor it was built on, which after
+   * `invalidate(true)` (and so after `spillSourceToExternalStore`) is no
+   * longer the one `entry()` returns for its local ID: populating by local
+   * ID would fill the model's fresh descriptor and leave the entity's own
+   * still empty (bldrs-ai/Share#2139).
+   *
+   * @param element The descriptor to populate.
+   */
+  public populateBufferEntryRaw(
+      element: StepEntityInternalReference< EntityTypeIDs > ): void {
 
     element.buffer =
       this.bufferProvider_.acquire( element.address, element.length ).buffer
