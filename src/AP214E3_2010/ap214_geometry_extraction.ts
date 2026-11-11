@@ -245,6 +245,20 @@ const AP214_ITEMS_PER_DEMAND_UNIT = 4
 // for — and lands inside the noise band of the unsliced baseline.
 const AP214_MAX_ITEM_UNITS_PER_REPRESENTATION = 256
 
+/**
+ * What a demand unit's slot holds once the cursor has passed it (run or
+ * skipped) — see AP214GeometryExtraction#retireDemandUnits_. Shared, and
+ * captures nothing, which is the point.
+ */
+const RETIRED_DEMAND_UNIT = (): void => { /* already run or skipped */ }
+
+/**
+ * The cost slot's twin of RETIRED_DEMAND_UNIT.
+ *
+ * @return {number} Zero: a retired unit has nothing left to cost.
+ */
+const RETIRED_DEMAND_UNIT_COST = (): number => 0
+
 // Ceiling on how many `placement` items a sliced item range will replay
 // to rebuild the transform state its first item inherits (see
 // itemUnitRanges). A placement places every item after it in the array,
@@ -8065,6 +8079,15 @@ export class AP214GeometryExtraction {
 
     let faces = this.demandUnitFaces_.get( ordinal )
 
+    // A unit the cursor has passed has had its cost closure released
+    // (retireDemandUnits_), so an estimate first asked after that has
+    // nothing to compute from. The preview channel, the only caller,
+    // estimates a unit before it runs it, so the memo answers the one
+    // after-the-fact ask it makes (learnUnitCost_).
+    if ( faces === void 0 && ordinal < this.demandCursor_ ) {
+      return void 0
+    }
+
     if ( faces === void 0 ) {
       faces = costs[ ordinal ]()
       this.demandUnitFaces_.set( ordinal, faces )
@@ -8097,7 +8120,45 @@ export class AP214GeometryExtraction {
       return
     }
 
+    const from = this.demandCursor_
+
     this.demandCursor_ = Math.min( this.demandCursor_ + Math.max( count, 0 ), units.length )
+
+    this.retireDemandUnits_( from, this.demandCursor_ )
+  }
+
+  /**
+   * Release the closures of units the cursor has passed. Nothing runs a
+   * unit twice — the cursor only moves forward — but each closure captures
+   * the entities its plan walked (the representation, its items, the
+   * scene nodes under them), and every one of those keeps its descriptor
+   * and so its descriptor's view of the source. Held for the model's life,
+   * they kept a buffered open's whole source alive after
+   * `spillSourceToExternalStore` (bldrs-ai/Share#2139); its
+   * `invalidate(true)` drops only the model's own descriptor cache.
+   *
+   * Units the cursor has not reached keep their closures, so a spill
+   * mid-pump leaves them reading the entities they planned over until they
+   * run — through the views those entities already hold, the bytes the
+   * index was built from and the same ones the store holds, or, for a
+   * record one of them had not read yet, through the store
+   * (StepEntityBase.guaranteeVTable) — and the source goes once the pump
+   * drains.
+   *
+   * @param from First ordinal to retire.
+   * @param to One past the last.
+   */
+  private retireDemandUnits_( from: number, to: number ): void {
+
+    // Both are published together (prepareDemandExtraction), and only the
+    // two callers, which have already checked for a plan, reach here.
+    const units = this.demandUnits_!
+    const costs = this.demandUnitCosts_!
+
+    for ( let ordinal = from; ordinal < to; ++ordinal ) {
+      units[ ordinal ] = RETIRED_DEMAND_UNIT
+      costs[ ordinal ] = RETIRED_DEMAND_UNIT_COST
+    }
   }
 
   /**
@@ -8135,6 +8196,7 @@ export class AP214GeometryExtraction {
 
     const end = Math.min( this.demandCursor_ + Math.max( count, 1 ), units.length )
     const deadline = budgetMs !== void 0 ? Date.now() + budgetMs : void 0
+    const from = this.demandCursor_
     let executed = 0
 
     for ( ; this.demandCursor_ < end; ++this.demandCursor_ ) {
@@ -8173,6 +8235,10 @@ export class AP214GeometryExtraction {
         }
       }
     }
+
+    // The units the loop passed — run, thrown, or the last one before the
+    // deadline — are done with.
+    this.retireDemandUnits_( from, this.demandCursor_ )
 
     // Deferred face tessellation must land before geometry is read.
     this.finalizeStagedFaces()

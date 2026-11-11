@@ -226,7 +226,7 @@ function permuteInPlace<Element>(items: Element[], seed: number): void {
  */
 function permuteDemandWorklists(
     products: number[],
-    aggregates: IfcRelAggregates[]): void {
+    aggregates: number[]): void {
 
   const seed = worklistPermutationSeed()
 
@@ -508,8 +508,20 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
    * are captured, and no placement is ever appended over an
    * already-delivered one (the ILNA missing-facades / 388_4
    * duplicate-placement class).
+   *
+   * Local IDs, like demandProducts_, and resolved to an entity only when
+   * the pass reaches one (relAggregateAt_). Holding the entities instead
+   * pinned the whole source after a spill (bldrs-ai/Share#2139): an
+   * entity memoises every entity it has read through, each keeps its own
+   * descriptor, and a descriptor's `buffer` is a view of the source.
+   * `spillSourceToExternalStore` -> `invalidate(true)` drops the model's
+   * descriptor cache but cannot reach descriptors held from outside it,
+   * so on a buffered open the IfcRelAggregates in this list -> their
+   * RelatingObject -> units, placements, ... kept the whole buffer alive
+   * for the life of the model. A local ID resolved after the spill gets a
+   * fresh descriptor that pages through the store.
    */
-  private demandAggregates_?: IfcRelAggregates[]
+  private demandAggregates_?: number[]
 
   /** Cursor into demandAggregates_ — items before it are extracted. */
   private demandAggregatesCursor_ = 0
@@ -2343,6 +2355,12 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
    * the original file already sitting in OPFS). See
    * StepModelBase.spillSourceToExternalStore.
    *
+   * Supported between `ExtractGeometryBatchAsync` calls, or while a batch
+   * is still in its prep phase. Those are the only places a spill can land:
+   * on a resident source the only macrotask yields inside an async batch
+   * are in prep, before the worklists and the aggregate stepper exist, and
+   * the aggregate pager is dropped below only if a stepper already exists.
+   *
    * @param store The external byte store.
    * @param chunkBytes Optional window size in bytes.
    * @param maxResidentChunks Optional residency cap in windows.
@@ -2352,6 +2370,18 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
       chunkBytes?: number,
       maxResidentChunks?: number ): void {
     this.model[0].spillSourceToExternalStore(store, chunkBytes, maxResidentChunks)
+
+    // A relationship the async pump is part-way through was paged for a
+    // resident source, which is to say not at all: its pager's `begin`
+    // returned before listing the related products, so every later
+    // `ensureForStep` would page nothing and the rest of the relationship
+    // would read unpaged windows and be lost (bldrs-ai/Share#2139). Drop
+    // it; the pump begins a fresh one, over the store, before its next
+    // step. The stepper itself carries on from where it was.
+    if (this.demandAggregateStepper_ !== void 0) {
+      this.demandAggregatePager_?.release()
+      this.demandAggregatePager_ = void 0
+    }
   }
 
   /**
@@ -3339,9 +3369,9 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
           (this.demandAggregateStepper_ !== void 0 ||
             this.demandAggregatesCursor_ < aggregates.length)) {
 
-        const relAggregate = aggregates[this.demandAggregatesCursor_]
-
         if (this.demandAggregateStepper_ === void 0) {
+
+          const relAggregate = this.relAggregateAt_(this.demandAggregatesCursor_)
 
           this.demandAggregatePager_ =
             await this.conwayGeometry_.beginAggregateExtract(
@@ -3350,6 +3380,14 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
           this.demandAggregateStepper_ =
             this.conwayGeometry_.extractRelAggregateGeometryIncremental(
                 relAggregate)
+        } else if (this.demandAggregatePager_ === void 0) {
+
+          // Dropped by a spill mid-relationship (spillSourceToExternalStore):
+          // page what is left of it through the store, from the step the
+          // stepper is on.
+          this.demandAggregatePager_ =
+            await this.conwayGeometry_.beginAggregateExtract(
+                this.relAggregateAt_(this.demandAggregatesCursor_), budget)
         }
 
         // Per step, not per relationship: this is the await that spends the
@@ -3366,7 +3404,8 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
           done = this.demandAggregateStepper_.next().done === true
         } catch (error) {
           Logger.error(
-              `Error extracting aggregate ${relAggregate.expressID}: ` +
+              'Error extracting aggregate ' +
+              `${this.relAggregateAt_(this.demandAggregatesCursor_).expressID}: ` +
               `${error instanceof Error ? error.message : String(error)}`)
           done = true
         }
@@ -3480,7 +3519,7 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     for (let where = 0; where < aggregates.length; ++where) {
       aggregateKeys[where] = geometryDispatchKey(
           this.model[0],
-          relatingLocalIDOf(this.model[0], aggregates[where].localID))
+          relatingLocalIDOf(this.model[0], aggregates[where]))
     }
 
     const keysEndedMs = Date.now()
@@ -3552,7 +3591,7 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     const aggregateKeys = await computeDispatchKeys(
         this.model[0],
         await computeRelatingLocalIDs(
-            this.model[0], aggregates.map((aggregate) => aggregate.localID)))
+            this.model[0], aggregates))
 
     const keysEndedMs = Date.now()
 
@@ -3592,7 +3631,7 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
    * @return {object} The unsharded product and rel-aggregates worklists.
    */
   private collectDemandCandidates_():
-      {products: number[], aggregates: IfcRelAggregates[]} {
+      {products: number[], aggregates: number[]} {
 
     // Aggregate-target products are extracted ONLY by the
     // rel-aggregates pass below (with the relating object's master
@@ -3614,10 +3653,10 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
       products.push(product.localID)
     }
 
-    const aggregates: IfcRelAggregates[] = []
+    const aggregates: number[] = []
 
     for (const relAggregate of this.model[0].types(IfcRelAggregates)) {
-      aggregates.push(relAggregate)
+      aggregates.push(relAggregate.localID)
     }
 
     return {products, aggregates}
@@ -3632,7 +3671,7 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
    */
   private adoptDemandWorklists_(
       products: number[],
-      aggregates: IfcRelAggregates[]): void {
+      aggregates: number[]): void {
 
     this.releaseDemandAggregate_()
 
@@ -3664,7 +3703,7 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
    */
   private adoptShardedWorklists_(
       products: number[],
-      aggregates: IfcRelAggregates[],
+      aggregates: number[],
       productKeys: Uint32Array,
       aggregateKeys: Uint32Array): void {
 
@@ -3707,7 +3746,7 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     // geometry, so getting it wrong leaves placement with almost nothing
     // to control (measured on D3D, where that mistake made every strategy
     // look identical).
-    const keptAggregates = aggregates.filter((relAggregate, where) =>
+    const keptAggregates = aggregates.filter((_relAggregate, where) =>
       shardOfDispatchKey(aggregateKeys[where], shard.count) === shard.index)
 
     // After the narrowing, so the lever reorders what this shard will
@@ -4212,6 +4251,26 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
 
   /**
+   * The IfcRelAggregates at a position in demandAggregates_, resolved
+   * through the model on every call rather than held (see
+   * demandAggregates_ for why holding it pinned a spilled source). With
+   * element memoization on this is the same object until the model's
+   * cache is invalidated, so a resident load reads exactly the entity it
+   * used to.
+   *
+   * @param where Index into demandAggregates_.
+   * @return {IfcRelAggregates} The relationship.
+   */
+  private relAggregateAt_(where: number): IfcRelAggregates {
+
+    // Every entry came from `types(IfcRelAggregates)` over this model's
+    // fixed index, so the lookup cannot miss or change type.
+    return this.model[0].getElementByLocalID(
+        this.demandAggregates_![where]) as IfcRelAggregates
+  }
+
+
+  /**
    * Finish with the relationship demandAggregateStepper_ is on: close a
    * stepper that has not run out (its finally frees the master rel-voids
    * vector, which is native memory), and drop the source pins the async
@@ -4259,7 +4318,7 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
     for ( let where = 0; where < aggregates.length; ++where ) {
 
-      const relAggregate = aggregates[where]
+      const localID = aggregates[where]
 
       // One definition of the count, whichever source it comes from: the
       // windowed walk fills `paged` by calling aggregateRelatedProductCount
@@ -4268,8 +4327,9 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
       // call, not a second way of computing it (conway#569 review), which
       // is what keeps a windowed load and a resident load of the same model
       // reporting the same denominator.
-      const related = paged?.get(relAggregate.localID) ??
-        this.conwayGeometry_.aggregateRelatedProductCount(relAggregate)
+      const related = paged?.get(localID) ??
+        this.conwayGeometry_.aggregateRelatedProductCount(
+            this.relAggregateAt_(where))
 
       // +1 for the terminating next(): see demandAggregateStepPrefix_.
       running += related + 1
@@ -4451,7 +4511,7 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
         if (this.demandAggregateStepper_ === void 0) {
           this.demandAggregateStepper_ =
             this.conwayGeometry_.extractRelAggregateGeometryIncremental(
-                aggregates[this.demandAggregatesCursor_])
+                this.relAggregateAt_(this.demandAggregatesCursor_))
           this.demandAggregateSteps_ = 0
         }
 
