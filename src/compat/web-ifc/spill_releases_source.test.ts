@@ -412,8 +412,15 @@ describe( 'the gc hook does not leak into other test files', () => {
     expect( vm.runInNewContext( 'Object.getOwnPropertyNames( globalThis ).includes( "gc" )' ) ).toBe( false )
   } )
 
-  test( 'the captured hook still collects', () => {
-    expect( typeof collectGarbage ).toBe( 'function' )
-    expect( () => collectGarbage() ).not.toThrow()
+  test( 'the captured hook still collects', async () => {
+
+    // A real collection, not just a callable: with the hook replaced by a
+    // no-op this ref is never cleared and the test fails. The buffer is made
+    // in its own function so nothing on this frame keeps it alive.
+    const unreferenced = (): WeakRef< object > =>
+      // eslint-disable-next-line no-magic-numbers -- an arbitrary megabyte
+      new WeakRef( new ArrayBuffer( 1024 * 1024 ) )
+
+    expect( await collected( unreferenced() ) ).toBe( true )
   } )
 } )
