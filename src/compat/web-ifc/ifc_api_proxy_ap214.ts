@@ -43,10 +43,16 @@ import {
 import { extractModelInfo } from '../../loaders/loading_utilities'
 import { StepHeader } from '../../step/parsing/step_parser'
 import { BufferByteSource, StoreByteSource } from '../../step/parsing/byte_source'
-import { HashingByteSource } from '../../step/parsing/source_hash'
+import {
+  HashingByteSource,
+  hashSourceAsync,
+  sidecarHashAlgorithmId,
+  sourceHashOptionsFor,
+} from '../../step/parsing/source_hash'
 import {
   hashSampledBuffer,
   hashSource,
+  SIDECAR_HASH_FNV1A_32,
 } from '../../step/parsing/index_sidecar'
 import { restoreStepIndexFromSidecar } from '../../step/step_index_open'
 import {
@@ -792,7 +798,9 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
    * Record the whole-source and sampled digests of a resident parse's
    * buffer under RECORD_SOURCE_HASH, for the sidecar export — the IFC
    * proxy's classic opens do the same, after the parse and outside its
-   * timing.
+   * timing. The synchronous open (`OpenModel`): FNV-1a, whatever
+   * SOURCE_HASH_ALGORITHM asks for, since a native digest cannot be
+   * awaited here — and labelled as such.
    *
    * @param model The parsed model, if the parse produced one.
    * @param data The bytes it was parsed from.
@@ -805,6 +813,34 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
 
     if (model !== void 0 && settings?.RECORD_SOURCE_HASH === true) {
       model.indexedSourceHash = hashSource(data)
+      model.indexedSourceHashAlgorithm = SIDECAR_HASH_FNV1A_32
+      model.indexedSampledHash = hashSampledBuffer(data)
+    }
+  }
+
+  /**
+   * {@link recordResidentSourceHash} for the cooperative classic open
+   * (`OpenModelAsync`, and the classic fallback after a failed streamed
+   * open): the digest SOURCE_HASH_ALGORITHM asks for, as the IFC proxy's
+   * `parseAndExtractAsync` takes it (codex review of conway#783), labelled
+   * with the algorithm actually run.
+   *
+   * @param model The parsed model, if the parse produced one.
+   * @param data The bytes it was parsed from.
+   * @param settings Loader settings.
+   */
+  private static async recordResidentSourceHashAsync(
+      model: AP214StepModel | undefined,
+      data: Uint8Array,
+      settings: Loadersettings | undefined ): Promise<void> {
+
+    if (model !== void 0 && settings?.RECORD_SOURCE_HASH === true) {
+
+      const hashOptions = sourceHashOptionsFor(settings.SOURCE_HASH_ALGORITHM)
+
+      model.indexedSourceHash =
+        await hashSourceAsync(new BufferByteSource(data), void 0, hashOptions)
+      model.indexedSourceHashAlgorithm = sidecarHashAlgorithmId(hashOptions.algorithm!)
       model.indexedSampledHash = hashSampledBuffer(data)
     }
   }
@@ -874,7 +910,9 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
       } : parseTick
 
     const hashingSource = settings?.RECORD_SOURCE_HASH === true ?
-      new HashingByteSource(new StoreByteSource(store)) : void 0
+      new HashingByteSource(
+          new StoreByteSource(store),
+          sourceHashOptionsFor(settings.SOURCE_HASH_ALGORITHM)) : void 0
 
     let result: ParseResult
     let stepHeader: StepHeader
@@ -922,6 +960,8 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
     model.trackCapturedSourceViews = true
 
     model.indexedSourceHash = await hashingSource?.finishAsync()
+    model.indexedSourceHashAlgorithm = hashingSource !== void 0 ?
+      sidecarHashAlgorithmId(hashingSource.algorithm) : void 0
     model.indexedSampledHash = hashingSource?.sampledHash
 
     statistics?.setParseTime(parseEndTime - parseStartTime)
@@ -979,6 +1019,7 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
     model.trackCapturedSourceViews = true
 
     model.indexedSourceHash = restored.sourceHash
+    model.indexedSourceHashAlgorithm = restored.hashAlgorithm
     model.indexedSampledHash = restored.sampledHash
 
     const restoreEndTime = Date.now()
@@ -1076,7 +1117,9 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
     // RECORD_SOURCE_HASH folds the source digests into the parse's own pass,
     // for the index sidecar export (conway#757; the IFC proxy's twin).
     const hashingSource = settings?.RECORD_SOURCE_HASH === true ?
-      new HashingByteSource( new BufferByteSource(data) ) : void 0
+      new HashingByteSource(
+          new BufferByteSource(data),
+          sourceHashOptionsFor( settings.SOURCE_HASH_ALGORITHM ) ) : void 0
 
     try {
       ( { result } = await buildIndexStreamingAsync(
@@ -1109,6 +1152,8 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
     const model = new AP214StepModel(data, columns)
 
     model.indexedSourceHash = await hashingSource?.finishAsync()
+    model.indexedSourceHashAlgorithm = hashingSource !== void 0 ?
+      sidecarHashAlgorithmId(hashingSource.algorithm) : void 0
     model.indexedSampledHash = hashingSource?.sampledHash
 
     statistics?.setParseTime(parseEndTime - parseStartTime)
@@ -1440,7 +1485,7 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
     const model = (await parser.parseDataToModelAsync(bufferInput, parseTick))[1]
     const parseEndTime = Date.now()
 
-    IfcApiProxyAP214.recordResidentSourceHash(model, data, settings)
+    await IfcApiProxyAP214.recordResidentSourceHashAsync(model, data, settings)
 
     tracker?.endPhase(data.length)
 

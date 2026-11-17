@@ -62,10 +62,16 @@ import {
   hashSampledBuffer,
   hashSource,
   IndexSidecarUnsupportedError,
+  SIDECAR_HASH_FNV1A_32,
 } from '../../step/parsing/index_sidecar'
 import ParsingBuffer from '../../parsing/parsing_buffer'
 import { BufferByteSource, StoreByteSource } from '../../step/parsing/byte_source'
-import { HashingByteSource, hashSourceAsync } from '../../step/parsing/source_hash'
+import {
+  HashingByteSource,
+  hashSourceAsync,
+  sidecarHashAlgorithmId,
+  sourceHashOptionsFor,
+} from '../../step/parsing/source_hash'
 import {
   buildIndexStreamingAsync,
   buildColumnarIndexStreamingAsync,
@@ -1214,6 +1220,9 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     if ( model !== void 0 && settings?.RECORD_SOURCE_HASH === true &&
       !IfcApiProxyIfc.isIfc4x3Header( stepHeader ) ) {
       model.indexedSourceHash = hashSource( data )
+      // The synchronous open cannot await a native digest: FNV-1a, whatever
+      // SOURCE_HASH_ALGORITHM asks for, and labelled as such.
+      model.indexedSourceHashAlgorithm = SIDECAR_HASH_FNV1A_32
       model.indexedSampledHash = hashSampledBuffer( data )
     }
 
@@ -1325,7 +1334,11 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     // here cooperative so the open keeps yielding (conway#756).
     if ( model !== void 0 && settings?.RECORD_SOURCE_HASH === true &&
       !IfcApiProxyIfc.isIfc4x3Header( stepHeader ) ) {
-      model.indexedSourceHash = await hashSourceAsync( new BufferByteSource( data ) )
+      const hashOptions = sourceHashOptionsFor( settings.SOURCE_HASH_ALGORITHM )
+
+      model.indexedSourceHash =
+        await hashSourceAsync( new BufferByteSource( data ), void 0, hashOptions )
+      model.indexedSourceHashAlgorithm = sidecarHashAlgorithmId( hashOptions.algorithm! )
       model.indexedSampledHash = hashSampledBuffer( data )
     }
 
@@ -1471,7 +1484,9 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     // RECORD_SOURCE_HASH folds the source digest into the parse's own pass,
     // for the index sidecar export (conway#756; StepModelBase.indexedSourceHash).
     const hashingSource = settings?.RECORD_SOURCE_HASH === true ?
-      new HashingByteSource( new BufferByteSource(data) ) : void 0
+      new HashingByteSource(
+          new BufferByteSource(data),
+          sourceHashOptionsFor( settings.SOURCE_HASH_ALGORITHM ) ) : void 0
 
     try {
       try {
@@ -1523,6 +1538,8 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
       model.setFieldMasks( compatIndex.fieldMasks )
     } else {
       model.indexedSourceHash = await hashingSource?.finishAsync()
+      model.indexedSourceHashAlgorithm = hashingSource !== void 0 ?
+        sidecarHashAlgorithmId( hashingSource.algorithm ) : void 0
       model.indexedSampledHash = hashingSource?.sampledHash
     }
 
@@ -2018,7 +2035,9 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     // for the index sidecar export (conway#756; StepModelBase.indexedSourceHash)
     // — zero extra I/O on the path whose source is never materialised.
     const hashingSource = settings?.RECORD_SOURCE_HASH === true ?
-      new HashingByteSource( new StoreByteSource( store ) ) : void 0
+      new HashingByteSource(
+          new StoreByteSource( store ),
+          sourceHashOptionsFor( settings.SOURCE_HASH_ALGORITHM ) ) : void 0
 
     try {
       try {
@@ -2090,6 +2109,8 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
       model.setFieldMasks( compatIndex.fieldMasks )
     } else {
       model.indexedSourceHash = await hashingSource?.finishAsync()
+      model.indexedSourceHashAlgorithm = hashingSource !== void 0 ?
+        sidecarHashAlgorithmId( hashingSource.algorithm ) : void 0
       model.indexedSampledHash = hashingSource?.sampledHash
     }
 

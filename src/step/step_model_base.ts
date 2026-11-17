@@ -162,6 +162,15 @@ implements Iterable<BaseEntity>, Model {
   public indexedSampledHash?: number
 
   /**
+   * The sidecar `hashAlgorithm` id {@link indexedSourceHash} was taken with
+   * (`index_sidecar.ts`: 1 = FNV-1a, 2 = SHA-256 blocks), so an export
+   * labels the digest it carries. Undefined reads as FNV-1a, which every
+   * open recorded before bldrs-ai/Share#2092 and the synchronous opens still
+   * do.
+   */
+  public indexedSourceHashAlgorithm?: number
+
+  /**
    * Is this model's index a mid-parse PREFIX? True only for a model built
    * over `ColumnarIndexSink.snapshot()` columns — the parse-time preview
    * channel's generations. It changes no behaviour, only what an

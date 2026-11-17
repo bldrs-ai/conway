@@ -4,6 +4,9 @@ import { IFC_SIDECAR_SCHEMA } from '../step/parsing/index_sidecar'
 import {
   HashingByteSource,
   HashingSyncByteSource,
+  sidecarHashAlgorithmId,
+  SourceHashAlgorithm,
+  sourceHashOptionsFor,
 } from '../step/parsing/source_hash'
 import {
   assertSidecarDescribesStore,
@@ -71,6 +74,15 @@ export interface StreamedIfcOpenOptions {
    * index build, for a feature most opens never use.
    */
   recordSourceHash?: boolean
+
+  /**
+   * Which digest `recordSourceHash` takes (default `'fnv1a32'`);
+   * `'sha256Blocks'` is the native block digest (`source_hash.ts`
+   * #SourceHashAlgorithm, bldrs-ai/Share#2092). Only the asynchronous open
+   * ({@link openStreamedIfcModelAsync}) takes it; the synchronous one
+   * always records FNV-1a.
+   */
+  sourceHashAlgorithm?: SourceHashAlgorithm
 }
 
 
@@ -217,6 +229,10 @@ export function openStreamedIfcModel(
   const model = new IfcStepModel( void 0, columns, provider )
 
   model.indexedSourceHash = hashing?.finish()
+  // The synchronous hasher is FNV-1a only (`sourceHashAlgorithm` is for the
+  // asynchronous open), labelled as such.
+  model.indexedSourceHashAlgorithm =
+    hashing !== void 0 ? sidecarHashAlgorithmId( 'fnv1a32' ) : void 0
   model.indexedSampledHash = hashing?.sampledHash
 
   return {
@@ -297,7 +313,8 @@ export async function openStreamedIfcModelAsync(
   // open: the model records the digest of exactly the bytes its index came
   // from (conway#756).
   const hashing = options?.recordSourceHash === true ?
-    new HashingByteSource( source ) : void 0
+    new HashingByteSource( source, sourceHashOptionsFor( options.sourceHashAlgorithm ) ) :
+    void 0
   const { header, columns, result, stats } = await buildColumnarIndexStreamingAsync(
       hashing ?? source,
       IfcStepParser.Instance,
@@ -318,6 +335,8 @@ export async function openStreamedIfcModelAsync(
   const model = new IfcStepModel( void 0, columns, provider )
 
   model.indexedSourceHash = await hashing?.finishAsync()
+  model.indexedSourceHashAlgorithm =
+    hashing !== void 0 ? sidecarHashAlgorithmId( hashing.algorithm ) : void 0
   model.indexedSampledHash = hashing?.sampledHash
 
   return {
@@ -441,6 +460,7 @@ export async function openIfcModelFromIndex(
   // identity of the bytes it describes — re-exporting this model reproduces
   // the sidecar byte for byte (conway#756).
   model.indexedSourceHash = restored.sourceHash
+  model.indexedSourceHashAlgorithm = restored.hashAlgorithm
   model.indexedSampledHash = restored.sampledHash
 
   return {

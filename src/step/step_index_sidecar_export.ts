@@ -1,6 +1,7 @@
 import {
   IndexSidecarUnsupportedError,
   serializeIndexSidecarFromColumns,
+  SIDECAR_HASH_FNV1A_32,
   SidecarSchemaStamp,
 } from './parsing/index_sidecar'
 import StepModelBase from './step_model_base'
@@ -17,8 +18,14 @@ export interface StepIndexSidecarExport {
   /** The length of the source the sidecar was written against. */
   sourceByteLength: number
 
-  /** The FNV-1a of that source, as recorded in the sidecar's header. */
+  /**
+   * The digest of that source, as recorded in the sidecar's header, taken
+   * with {@link hashAlgorithm}.
+   */
   sourceHash: number
+
+  /** The sidecar `hashAlgorithm` id of {@link sourceHash}. */
+  hashAlgorithm: number
 
   /** Milliseconds spent serialising the columns. */
   serializeMs: number
@@ -71,6 +78,9 @@ export async function exportStepIndexSidecar< TypeIDType extends number >(
 
   const sourceByteLength = model.bufferBytesize
   const recorded = model.indexedSourceHash
+  const hashAlgorithm = recorded !== void 0 ?
+    ( model.indexedSourceHashAlgorithm ?? SIDECAR_HASH_FNV1A_32 ) :
+    SIDECAR_HASH_FNV1A_32
   const sourceHash = recorded ?? options?.sourceHash
 
   if ( sourceHash === void 0 ) {
@@ -90,6 +100,8 @@ export async function exportStepIndexSidecar< TypeIDType extends number >(
       model.indexColumns(), sourceByteLength, sourceHash, {
         schema,
         sampledHash: recorded !== void 0 ? model.indexedSampledHash : void 0,
+        // A caller-supplied hash is FNV-1a by this function's contract.
+        hashAlgorithm,
       } )
 
   const serializeMs = Date.now() - serializeStart
@@ -98,6 +110,7 @@ export async function exportStepIndexSidecar< TypeIDType extends number >(
     sidecar,
     sourceByteLength,
     sourceHash: sourceHash >>> 0,
+    hashAlgorithm,
     serializeMs,
   }
 }

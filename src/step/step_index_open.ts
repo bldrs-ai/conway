@@ -5,13 +5,16 @@ import {
   deserializeIndexSidecarToColumns,
   hashSampledSource,
   IndexSidecarStaleError,
+  isKnownSidecarHashAlgorithm,
   readSidecarSourceIdentity,
+  SIDECAR_HASH_FNV1A_32,
+  SIDECAR_HASH_SHA256_BLOCKS,
   SidecarSchemaStamp,
   SidecarSourceIdentity,
   sidecarMatchesSource,
   sidecarMatchesSourceLength,
 } from './parsing/index_sidecar'
-import { hashSourceAsync } from './parsing/source_hash'
+import { hashSourceAsync, nativeDigestProvider } from './parsing/source_hash'
 import StepParser, { ParseResult, StepHeader } from './parsing/step_parser'
 import { StepExternalByteStore } from './step_buffer_provider'
 
@@ -125,6 +128,22 @@ export async function hashSampledStore( store: StepExternalByteStore ): Promise<
  * the sampled or whole-source digest by `verify` (see
  * {@link SidecarVerifyMode}, and `index_sidecar.ts` §"The trust gate").
  *
+ * What each `verify` mode does with each `hashAlgorithm` (bldrs-ai/Share#2092,
+ * codex review of conway#783). The sampled digest is FNV-1a over the
+ * ~0.5 MB `sampledSourceSpans` under BOTH known ids — only the
+ * whole-source digest differs — so `'sampled'` verifies an id-2 sidecar
+ * with no WebCrypto at all, and `false` checks the length alone, as it
+ * always has:
+ *
+ * | | id 1 (FNV) | id 2, WebCrypto | id 2, no WebCrypto | unknown id |
+ * |---|---|---|---|---|
+ * | `true` | FNV of the store | block digest of the store | **stale** (`'algorithm'`) | **stale** (`'algorithm'`) |
+ * | `'sampled'` | sampled FNV | sampled FNV | sampled FNV | **stale** (`'algorithm'`) |
+ * | `false` | length | length | length | **stale** (`'algorithm'`) |
+ *
+ * (`'sampled'` on a sidecar with no sampled digest runs the `true` row.)
+ * Every row checks the length first.
+ *
  * Exported so the compat factory can classify a source it is about to
  * refuse for another reason: a store truncated inside its header no longer
  * sniffs as a STEP format, and without this check first that open would
@@ -145,6 +164,18 @@ export async function assertSidecarDescribesStore(
         'length', identity.sourceByteLength, store.byteLength )
   }
 
+  // A `hashAlgorithm` id this reader does not know is stale in EVERY mode,
+  // here, before the column decode would throw a plain Error on it (codex
+  // review of conway#783): the remedy is the caller's parse, and only
+  // `INDEX_STALE` says so. A known id this runtime cannot compute (id 2
+  // with no WebCrypto) is refused only where its digest would be computed,
+  // the full check below — see the mode table in the doc comment.
+  const algorithm = identity.hashAlgorithm ?? SIDECAR_HASH_FNV1A_32
+
+  if ( !isKnownSidecarHashAlgorithm( algorithm ) ) {
+    throw new IndexSidecarStaleError( 'algorithm', algorithm, 0 )
+  }
+
   if ( verify === 'sampled' && identity.sampledHash !== void 0 ) {
 
     const sampled = await hashSampledStore( store )
@@ -158,11 +189,25 @@ export async function assertSidecarDescribesStore(
 
   if ( verify !== false ) {
 
-    // Chunked, rather than materialising the file to call `hashSource` —
-    // the digest is identical either way (one chained FNV-1a), and a
-    // windowed open must not need the whole file resident to check its own
-    // index. Yields between chunks so a worker stays responsive through it.
-    const hashed = await hashSourceAsync( new StoreByteSource( store ) )
+    // The digest the sidecar was written with (bldrs-ai/Share#2092): every
+    // sidecar persisted before the SHA-256 block digest existed is FNV-1a
+    // and still verifies as such. One that names the block digest on a
+    // platform with no WebCrypto digest cannot be checked, so it is stale —
+    // the caller parses, as for any refusal — never trusted unverified.
+    const provider =
+      algorithm === SIDECAR_HASH_SHA256_BLOCKS ? nativeDigestProvider() : void 0
+
+    if ( algorithm !== SIDECAR_HASH_FNV1A_32 && provider === void 0 ) {
+      throw new IndexSidecarStaleError( 'algorithm', algorithm, 0 )
+    }
+
+    // Chunked, rather than materialising the file — the digest is
+    // identical either way, and a windowed open must not need the whole
+    // file resident to check its own index. Yields between chunks so a
+    // worker stays responsive through it.
+    const hashed = await hashSourceAsync(
+        new StoreByteSource( store ), void 0,
+        provider !== void 0 ? { algorithm: 'sha256Blocks', provider } : void 0 )
 
     if ( !sidecarMatchesSource( identity, store.byteLength, hashed ) ) {
       throw new IndexSidecarStaleError( 'hash', identity.sourceHash, hashed )
@@ -181,6 +226,9 @@ export interface RestoredStepIndex< TypeIDType extends number > {
 
   /** The sidecar's whole-source digest (the model adopts it). */
   sourceHash: number
+
+  /** Its `hashAlgorithm` id (the model adopts that too). */
+  hashAlgorithm: number
 
   /** The sidecar's sampled digest, when it recorded one. */
   sampledHash?: number
@@ -240,6 +288,7 @@ export async function restoreStepIndexFromSidecar< TypeIDType extends number >(
   return {
     columns: restored.columns,
     sourceHash: restored.sourceHash,
+    hashAlgorithm: restored.hashAlgorithm ?? SIDECAR_HASH_FNV1A_32,
     sampledHash: restored.sampledHash,
     fieldMasks: restored.fieldMasks,
     header,
