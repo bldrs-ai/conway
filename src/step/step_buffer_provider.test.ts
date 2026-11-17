@@ -391,6 +391,72 @@ describe('WindowedStepBufferProvider adaptive residency', () => {
     expect(store.reads).toBe(readsAfterGrowth)
   })
 
+  // Review of conway#785: the ghost list counts evictions, so a ghost hit
+  // means a reuse distance below cap + list size. Bounded by the ceiling
+  // itself, a cycle a little longer than the ceiling still hit at cap 16
+  // (distance < 80) and grew the window to the full 256 MiB, where it
+  // still missed on nearly every request. Bounded by ceiling - cap, a hit
+  // means a distance below the ceiling. Shipped 4 MiB chunks over a store
+  // that serves 1-byte stand-ins, so the 64-chunk ceiling is the real one.
+  describe('at the shipped chunk size', () => {
+
+    const MIB = 1024 * 1024
+    const BIG_CHUNK = 4 * MIB
+
+    /** Store of `chunks` 4 MiB chunks that counts reads, serving 1-byte stand-ins. */
+    function standInStore(chunks: number): StepExternalByteStore & {reads: number} {
+      const store = {
+        reads: 0,
+        byteLength: chunks * BIG_CHUNK,
+        read(): Promise< Uint8Array > {
+          ++store.reads
+          return Promise.resolve(new Uint8Array(1))
+        },
+      }
+
+      return store
+    }
+
+    async function cycleBig(
+        provider: WindowedStepBufferProvider,
+        requests: number,
+        workingSet: number): Promise< void > {
+
+      for (let step = 0; step < requests; ++step) {
+        await provider.ensureResident((step % workingSet) * BIG_CHUNK, 1)
+      }
+    }
+
+    test('a cycle a few chunks beyond the ceiling does not grow the window', async () => {
+      const store = standInStore(200)
+      const provider = new WindowedStepBufferProvider(store)
+
+      expect(provider.residencyCapChunks).toBe(16)
+      expect(provider.adaptiveResidencyCapChunks).toBe(64)
+
+      await cycleBig(provider, 40000, 70)
+
+      // No window the policy may reach holds 70 chunks, so it must not pay
+      // 256 MiB to keep missing.
+      expect(provider.residencyCapChunks).toBe(16)
+    })
+
+    test('a cycle within the ceiling still grows to hold it', async () => {
+      const store = standInStore(200)
+      const provider = new WindowedStepBufferProvider(store)
+
+      await cycleBig(provider, 40000, 60)
+
+      expect(provider.residencyCapChunks).toBe(64)
+
+      const readsAfterGrowth = store.reads
+
+      await cycleBig(provider, 120, 60)
+
+      expect(store.reads).toBe(readsAfterGrowth)
+    })
+  })
+
   test('a forward sweep with sparse misses still does not grow', async () => {
     const sweepChunks = 1000
     const store = countingStore(CHUNK * sweepChunks)

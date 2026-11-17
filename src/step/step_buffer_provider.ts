@@ -513,9 +513,10 @@ export class WindowedStepBufferProvider implements StepBufferProvider {
   /**
    * Chunk indices evicted recently, insertion-ordered (Set iteration order
    * is insertion order, so the front is the oldest) and bounded by the
-   * adaptive ceiling. A load of a chunk in here is a capacity miss: a window
-   * the policy may still grow to would have held it. Empty when adaptation
-   * is off. See {@link rememberEvicted_} for why the bound is the ceiling.
+   * headroom left under the adaptive ceiling (`ceiling - cap`). A load of a
+   * chunk in here is a capacity miss: a window the policy may still grow to
+   * would have held it. Empty when adaptation is off. See
+   * {@link rememberEvicted_} for why that is the bound.
    */
   private readonly ghostChunks_ = new Set< number >()
 
@@ -1140,17 +1141,30 @@ export class WindowedStepBufferProvider implements StepBufferProvider {
    * Record that a chunk left the window, so a later load of it can be
    * recognised as a capacity miss rather than a first touch.
    *
-   * The ghost list holds as many evictions as the adaptive ceiling has
-   * chunks, so a ghost hit means "a window the policy is allowed to reach
-   * would have held it". It used to hold only as many as the current cap
-   * ("a window twice this size would have"), which misses every re-read
-   * whose reuse distance is beyond twice the cap: on a 309 MB faceted-brep
-   * IFC2X3 export the re-reads' distances were p10 17, p50 44, p90 77
-   * chunks against a cap of 16, so 457 of its 773 re-reads fell off the
-   * list and counted as compulsory (bldrs-ai/Share#2139). A sweep longer
-   * than the ceiling still reads as compulsory: its chunks come back after
-   * more evictions than the list holds. The list is at most 64 entries (the
-   * 256 MiB ceiling over 4 MiB chunks).
+   * The list holds the last `ceiling - cap` evictions, so a ghost hit
+   * means "a window the policy is allowed to reach would have held it".
+   * Why that bound: under LRU at cap c, a chunk is evicted once c distinct
+   * chunks have been used since its last use, and every further distinct
+   * chunk used before it comes back is a miss, hence an eviction. So a
+   * chunk still among the last g evictions when it is re-read has a reuse
+   * distance below c + g, and g = ceiling - c makes that "below the
+   * ceiling". (The converse is not exact: re-misses of chunks already
+   * counted also evict, so a re-read just under the ceiling can fall off.
+   * The test errs towards not growing.) The bound shrinks as the cap grows
+   * and is zero at the ceiling, where the list is dropped.
+   *
+   * It used to be the cap ("a window twice this size would have"), which
+   * misses every re-read whose reuse distance is beyond twice the cap: on a
+   * 309 MB faceted-brep IFC2X3 export the re-reads' distances were p10 17,
+   * p50 44, p90 77 chunks against a cap of 16, so 457 of its 773 re-reads
+   * fell off the list and counted as compulsory (bldrs-ai/Share#2139). A
+   * bound of the ceiling itself (tried first) over-reaches the other way:
+   * at cap 16 a hit then means a distance below 16 + 64 = 80, so a cycle of
+   * 65-80 chunks grew the window to the ceiling and still missed on nearly
+   * every request. A working set beyond the ceiling now reads as compulsory
+   * and does not grow, which is right: no window the policy may reach holds
+   * it. The list is at most `ceiling - cap` entries (60 at the defaults:
+   * a 256 MiB ceiling over 4 MiB chunks, from a 16-chunk start).
    *
    * @param chunkIndex The evicted chunk.
    */
@@ -1170,8 +1184,19 @@ export class WindowedStepBufferProvider implements StepBufferProvider {
     }
 
     this.ghostChunks_.add( chunkIndex )
+    this.trimGhosts_()
+  }
 
-    while ( this.ghostChunks_.size > this.adaptiveCapChunks_ ) {
+  /**
+   * Hold the ghost list to `ceiling - cap` entries, oldest out first (see
+   * {@link rememberEvicted_}). Called after each eviction and when the cap
+   * grows, since growth shrinks the bound.
+   */
+  private trimGhosts_(): void {
+
+    const bound = this.adaptiveCapChunks_ - this.maxResidentChunks_
+
+    while ( this.ghostChunks_.size > bound ) {
 
       const oldest = this.ghostChunks_.values().next()
 
@@ -1226,6 +1251,7 @@ export class WindowedStepBufferProvider implements StepBufferProvider {
 
       this.maxResidentChunks_ =
         Math.min( this.adaptiveCapChunks_, this.maxResidentChunks_ * 2 )
+      this.trimGhosts_()
     }
 
     this.intervalRequests_       = 0
