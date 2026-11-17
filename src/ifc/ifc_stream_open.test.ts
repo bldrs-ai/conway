@@ -243,6 +243,48 @@ describe( 'openStreamedIfcModel (Phase B3)', () => {
     }
   } )
 
+  // Share#2139: a walk over records that are already resident takes the
+  // provider's synchronous hit path, never one async ensure per record (that
+  // was 14.1 M async ensures for 851 store reads on a 309 MB IFC2X3 model),
+  // and visits exactly what the async walk visited.
+  test( 'ensureResidentClosureByLocalID over a resident closure issues no async ensures', async () => {
+
+    const store = new InMemoryStepByteStore( bytes )
+    const fromStore = await openStreamedIfcModelFromStore( store, { pool: 4 * 1024 } )
+    const model = fromStore.model!
+    const expressID = [ ...model.expressIDsOfTypes( IfcRoot ) ][ 0 ] as number
+    const localID = model.resolveExpressID( expressID ) as number
+
+    const first = await model.ensureResidentClosureByLocalID( localID )
+
+    expect( first.size ).toBeGreaterThan( 1 )
+
+    model.unpinLocalIDs( first )
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const provider = ( model as any ).bufferProvider_
+    const ensureResident = provider.ensureResident
+    let ensures = 0
+    let second = new Set< number >()
+
+    provider.ensureResident = ( ...args: [number, number] ) => {
+      ++ensures
+      return ensureResident.apply( provider, args )
+    }
+
+    try {
+
+      second = await model.ensureResidentClosureByLocalID( localID )
+
+      expect( [ ...second ].sort( ( a, b ) => a - b ) )
+          .toEqual( [ ...first ].sort( ( a, b ) => a - b ) )
+      expect( ensures ).toBe( 0 )
+    } finally {
+      provider.ensureResident = ensureResident
+      model.unpinLocalIDs( second )
+    }
+  } )
+
   test( 'ensureResidentClosureByLocalID skip-descend does not follow #refs', async () => {
 
     const store = new InMemoryStepByteStore( bytes )

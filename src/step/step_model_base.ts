@@ -1499,6 +1499,45 @@ implements Iterable<BaseEntity>, Model {
   }
 
   /**
+   * {@link ensureResidentByLocalID} for a closure walk: when the record's
+   * range is already resident, do the provider's hit bookkeeping
+   * synchronously and return undefined; otherwise return the async ensure.
+   *
+   * Why: a windowed geometry pump walks every product's #ref closure, and
+   * nearly every record in it is a hit. On a 309 MB faceted-brep IFC2X3
+   * export that was 14.1 M ensures for 851 store reads, each an async frame
+   * plus a provider-level async frame and their promises; the walk and the
+   * garbage collection behind it were most of the ~32 s by which its
+   * windowed geometry phase trailed the buffered one in Node (41.9 against
+   * 10.3 s), and a window holding the whole file removed only ~5 s of that
+   * (bldrs-ai/Share#2139). Taking this path cut the phase to 34 s at the
+   * same 16-chunk window.
+   *
+   * A wave whose records are all resident no longer yields between waves;
+   * nothing depends on that yield, since every record is claimed and pinned
+   * before its residency is checked, exactly as before.
+   *
+   * Complex records with mapped class ranges take the async path whole, so
+   * their mapped ranges are ensured exactly as before.
+   *
+   * @param localID The local ID of the record (must be < count).
+   * @return {Promise< void > | undefined} The pending ensure, or undefined
+   * when the record was resident.
+   */
+  private ensureResidentOrTouch_( localID: number ): Promise< void > | undefined {
+
+    const provider = this.bufferProvider_
+
+    if ( provider.touchIfResident !== void 0 &&
+         this.complexEntries_?.get( localID )?.multiMapping === void 0 &&
+         provider.touchIfResident( this.address_[ localID ], this.length_[ localID ] ) ) {
+      return void 0
+    }
+
+    return this.ensureResidentByLocalID( localID )
+  }
+
+  /**
    * Page in the byte range(s) backing a record by express ID — see
    * `ensureResidentByLocalID`. Unknown express IDs resolve silently
    * (the following read will surface the miss the same way it does
@@ -1623,7 +1662,22 @@ implements Iterable<BaseEntity>, Model {
         break
       }
 
-      await Promise.all( wave.map( ( id ) => this.ensureResidentByLocalID( id ) ) )
+      // Only the misses cost a promise; a wave of hits does not await at
+      // all (see ensureResidentOrTouch_).
+      const pending: Promise< void >[] = []
+
+      for ( const id of wave ) {
+
+        const ensure = this.ensureResidentOrTouch_( id )
+
+        if ( ensure !== void 0 ) {
+          pending.push( ensure )
+        }
+      }
+
+      if ( pending.length > 0 ) {
+        await Promise.all( pending )
+      }
 
       const waveSpans: { address: number, length: number }[] = []
 
@@ -1671,8 +1725,19 @@ implements Iterable<BaseEntity>, Model {
       }
 
       if ( waveSpans.length > 0 ) {
-        await Promise.all( waveSpans.map( ( span ) =>
-          this.ensureResidentRange( span.address, span.length ) ) )
+
+        const pendingSpans: Promise< void >[] = []
+
+        for ( const span of waveSpans ) {
+
+          if ( this.bufferProvider_.touchIfResident?.( span.address, span.length ) !== true ) {
+            pendingSpans.push( this.ensureResidentRange( span.address, span.length ) )
+          }
+        }
+
+        if ( pendingSpans.length > 0 ) {
+          await Promise.all( pendingSpans )
+        }
       }
     }
 

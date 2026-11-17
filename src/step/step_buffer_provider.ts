@@ -106,7 +106,18 @@ const ADAPTIVE_EVAL_REQUESTS = 4096
 /* Capacity misses in one interval that justify doubling — and the share of
  * that interval's misses they must be. The fraction is what keeps a model
  * that is simply reading a lot of new file (all-compulsory misses) from
- * growing on volume alone. */
+ * growing on volume alone.
+ *
+ * An interval is closed only once it holds at least
+ * ADAPTIVE_GROWTH_CAPACITY_MISSES loads; until then its counts carry into
+ * the next 4,096 requests. An interval with fewer loads than that could
+ * never meet the trigger, so closing it only threw its evidence away, and
+ * on a load whose misses are sparse in its requests that was all of them:
+ * a 309 MB faceted-brep IFC2X3 export issued 14.1 M requests for 851 loads
+ * (one per ~16,600 requests, against D3D's one per ~400), 773 of them
+ * re-reads, and 0 of its 3,448 intervals met the trigger, so its window
+ * never left 16 chunks (bldrs-ai/Share#2139). A forward sweep still never
+ * grows: carrying counts over adds loads, never capacity misses. */
 const ADAPTIVE_GROWTH_CAPACITY_MISSES = 8
 const ADAPTIVE_GROWTH_MISS_FRACTION = 0.5
 
@@ -387,6 +398,23 @@ export interface StepBufferProvider {
    * `readSync`)? Absent reads as false.
    */
   readonly faultsInSynchronously?: boolean
+
+  /**
+   * Optional: when every chunk covering the range is already resident, do
+   * exactly the bookkeeping {@link ensureResident} does for an all-hit
+   * request (LRU touch, residency-policy request, trim to cap) synchronously
+   * and return true; otherwise change nothing and return false, so the
+   * caller falls back to `ensureResident`.
+   *
+   * The point is the allocation, not the bookkeeping: a closure walk calls
+   * `ensureResident` once per record, and on a windowed source nearly every
+   * one of those is a hit that still costs an async frame and a promise.
+   *
+   * @param address Absolute start of the range.
+   * @param length Length of the range.
+   * @return {boolean} True when the range was resident (and is now touched).
+   */
+  touchIfResident?( address: number, length: number ): boolean
 }
 
 /**
@@ -485,8 +513,9 @@ export class WindowedStepBufferProvider implements StepBufferProvider {
   /**
    * Chunk indices evicted recently, insertion-ordered (Set iteration order
    * is insertion order, so the front is the oldest) and bounded by the
-   * current cap. A load of a chunk in here is a capacity miss: a window
-   * twice this size would have held it. Empty when adaptation is off.
+   * adaptive ceiling. A load of a chunk in here is a capacity miss: a window
+   * the policy may still grow to would have held it. Empty when adaptation
+   * is off. See {@link rememberEvicted_} for why the bound is the ceiling.
    */
   private readonly ghostChunks_ = new Set< number >()
 
@@ -927,6 +956,58 @@ export class WindowedStepBufferProvider implements StepBufferProvider {
   }
 
   /**
+   * The all-hit half of {@link ensureResident}, synchronously — see
+   * {@link StepBufferProvider.touchIfResident}.
+   *
+   * Same effects, in the same order, as an `ensureResident` whose every
+   * chunk is resident: each chunk is touched and fed to the policy as a
+   * non-load request, then the window is trimmed with this range pinned.
+   * (`ensureResident` reaches its trim without awaiting anything when it
+   * issued no load, so the async path does this all in one tick too; what
+   * is saved is the async frame and promise per call.)
+   *
+   * @param address Absolute start of the range.
+   * @param length Length of the range.
+   * @return {boolean} True when every covering chunk was resident.
+   */
+  public touchIfResident( address: number, length: number ): boolean {
+
+    const chunkBytes = this.chunkBytes_
+    const firstChunk = Math.floor( address / chunkBytes )
+    const lastChunk  = Math.floor( ( address + Math.max( length, 1 ) - 1 ) / chunkBytes )
+
+    for ( let chunkIndex = firstChunk; chunkIndex <= lastChunk; ++chunkIndex ) {
+
+      if ( !this.chunks_.has( chunkIndex ) ) {
+        return false
+      }
+    }
+
+    for ( let chunkIndex = firstChunk; chunkIndex <= lastChunk; ++chunkIndex ) {
+
+      this.touch_( chunkIndex )
+      this.notePolicyRequest_( chunkIndex, false )
+    }
+
+    // `ensureResident` trims with its own range pinned; only pay for the
+    // pins when there is something to trim.
+    if ( this.chunks_.size > this.maxResidentChunks_ ) {
+
+      for ( let chunkIndex = firstChunk; chunkIndex <= lastChunk; ++chunkIndex ) {
+        this.addPin_( chunkIndex, 1 )
+      }
+
+      this.trimToCap()
+
+      for ( let chunkIndex = firstChunk; chunkIndex <= lastChunk; ++chunkIndex ) {
+        this.addPin_( chunkIndex, -1 )
+      }
+    }
+
+    return true
+  }
+
+  /**
    * Make a byte range resident, paging missing chunks from the store
    * and evicting least-recently-used chunks beyond the cap (never the
    * chunks needed by this call).
@@ -1057,9 +1138,19 @@ export class WindowedStepBufferProvider implements StepBufferProvider {
 
   /**
    * Record that a chunk left the window, so a later load of it can be
-   * recognised as a capacity miss rather than a first touch. The ghost
-   * list is the size of the cache, which is what makes a ghost hit mean
-   * "a window twice this size would have held it".
+   * recognised as a capacity miss rather than a first touch.
+   *
+   * The ghost list holds as many evictions as the adaptive ceiling has
+   * chunks, so a ghost hit means "a window the policy is allowed to reach
+   * would have held it". It used to hold only as many as the current cap
+   * ("a window twice this size would have"), which misses every re-read
+   * whose reuse distance is beyond twice the cap: on a 309 MB faceted-brep
+   * IFC2X3 export the re-reads' distances were p10 17, p50 44, p90 77
+   * chunks against a cap of 16, so 457 of its 773 re-reads fell off the
+   * list and counted as compulsory (bldrs-ai/Share#2139). A sweep longer
+   * than the ceiling still reads as compulsory: its chunks come back after
+   * more evictions than the list holds. The list is at most 64 entries (the
+   * 256 MiB ceiling over 4 MiB chunks).
    *
    * @param chunkIndex The evicted chunk.
    */
@@ -1080,7 +1171,7 @@ export class WindowedStepBufferProvider implements StepBufferProvider {
 
     this.ghostChunks_.add( chunkIndex )
 
-    while ( this.ghostChunks_.size > this.maxResidentChunks_ ) {
+    while ( this.ghostChunks_.size > this.adaptiveCapChunks_ ) {
 
       const oldest = this.ghostChunks_.values().next()
 
@@ -1121,7 +1212,11 @@ export class WindowedStepBufferProvider implements StepBufferProvider {
       }
     }
 
-    if ( this.intervalRequests_ < ADAPTIVE_EVAL_REQUESTS ) {
+    // Not enough loads yet to meet the trigger either way: keep
+    // accumulating rather than discard the interval (see
+    // ADAPTIVE_GROWTH_CAPACITY_MISSES).
+    if ( this.intervalRequests_ < ADAPTIVE_EVAL_REQUESTS ||
+         this.intervalLoads_ < ADAPTIVE_GROWTH_CAPACITY_MISSES ) {
       return
     }
 
