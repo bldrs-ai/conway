@@ -53,6 +53,18 @@ async function withGc(
   const original = target.gc
 
   if ( replacement === void 0 ) {
+    // A `gc` V8 installed itself (a leaked --expose-gc, process-wide) is not
+    // configurable, so it cannot be removed and "no collector" cannot be
+    // simulated. Say so rather than throw an opaque TypeError from `delete`.
+    const descriptor = Object.getOwnPropertyDescriptor( target, 'gc' )
+
+    if ( descriptor !== void 0 && !descriptor.configurable ) {
+      throw new Error(
+          'global.gc is non-configurable: --expose-gc is on for this process, ' +
+          'probably leaked by a test that called v8.setFlagsFromString(' +
+          '\'--expose-gc\') without restoring it' )
+    }
+
     delete target.gc
   } else {
     target.gc = replacement

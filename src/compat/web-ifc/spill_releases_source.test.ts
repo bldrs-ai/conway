@@ -16,6 +16,14 @@
 // ArrayBuffer, settled with real collections. Jest runs without --expose-gc,
 // so the flag is switched on here and the hook fetched from a fresh context,
 // which is where V8 installs it once the flag is set.
+//
+// The flag is switched back off as soon as the hook is captured. V8 flags are
+// process-wide, so left on, every context created afterwards in this jest
+// worker (one per later test file) gets a built-in, non-configurable `gc`,
+// and a file that simulates "no collector" with `delete globalThis.gc`
+// (core/retained_memory.test) throws. That broke main's CI on cc95cf6
+// (bldrs-ai/conway#781 introduced the leak); which file lands after this one
+// in a worker varies run to run, so it only failed sometimes.
 import { createHash } from 'crypto'
 import * as fs from 'fs'
 import * as v8 from 'v8'
@@ -31,6 +39,9 @@ const SETTINGS = { COORDINATE_TO_ORIGIN: true, USE_FAST_BOOLS: true, DEFER_GEOME
 v8.setFlagsFromString( '--expose-gc' )
 
 const collectGarbage = vm.runInNewContext( 'gc' ) as () => void
+
+// The captured function keeps working with the flag off.
+v8.setFlagsFromString( '--no-expose-gc' )
 
 /** The private field the open hands its source to. */
 interface ModelWithSource {
@@ -389,4 +400,20 @@ describe( 'SpillModelSource releases a buffered open\'s source', () => {
 
     open.api.CloseModel( open.modelID )
   }, 240000 )
+} )
+
+describe( 'the gc hook does not leak into other test files', () => {
+
+  test( 'a context created after the hook was captured has no gc of its own', () => {
+    // V8 flags are process-wide; with --expose-gc left on, this fresh context
+    // (like each later test file's) would get a non-deletable `gc`. See the
+    // comment at the top of the file.
+    expect( vm.runInNewContext( 'typeof gc' ) ).toBe( 'undefined' )
+    expect( vm.runInNewContext( 'Object.getOwnPropertyNames( globalThis ).includes( "gc" )' ) ).toBe( false )
+  } )
+
+  test( 'the captured hook still collects', () => {
+    expect( typeof collectGarbage ).toBe( 'function' )
+    expect( () => collectGarbage() ).not.toThrow()
+  } )
 } )
