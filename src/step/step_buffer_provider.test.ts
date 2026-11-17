@@ -335,6 +335,156 @@ describe('WindowedStepBufferProvider adaptive residency', () => {
     expect(store.reads).toBe(PAST_ONE_INTERVAL)
   })
 
+  // Share#2139: a load whose misses are sparse among its requests. Each
+  // step loads the next chunk of a cycle one longer than the cap, then hits
+  // it many times, so every 4096-request interval holds only ~4 loads: fewer
+  // than the 8 capacity misses the trigger needs, however many of them are
+  // re-reads. The old policy closed each such interval and discarded it, so
+  // it never grew; counts now carry over until an interval has 8 loads.
+  test('grows on capacity misses that are sparse among the requests', async () => {
+    const store = countingStore(CHUNK * 64)
+    const provider = new WindowedStepBufferProvider(store, CHUNK, 4, true)
+    const hitsPerStep = 1000
+    const workingSet = THRASH_CHUNKS
+
+    for (let step = 0; step < 40; ++step) {
+
+      const address = (step % workingSet) * CHUNK
+
+      for (let request = 0; request <= hitsPerStep; ++request) {
+        await provider.ensureResident(address, 1)
+      }
+    }
+
+    expect(provider.residencyCapChunks).toBe(8)
+
+    const readsAfterGrowth = store.reads
+
+    for (let step = 0; step < 2 * workingSet; ++step) {
+      await provider.ensureResident((step % workingSet) * CHUNK, 1)
+    }
+
+    expect(store.reads).toBe(readsAfterGrowth)
+  })
+
+  // Share#2139: re-reads whose reuse distance is more than twice the cap.
+  // A chunk evicted from a window of 4 is re-read after 11 others, by which
+  // time 8 later evictions have pushed it off a ghost list bounded by the
+  // cap, so the old policy classified every one of these re-reads as
+  // compulsory and never grew, though a window of 12 holds the whole cycle.
+  // The ghost list is now bounded by the ceiling the cap may grow to.
+  test('grows on re-reads whose reuse distance is beyond twice the cap', async () => {
+    const store = countingStore(CHUNK * 16)
+    const provider = new WindowedStepBufferProvider(store, CHUNK, 4, true)
+    const workingSet = 12
+
+    expect(provider.adaptiveResidencyCapChunks).toBe(16)
+
+    await cycle(provider, 3 * PAST_ONE_INTERVAL, workingSet)
+
+    expect(provider.residencyCapChunks).toBe(16)
+
+    const readsAfterGrowth = store.reads
+
+    await cycle(provider, 2 * workingSet, workingSet)
+
+    expect(store.reads).toBe(readsAfterGrowth)
+  })
+
+  // Review of conway#785: the ghost list counts evictions, so a ghost hit
+  // means a reuse distance below cap + list size. Bounded by the ceiling
+  // itself, a cycle a little longer than the ceiling still hit at cap 16
+  // (distance < 80) and grew the window to the full 256 MiB, where it
+  // still missed on nearly every request. Bounded by ceiling - cap, a hit
+  // means a distance below the ceiling. Shipped 4 MiB chunks over a store
+  // that serves 1-byte stand-ins, so the 64-chunk ceiling is the real one.
+  describe('at the shipped chunk size', () => {
+
+    const MIB = 1024 * 1024
+    const BIG_CHUNK = 4 * MIB
+
+    /** Store of `chunks` 4 MiB chunks that counts reads, serving 1-byte stand-ins. */
+    function standInStore(chunks: number): StepExternalByteStore & {reads: number} {
+      const store = {
+        reads: 0,
+        byteLength: chunks * BIG_CHUNK,
+        read(): Promise< Uint8Array > {
+          ++store.reads
+          return Promise.resolve(new Uint8Array(1))
+        },
+      }
+
+      return store
+    }
+
+    async function cycleBig(
+        provider: WindowedStepBufferProvider,
+        requests: number,
+        workingSet: number): Promise< void > {
+
+      for (let step = 0; step < requests; ++step) {
+        await provider.ensureResident((step % workingSet) * BIG_CHUNK, 1)
+      }
+    }
+
+    test('a cycle a few chunks beyond the ceiling does not grow the window', async () => {
+      const store = standInStore(200)
+      const provider = new WindowedStepBufferProvider(store)
+
+      expect(provider.residencyCapChunks).toBe(16)
+      expect(provider.adaptiveResidencyCapChunks).toBe(64)
+
+      await cycleBig(provider, 40000, 70)
+
+      // No window the policy may reach holds 70 chunks, so it must not pay
+      // 256 MiB to keep missing.
+      expect(provider.residencyCapChunks).toBe(16)
+    })
+
+    test('a cycle within the ceiling still grows to hold it', async () => {
+      const store = standInStore(200)
+      const provider = new WindowedStepBufferProvider(store)
+
+      await cycleBig(provider, 40000, 60)
+
+      expect(provider.residencyCapChunks).toBe(64)
+
+      const readsAfterGrowth = store.reads
+
+      await cycleBig(provider, 120, 60)
+
+      expect(store.reads).toBe(readsAfterGrowth)
+    })
+  })
+
+  test('a forward sweep with sparse misses still does not grow', async () => {
+    const sweepChunks = 1000
+    const store = countingStore(CHUNK * sweepChunks)
+    const provider = new WindowedStepBufferProvider(store, CHUNK, 4, true)
+
+    // Each chunk is read once and then hit: 20 requests per load, so the
+    // carried-over intervals see plenty of loads, all of them compulsory.
+    for (let chunk = 0; chunk < sweepChunks; ++chunk) {
+      for (let request = 0; request < 20; ++request) {
+        await provider.ensureResident(chunk * CHUNK, 1)
+      }
+    }
+
+    expect(store.reads).toBe(sweepChunks)
+    expect(provider.residencyCapChunks).toBe(4)
+  })
+
+  test('an explicit cap stays a hard budget on long-distance re-reads too', async () => {
+    const store = countingStore(CHUNK * 16)
+    const provider = new WindowedStepBufferProvider(store, CHUNK, 4)
+
+    await cycle(provider, 3 * PAST_ONE_INTERVAL, 12)
+
+    expect(provider.residencyCapChunks).toBe(4)
+    expect(provider.residentChunkCount).toBeLessThanOrEqual(4)
+    expect(store.reads).toBe(3 * PAST_ONE_INTERVAL)
+  })
+
   test('bounds growth by the 256 MiB ceiling and by the store size', () => {
     const MIB = 1024 * 1024
 
@@ -429,6 +579,15 @@ describe('WindowedStepBufferProvider recency stamps (Share#2139)', () => {
         const reference = new ReferenceWindow()
         const rng = makeRng(0x2139 + cap + (adaptive ? 1 : 0) + (synchronous ? 2 : 0))
         const pinned: number[] = []
+        const trimCaps: number[] = []
+        const trimToCap = provider.trimToCap.bind(provider)
+
+        // Record the cap every trim runs at (white-box: the provider's own
+        // calls go through this instance property too).
+        provider.trimToCap = () => {
+          trimCaps.push(provider.residencyCapChunks)
+          trimToCap()
+        }
 
         // Locality-biased stream so there is real recency structure to get wrong,
         // with enough requests to pass the adaptive policy's 4096-request interval.
@@ -477,6 +636,21 @@ describe('WindowedStepBufferProvider recency stamps (Share#2139)', () => {
             const address = chunk * CHUNK + (straddle ? CHUNK - 2 : 1)
             const length = straddle ? 4 : 3
             let threw = false
+            let providerThrew = false
+
+            // A fault-in feeds the policy before it trims, so the cap can grow
+            // inside the acquire; the model trims with the cap each of the
+            // provider's trims actually used, recorded here.
+            trimCaps.length = 0
+
+            try {
+              provider.acquire(address, length)
+            } catch (error) {
+              expect(error).toBeInstanceOf(StepBufferNotResidentError)
+              providerThrew = true
+            }
+
+            let faults = 0
 
             // The provider walks the covering chunks in order; so does the model.
             for (let covered = chunk; covered <= chunk + (straddle ? 1 : 0); ++covered) {
@@ -484,21 +658,18 @@ describe('WindowedStepBufferProvider recency stamps (Share#2139)', () => {
                 reference.touch(covered)
               } else if (synchronous) {
                 reference.touch(covered)
-                reference.trim(provider.residencyCapChunks)
+                reference.trim(trimCaps[faults++])
                 // Trimming can evict the chunk just faulted in (every other chunk
                 // pinned); the model's trim does too, and it stays evicted (see
-                // faultInSync_). The cap only changes in ensureResident.
+                // faultInSync_).
               } else {
                 threw = true
                 break
               }
             }
 
-            if (threw) {
-              expect(() => provider.acquire(address, length)).toThrow(StepBufferNotResidentError)
-            } else {
-              provider.acquire(address, length)
-            }
+            expect(providerThrew).toBe(threw)
+            expect(trimCaps.length).toBe(faults)
           } else if (op < 17 || pinned.length === 0) {
             const chunk = pick()
 
@@ -632,5 +803,83 @@ describe('WindowedStepBufferProvider recency stamps (Share#2139)', () => {
     expect(stepBufferBase(merged.buffer)).toBe(5 * CHUNK - 3)
     // Chunk 4 evicts 1, chunk 5 evicts 2: the residents are 0, 4, 5.
     expect(residentSet(provider)).toEqual([0, 4, 5])
+  })
+})
+
+// Share#2139: the synchronous all-hit path a closure walk takes instead of
+// one async `ensureResident` per record.
+describe('WindowedStepBufferProvider.touchIfResident', () => {
+
+  const CHUNK = 16
+
+  test('on a miss it reads nothing and changes nothing', async () => {
+    const store = countingStore(CHUNK * 8)
+    const provider = new WindowedStepBufferProvider(store, CHUNK, 2)
+
+    await provider.ensureResident(0, 1)
+
+    expect(provider.touchIfResident(CHUNK, 1)).toBe(false)
+    // A range straddling a resident and a missing chunk is a miss as well.
+    expect(provider.touchIfResident(CHUNK - 2, 4)).toBe(false)
+    expect(store.reads).toBe(1)
+    expect(provider.residentChunkCount).toBe(1)
+  })
+
+  test('on a hit it refreshes recency exactly as ensureResident would', async () => {
+    const store = countingStore(CHUNK * 8)
+    const provider = new WindowedStepBufferProvider(store, CHUNK, 2)
+
+    await provider.ensureResident(0, 1)
+    await provider.ensureResident(CHUNK, 1)
+
+    // Chunk 0 is now the most recently used, so loading chunk 2 evicts 1.
+    expect(provider.touchIfResident(3, 2)).toBe(true)
+
+    await provider.ensureResident(2 * CHUNK, 1)
+
+    expect(provider.touchIfResident(0, 1)).toBe(true)
+    expect(provider.touchIfResident(CHUNK, 1)).toBe(false)
+    expect(store.reads).toBe(3)
+  })
+
+  test('on a hit over the cap it trims the window, sparing its own range', async () => {
+    const store = countingStore(CHUNK * 8)
+    const provider = new WindowedStepBufferProvider(store, CHUNK, 1)
+
+    await provider.ensureResident(0, 1)
+    provider.pinRange(0, 1)
+    // Chunk 0 is pinned, so this load leaves the window one over its cap.
+    await provider.ensureResident(CHUNK, 1)
+    provider.unpinRange(0, 1)
+
+    expect(provider.residentChunkCount).toBe(2)
+
+    // Chunk 1 is the more recent, but the trim spares the touched range
+    // whatever its recency; what goes is the other one.
+    expect(provider.touchIfResident(CHUNK, 1)).toBe(true)
+    expect(provider.residentChunkCount).toBe(1)
+    expect(provider.touchIfResident(CHUNK, 1)).toBe(true)
+    expect(provider.touchIfResident(0, 1)).toBe(false)
+  })
+
+  test('its hits count as requests for the adaptive policy', async () => {
+    const store = countingStore(CHUNK * 64)
+    const provider = new WindowedStepBufferProvider(store, CHUNK, 4, true)
+
+    // The sparse-capacity-miss stream of the adaptive suite, with the hits
+    // served by touchIfResident: it grows only if those hits advance the
+    // policy's interval the way ensureResident's do.
+    for (let step = 0; step < 40; ++step) {
+
+      const address = (step % 6) * CHUNK
+
+      await provider.ensureResident(address, 1)
+
+      for (let request = 0; request < 1000; ++request) {
+        expect(provider.touchIfResident(address, 1)).toBe(true)
+      }
+    }
+
+    expect(provider.residencyCapChunks).toBe(8)
   })
 })
