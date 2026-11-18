@@ -324,6 +324,40 @@ export class StepBufferNotResidentError extends Error {
 }
 
 /**
+ * Thrown by {@link StepBufferProvider.acquire} when the store's synchronous
+ * read of a missing window fails: an I/O error, not bad file data (an OPFS
+ * handle that went away, a short read).
+ *
+ * A subclass of {@link StepBufferNotResidentError} on purpose. Extraction's
+ * catches tell "this field is malformed, degrade" from "these bytes could
+ * not be had" by that one type: they swallow everything else as bad data
+ * and re-throw it. A failed read is the second kind, and before a windowed
+ * IFC pump faulted its windows in through `readSync` (conway#786) it only
+ * ever surfaced as a rejected prefetch ("Error paging product"). As a plain
+ * Error it would be swallowed as malformed data and leave a product
+ * silently partial; as this, it reaches the pump's per-product catch, which
+ * logs it and moves on (conway#526).
+ */
+export class StepSourceReadError extends StepBufferNotResidentError {
+
+  /**
+   * @param address Absolute start of the window that failed to read.
+   * @param length Length of that window.
+   * @param sourceError What the store threw.
+   */
+  constructor(
+      address: number,
+      length: number,
+      public readonly sourceError: unknown ) {
+    super( address, length )
+    this.message =
+      `STEP source read of [${address}, ${address + length}) failed: ` +
+      `${sourceError instanceof Error ? sourceError.message : String( sourceError )}`
+    this.name = 'StepSourceReadError'
+  }
+}
+
+/**
  * Residency provider for a model's source bytes.
  */
 export interface StepBufferProvider {
@@ -559,6 +593,17 @@ export class WindowedStepBufferProvider implements StepBufferProvider {
   private readonly ensurePins_ = new Map< number, number >()
 
   /**
+   * Tests only: the window a provider gets when its constructor is given
+   * neither a chunk size nor a cap, as an explicit (non-adaptive) cap. The
+   * IFC store-backed open builds its provider that way
+   * (IfcApiProxyIfc.parseColumnarFromStore), so this is how a test runs a
+   * whole open, the extraction during it included, at windows small enough
+   * to evict and fault in; swapping the provider after the open would mix
+   * windows of two sizes. Leave unset outside tests.
+   */
+  public static defaultWindowForTests?: { chunkBytes: number, maxResidentChunks: number }
+
+  /**
    * Construct this over an external byte store.
    *
    * `maxResidentChunks` is a starting point, not a budget, unless the
@@ -572,16 +617,22 @@ export class WindowedStepBufferProvider implements StepBufferProvider {
    * either reading.
    *
    * @param store_ The store holding the source bytes.
-   * @param chunkBytes Chunk size in bytes (default 4MiB).
-   * @param maxResidentChunks LRU residency cap in chunks (default 16).
-   * @param adaptive Whether the cap may grow on measured thrash; defaults
+   * @param chunkBytesArg Chunk size in bytes (default 4MiB).
+   * @param maxResidentChunksArg LRU residency cap in chunks (default 16).
+   * @param adaptiveArg Whether the cap may grow on measured thrash; defaults
    * to true exactly when `maxResidentChunks` was left to the default.
    */
   constructor(
       private readonly store_: StepExternalByteStore,
-      chunkBytes: number = DEFAULT_CHUNK_BYTES,
-      maxResidentChunks?: number,
-      adaptive: boolean = maxResidentChunks === void 0 ) {
+      chunkBytesArg?: number,
+      maxResidentChunksArg?: number,
+      adaptiveArg?: boolean ) {
+
+    const forTests = chunkBytesArg === void 0 && maxResidentChunksArg === void 0 ?
+      WindowedStepBufferProvider.defaultWindowForTests : void 0
+    const chunkBytes = chunkBytesArg ?? forTests?.chunkBytes ?? DEFAULT_CHUNK_BYTES
+    const maxResidentChunks = maxResidentChunksArg ?? forTests?.maxResidentChunks
+    const adaptive = adaptiveArg ?? maxResidentChunks === void 0
 
     if ( chunkBytes <= 0 || !Number.isInteger( chunkBytes ) ) {
       throw new Error( `Invalid chunkBytes ${chunkBytes}` )
@@ -822,6 +873,8 @@ export class WindowedStepBufferProvider implements StepBufferProvider {
    * @param length Length of that range (for the error).
    * @throws { StepBufferNotResidentError } When the store has no
    * synchronous read.
+   * @throws { StepSourceReadError } When the store's synchronous read
+   * throws.
    * @return {Uint8Array} The chunk, now resident.
    */
   private faultInSync_( chunkIndex: number, address: number, length: number ): Uint8Array {
@@ -838,7 +891,15 @@ export class WindowedStepBufferProvider implements StepBufferProvider {
 
     this.notePolicyRequest_( chunkIndex, true )
 
-    const chunk = tagBufferBase( readSync.call( this.store_, chunkBase, chunkLength ), chunkBase )
+    let bytes: Uint8Array
+
+    try {
+      bytes = readSync.call( this.store_, chunkBase, chunkLength )
+    } catch ( error ) {
+      throw new StepSourceReadError( chunkBase, chunkLength, error )
+    }
+
+    const chunk = tagBufferBase( bytes, chunkBase )
 
     ++this.syncFaults_
 

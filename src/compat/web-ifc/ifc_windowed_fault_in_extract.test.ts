@@ -16,21 +16,36 @@
 //  - without readSync the walk still runs, since a miss there throws;
 //  - the views a batch captured are dropped when it ends, and the views
 //    readers before the pump left behind are dropped by its first batch, so
-//    evicted windows are not kept alive by stale views.
+//    evicted windows are not kept alive by stale views;
+//  - the non-deferred store open (every product extracted inside
+//    OpenModelStream) follows the same rule;
+//  - a synchronous read that throws fails its product (logged once, by the
+//    pump) and nothing else: no product is delivered partial and the load
+//    goes on (StepSourceReadError).
+//
+// Every open here runs at a 256-byte window with a cap of one chunk from the
+// start (WindowedStepBufferProvider.defaultWindowForTests), so the parse,
+// the prep and the extract all evict and fault windows in.
 import { createHash } from 'crypto'
 import * as fs from 'fs'
 
-import { afterEach, describe, expect, jest, test } from '@jest/globals'
+import { afterEach, beforeEach, describe, expect, jest, test } from '@jest/globals'
 
 import { IFCBUILDING, IFCCLASSIFICATION, IFCPROJECT, IFCSITE } from './ifc2x4'
-import { FlatMesh, IfcAPI } from './ifc_api'
+import { FlatMesh, IfcAPI, Loadersettings } from './ifc_api'
+import Logger from '../../logging/logger'
 import {
   InMemoryStepByteStore,
   StepExternalByteStore,
   WindowedStepBufferProvider,
 } from '../../step/step_buffer_provider'
+import { IfcGeometryExtraction } from '../../ifc/ifc_geometry_extraction'
 
-const SETTINGS = { COORDINATE_TO_ORIGIN: true, USE_FAST_BOOLS: true, DEFER_GEOMETRY: true }
+const SETTINGS: Loadersettings = { COORDINATE_TO_ORIGIN: true, USE_FAST_BOOLS: true, DEFER_GEOMETRY: true }
+
+// The non-deferred store open, which extracts every product inside
+// OpenModelStream (IfcApiProxyIfc.finishWindowedOpen).
+const EAGER: Loadersettings = { COORDINATE_TO_ORIGIN: true, USE_FAST_BOOLS: true }
 
 // Shared mapped representations, styled items, a faceted brep under an
 // aggregate, a grid placement: the shapes whose reads reach beyond the
@@ -53,7 +68,13 @@ const REREADS = new Set( FIXTURES.filter( ( path ) => !path.includes( 'aggregate
 const TINY_CHUNK_BYTES = 256
 const TINY_CAP_CHUNKS = 1
 
+beforeEach( () => {
+  WindowedStepBufferProvider.defaultWindowForTests =
+    { chunkBytes: TINY_CHUNK_BYTES, maxResidentChunks: TINY_CAP_CHUNKS }
+} )
+
 afterEach( () => {
+  WindowedStepBufferProvider.defaultWindowForTests = void 0
   jest.restoreAllMocks()
 } )
 
@@ -200,24 +221,23 @@ async function residentGeometry( path: string ): Promise< Map< number, string[] 
 }
 
 /**
- * Open a fixture windowed over `store`, then swap the model's provider for
- * one with a tiny window, so the pump's reads cross windows and evict.
- * The open itself runs at the default 4 MiB window, which holds these
- * fixtures whole; descriptors it read keep views of those windows, which
- * hold the same bytes, and are what the first batch's sweep must drop.
+ * Open a fixture windowed over `store` at the tiny window (see the
+ * beforeEach), from the start: the parse, the extraction prep and the pump
+ * all read through one provider with one chunk size.
  *
  * @param path The fixture.
  * @param store The store.
+ * @param settings The open's settings.
  * @return {Promise<object>} The open.
  */
-async function openWindowed( path: string, store: StepExternalByteStore ):
+async function openWindowed( path: string, store: StepExternalByteStore, settings: Loadersettings = SETTINGS ):
     Promise< { api: IfcAPI, modelID: number, model: WindowedModel, provider: WindowedStepBufferProvider } > {
 
   const api = new IfcAPI()
 
   await api.Init()
 
-  const modelID = await api.OpenModelStream( store, SETTINGS )
+  const modelID = await api.OpenModelStream( store, settings )
 
   expect( modelID ).toBeGreaterThanOrEqual( 0 )
 
@@ -226,9 +246,9 @@ async function openWindowed( path: string, store: StepExternalByteStore ):
 
   expect( model.isSourceExternal ).toBe( true )
 
-  const provider = new WindowedStepBufferProvider( store, TINY_CHUNK_BYTES, TINY_CAP_CHUNKS )
+  const provider = model.bufferProvider_
 
-  model.bufferProvider_ = provider
+  expect( provider.residencyCapChunks ).toBe( TINY_CAP_CHUNKS )
 
   return { api, modelID, model, provider }
 }
@@ -243,15 +263,18 @@ describe( 'windowed IFC pump over a store that faults windows in (conway#786)', 
     const bytes = new Uint8Array( fs.readFileSync( path ) )
     const store = syncStore( bytes )
     const { api, modelID, model, provider } = await openWindowed( path, store )
+    const faultsAtOpen = provider.syncFaultCount
+
+    store.syncReadsAt.clear()
 
     const meshes = await pump( api, modelID, model )
 
     expect( meshes ).toEqual( expected )
     expect( productPinMax( api, modelID ) ).toBe( 0 )
 
-    // The window really was too small: reads faulted windows in, and some
-    // window was evicted and faulted in again during the pump.
-    expect( provider.syncFaultCount ).toBeGreaterThan( 0 )
+    // The window really was too small: the pump's reads faulted windows
+    // in, and some window was evicted and faulted in again during it.
+    expect( provider.syncFaultCount ).toBeGreaterThan( faultsAtOpen )
     expect( Math.max( ...store.syncReadsAt.values() ) > 1 ).toBe( REREADS.has( path ) )
 
     api.CloseModel( modelID )
@@ -371,6 +394,161 @@ describe( 'StepModelBase.readTrackingSourceViews / releaseAllSourceViews (conway
     model.releaseAllSourceViews()
 
     expect( viewOf( model, projectID ) ).toBeUndefined()
+
+    api.CloseModel( modelID )
+  }, 120000 )
+} )
+
+
+describe( 'non-deferred windowed IFC open over a store that faults windows in (conway#786)', () => {
+
+  /**
+   * Every placed geometry a model delivers through StreamAllMeshes.
+   *
+   * @param api The API.
+   * @param modelID The model.
+   * @return {Map<number, string[]>} Per entity.
+   */
+  function streamAll( api: IfcAPI, modelID: number ): Map< number, string[] > {
+
+    const meshes = new Map< number, string[] >()
+
+    api.StreamAllMeshes( modelID, ( mesh ) => {
+      meshes.set( mesh.expressID, flatten( api, modelID, mesh, meshes.get( mesh.expressID ) ) )
+    } )
+
+    return meshes
+  }
+
+  /**
+   * Count the product walks finishWindowedOpen's own product loop issues.
+   * The aggregate prefetch in the same open walks its products through the
+   * same method, so calls are told apart by the loop that made them.
+   *
+   * @return {{count: number}} The live count.
+   */
+  function countProductLoopWalks(): { count: number } {
+
+    const counter = { count: 0 }
+    const original = IfcGeometryExtraction.prototype.ensureResidentForProductExtract
+
+    jest.spyOn( IfcGeometryExtraction.prototype, 'ensureResidentForProductExtract' )
+        .mockImplementation( function ( this: IfcGeometryExtraction, ...args ) {
+
+          if ( new Error().stack?.includes( 'flushProductBatch' ) === true ) {
+            ++counter.count
+          }
+
+          return original.apply( this, args )
+        } )
+
+    return counter
+  }
+
+  test.each( [ 'data/index.ifc', 'data/mapped_shared_representation.ifc', 'data/grid_placement.ifc' ] )(
+      '%s: with readSync, no product walk, faults and evictions, geometry identical to resident',
+      async ( path ) => {
+
+        jest.spyOn( console, 'warn' ).mockImplementation( () => {} )
+
+        const bytes = new Uint8Array( fs.readFileSync( path ) )
+        const reference = new IfcAPI()
+
+        await reference.Init()
+
+        const referenceID = reference.OpenModel( bytes.slice(), EAGER )
+        const expected = streamAll( reference, referenceID )
+
+        reference.CloseModel( referenceID )
+
+        expect( expected.size ).toBeGreaterThan( 0 )
+
+        const walks = countProductLoopWalks()
+        const store = syncStore( bytes )
+        const { api, modelID, provider } = await openWindowed( path, store, EAGER )
+
+        expect( streamAll( api, modelID ) ).toEqual( expected )
+        expect( walks.count ).toBe( 0 )
+        expect( provider.syncFaultCount ).toBeGreaterThan( 0 )
+        expect( Math.max( ...store.syncReadsAt.values() ) ).toBeGreaterThan( 1 )
+
+        api.CloseModel( modelID )
+      }, 120000 )
+
+  test( 'data/index.ifc: without readSync the product loop still walks', async () => {
+
+    const bytes = new Uint8Array( fs.readFileSync( 'data/index.ifc' ) )
+    const walks = countProductLoopWalks()
+    const { api, modelID, provider } =
+      await openWindowed( 'data/index.ifc', new InMemoryStepByteStore( bytes ), EAGER )
+
+    expect( streamAll( api, modelID ).size ).toBeGreaterThan( 0 )
+    expect( walks.count ).toBeGreaterThan( 0 )
+    expect( provider.syncFaultCount ).toBe( 0 )
+
+    api.CloseModel( modelID )
+  }, 120000 )
+} )
+
+
+describe( 'a failed synchronous read fails its product, not the load (conway#786, conway#526)', () => {
+
+  test( 'the product is logged as failed, the others extract whole, and the pump completes', async () => {
+
+    jest.spyOn( console, 'warn' ).mockImplementation( () => {} )
+
+    const path = 'data/index.ifc'
+    const expected = await residentGeometry( path )
+    const bytes = new Uint8Array( fs.readFileSync( path ) )
+
+    // The window holding the first faceset's record: product geometry,
+    // read only by that product's extract.
+    const faceset = Buffer.from( bytes ).indexOf( 'IFCPOLYGONALFACESET(' )
+    const failing = Math.floor( faceset / TINY_CHUNK_BYTES ) * TINY_CHUNK_BYTES
+
+    expect( faceset ).toBeGreaterThan( 0 )
+
+    const good = syncStore( bytes )
+    let failures = 0
+    const store: StepExternalByteStore = {
+      byteLength: good.byteLength,
+      read: good.read,
+      readSync: ( offset: number, length: number ) => {
+
+        if ( offset === failing ) {
+          ++failures
+          throw new Error( 'simulated handle failure' )
+        }
+
+        return good.readSync!( offset, length )
+      },
+    }
+
+    const errors: string[] = []
+
+    jest.spyOn( Logger, 'error' ).mockImplementation( ( ( message: string ) => {
+      errors.push( message )
+    } ) as typeof Logger.error )
+
+    const { api, modelID } = await openWindowed( path, store )
+    const meshes = await pump( api, modelID )
+
+    expect( failures ).toBeGreaterThan( 0 )
+
+    const failed = errors.filter( ( message ) =>
+      message.startsWith( 'Error extracting product' ) && message.includes( 'simulated handle failure' ) )
+
+    // Logged once per failed product, and only for products the read
+    // failure actually reached.
+    expect( failed.length ).toBeGreaterThan( 0 )
+    expect( failed.length ).toBe( new Set( failed ).size )
+    expect( meshes.size ).toBe( expected.size - failed.length )
+
+    // No product is delivered partial: everything that arrived is exactly
+    // what the resident open delivers for it.
+    for ( const [ expressID, placed ] of meshes ) {
+      expect( placed ).toEqual( expected.get( expressID ) )
+    }
 
     api.CloseModel( modelID )
   }, 120000 )
