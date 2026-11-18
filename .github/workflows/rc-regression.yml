@@ -849,6 +849,11 @@ jobs:
                           break
                   if marker:
                       files = api(f'repos/{repo}/compare/{marker[0]}...main').get('files', [])
+                      # The compare API lists at most 300 changed files, so
+                      # a full list may hide a later digest change: fail closed.
+                      if len(files) >= 300:
+                          raise RuntimeError(f'{len(files)} files changed since {marker[0][:8]}, '
+                                             'more than the compare API lists; engine unknown')
                       later = [f['filename'] for f in files
                                if f['filename'].startswith('regression/test_models/')
                                and f['filename'].endswith('.csv')
@@ -1036,11 +1041,19 @@ jobs:
           git -c user.name="github-actions[bot]" \
               -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
               commit -q -m "Visual diff for the baseline PR (conway run ${{ github.run_id }})" || true
+          # The loop body swallows a failed push (set -e does not apply to
+          # the && list), so count success explicitly: publishing the local
+          # SHA after three failures would hand the comment dead image links.
+          PUSHED=0
           for i in 1 2 3; do
-            git push -q origin visual-diff-assets && break
+            if git push -q origin visual-diff-assets; then PUSHED=1; break; fi
             git pull -q --rebase origin visual-diff-assets || true
             sleep $((i * 2))
           done
+          if [ "$PUSHED" != "1" ]; then
+            echo "::warning::could not push the visual diff images to ${REPO} after 3 attempts"
+            exit 1
+          fi
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           echo "dest=$DEST" >> "$GITHUB_OUTPUT"
 
