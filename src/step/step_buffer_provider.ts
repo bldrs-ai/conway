@@ -90,8 +90,34 @@ const DEFAULT_MAX_RESIDENT_CHUNKS = 16
  * trades transient garbage (D3D churned 47 GB of 4 MiB buffers) for bounded
  * retention.
  */
-// eslint-disable-next-line no-magic-numbers -- byte-size arithmetic (256MiB)
-const ADAPTIVE_MAX_RESIDENT_BYTES = 256 * 1024 * 1024
+/* The ceiling: 160 MiB, 40 of the default 4 MiB chunks, so growth goes
+ * 16 -> 32 -> 40 (issue #786). #785 shipped 256 MiB. Since #787 (the IFC
+ * product pump skips its per-product closure walk over a store that reads
+ * synchronously) the rest of the growth is outside the product loop:
+ * extraction prep and the aggregate pager. Measured in headless Chromium
+ * with Share's source-mode bench (windowed open over the OPFS sync access
+ * handle, a fresh profile per load, median geometry stage), at 64 / 128 /
+ * 160 / 192 / 256 MiB:
+ *
+ *  - D3D (aggregate-heavy) is the one model that needs growth: 79.7 /
+ *    58.0 / 52.5 / 50.4 / 50.2 s, final window 62 / 126 / 158 / 190 /
+ *    198 MB. 160 MiB is the smallest ceiling within 5% of 256 (+4.5%, six
+ *    runs each, run-to-run spread ~5 s); 128 is 13% slower and 64, no
+ *    growth at all, 55% (three runs each, against the same rounds at 256).
+ *  - A 309 MB ARCHICAD 22 IFC2X3 model grew to 253 MB at 256 MiB for no
+ *    time (13.8 s; 13.6 s at 160 MiB, where it stays at 61 MB: most of its
+ *    re-reads, p50 distance 44 chunks, are beyond the ceiling).
+ *  - A 243 MB ARCHICAD model: 231 MB at 256, 128 MB at 160, geometry
+ *    14.1 / 14.2 s.
+ *  - PSB never grows (61 MB at every ceiling).
+ *
+ * That the 309 MB model no longer grows at all is the ghost list's bound
+ * (`ceiling - cap`, see rememberEvicted_) at work: a re-read beyond the
+ * ceiling counts as compulsory, and the lower ceiling puts most of its
+ * re-reads there.
+ */
+// eslint-disable-next-line no-magic-numbers -- byte-size arithmetic (160MiB)
+const ADAPTIVE_MAX_RESIDENT_BYTES = 160 * 1024 * 1024
 
 /* Chunk requests per policy evaluation. Small enough to react inside a
  * load (D3D issues 4.5M requests, so ~1,100 evaluations), large enough
@@ -1224,8 +1250,9 @@ export class WindowedStepBufferProvider implements StepBufferProvider {
    * 65-80 chunks grew the window to the ceiling and still missed on nearly
    * every request. A working set beyond the ceiling now reads as compulsory
    * and does not grow, which is right: no window the policy may reach holds
-   * it. The list is at most `ceiling - cap` entries (60 at the defaults:
-   * a 256 MiB ceiling over 4 MiB chunks, from a 16-chunk start).
+   * it. The list is at most `ceiling - cap` entries (24 at the defaults:
+   * a 160 MiB ceiling over 4 MiB chunks, from a 16-chunk start; 60 under
+   * #785's 256 MiB).
    *
    * @param chunkIndex The evicted chunk.
    */

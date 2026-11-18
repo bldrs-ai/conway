@@ -397,7 +397,8 @@ describe('WindowedStepBufferProvider adaptive residency', () => {
   // (distance < 80) and grew the window to the full 256 MiB, where it
   // still missed on nearly every request. Bounded by ceiling - cap, a hit
   // means a distance below the ceiling. Shipped 4 MiB chunks over a store
-  // that serves 1-byte stand-ins, so the 64-chunk ceiling is the real one.
+  // that serves 1-byte stand-ins, so the 40-chunk (160 MiB, #786) ceiling
+  // is the real one.
   describe('at the shipped chunk size', () => {
 
     const MIB = 1024 * 1024
@@ -432,12 +433,12 @@ describe('WindowedStepBufferProvider adaptive residency', () => {
       const provider = new WindowedStepBufferProvider(store)
 
       expect(provider.residencyCapChunks).toBe(16)
-      expect(provider.adaptiveResidencyCapChunks).toBe(64)
+      expect(provider.adaptiveResidencyCapChunks).toBe(40)
 
-      await cycleBig(provider, 40000, 70)
+      await cycleBig(provider, 40000, 46)
 
-      // No window the policy may reach holds 70 chunks, so it must not pay
-      // 256 MiB to keep missing.
+      // No window the policy may reach holds 46 chunks, so it must not pay
+      // 160 MiB to keep missing.
       expect(provider.residencyCapChunks).toBe(16)
     })
 
@@ -445,15 +446,34 @@ describe('WindowedStepBufferProvider adaptive residency', () => {
       const store = standInStore(200)
       const provider = new WindowedStepBufferProvider(store)
 
-      await cycleBig(provider, 40000, 60)
+      await cycleBig(provider, 40000, 36)
 
-      expect(provider.residencyCapChunks).toBe(64)
+      // 16 -> 32 -> 40: the second doubling is clamped to the ceiling.
+      expect(provider.residencyCapChunks).toBe(40)
 
       const readsAfterGrowth = store.reads
 
-      await cycleBig(provider, 120, 60)
+      await cycleBig(provider, 72, 36)
 
       expect(store.reads).toBe(readsAfterGrowth)
+    })
+
+    // #786: the 60-chunk cycle that grew the window to the whole 256 MiB
+    // ceiling #785 shipped with (the case above, before this change): a
+    // stand-in for re-reads beyond the new ceiling, like most of the 309 MB
+    // ARCHICAD 22 IFC2X3 model's (p50 distance 44 chunks), which grew it to
+    // 253 MB in Chromium for no geometry time. Under the default ceiling no
+    // window the policy may reach holds it, so it stays at the starting
+    // window and keeps reading.
+    test('the re-read cycle that grew to 256 MiB now stays at the starting window', async () => {
+      const store = standInStore(200)
+      const provider = new WindowedStepBufferProvider(store)
+
+      await cycleBig(provider, 40000, 60)
+
+      expect(provider.residencyCapChunks).toBe(16)
+      expect(provider.residentChunkCount).toBeLessThanOrEqual(16)
+      expect(store.reads).toBe(40000)
     })
   })
 
@@ -485,12 +505,12 @@ describe('WindowedStepBufferProvider adaptive residency', () => {
     expect(store.reads).toBe(3 * PAST_ONE_INTERVAL)
   })
 
-  test('bounds growth by the 256 MiB ceiling and by the store size', () => {
+  test('bounds growth by the 160 MiB ceiling and by the store size', () => {
     const MIB = 1024 * 1024
 
     // 1 GB store at the shipped 4 MiB chunk — the byte ceiling binds.
     expect(new WindowedStepBufferProvider(sizedStore(1024 * MIB))
-        .adaptiveResidencyCapChunks).toBe(64)
+        .adaptiveResidencyCapChunks).toBe(40)
 
     // 100 MB store — the store binds first, so the window can at most
     // become the whole file, which is what the resident provider holds.
