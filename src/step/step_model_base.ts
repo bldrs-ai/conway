@@ -1820,6 +1820,90 @@ implements Iterable<BaseEntity>, Model {
 
 
   /**
+   * {@link releaseSourceViews} over every record the model has a
+   * descriptor for: drop every source-window view any reader left behind,
+   * named or not, so the LRU's evictions actually free their windows.
+   *
+   * For a reader that is about to stop naming what it reads. A record whose
+   * descriptor already holds a view is read through that view without being
+   * populated again, so {@link trackCapturedSourceViews} never sees it, and
+   * {@link releaseCapturedSourceViews} never drops it; a view held that way
+   * keeps an evicted 4 MiB window alive for as long as it stays. One sweep
+   * when the reader starts means everything it reads afterwards is captured
+   * fresh. O(descriptors), once per reader.
+   *
+   * No-op while the source is fully resident.
+   */
+  public releaseAllSourceViews(): void {
+
+    if ( !this.isSourceExternal ) {
+      return
+    }
+
+    const clear = ( item: { buffer?: Uint8Array, multiMapping?: CapturedViewHolder[] } ) => {
+
+      item.buffer = void 0
+
+      if ( item.multiMapping !== void 0 ) {
+
+        for ( const mapped of item.multiMapping ) {
+          mapped.buffer = void 0
+        }
+      }
+    }
+
+    for ( const item of this.descriptorCache_ ) {
+
+      if ( item !== void 0 ) {
+        clear( item )
+      }
+    }
+
+    if ( this.complexEntries_ !== void 0 ) {
+
+      for ( const item of this.complexEntries_.values() ) {
+        clear( item )
+      }
+    }
+
+    this.capturedViews_.clear()
+
+    releaseScratchParsingBuffer()
+  }
+
+
+  /**
+   * Run a synchronous reader with {@link trackCapturedSourceViews} on, then
+   * drop every view it captured ({@link releaseCapturedSourceViews}) and
+   * restore the flag. For a reader that pages nothing ahead and so cannot
+   * name what it read: a windowed extract over a store that faults windows
+   * in itself (`StepExternalByteStore.readSync`).
+   *
+   * `read` must not await anything. Because it runs to completion in one
+   * synchronous stretch, the views tracked are exactly the ones it captured,
+   * never another reader's, which is what lets IFC turn tracking on without
+   * the cost codex flagged on conway#769 (a set nothing drains): it is on for
+   * this call only and empty when it returns, thrown or not.
+   *
+   * @param read The synchronous reader.
+   * @return {T} What `read` returns.
+   */
+  public readTrackingSourceViews< T >( read: () => T ): T {
+
+    const wasTracking = this.trackCapturedSourceViews
+
+    this.trackCapturedSourceViews = true
+
+    try {
+      return read()
+    } finally {
+      this.releaseCapturedSourceViews()
+      this.trackCapturedSourceViews = wasTracking
+    }
+  }
+
+
+  /**
    * Evict unpinned source windows until residency is back within the
    * window cap. Eviction otherwise runs only inside an ensure, so a walk
    * that pinned more windows than the cap and has just unpinned them
