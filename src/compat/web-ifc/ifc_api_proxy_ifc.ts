@@ -493,6 +493,14 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
    */
   private pendingBudgetBytes_?: number
 
+  /**
+   * Whether the store-backed pump has dropped the source views earlier
+   * readers left behind (StepModelBase.releaseAllSourceViews), which it does
+   * once, on its first batch over a store that faults windows in. See the
+   * note in pumpGeometryBatchAsync_.
+   */
+  private sourceViewsSwept_ = false
+
   /** Wall-clock split of the store-backed batch pump (profile script). */
   private readonly extractProfile_ = {
     prefetchMs: 0,
@@ -1748,6 +1756,17 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     const EXTRACT_BATCH = 8
     const pending: number[] = []
 
+    // The same rule as the deferred pump (see pumpGeometryBatchAsync_,
+    // conway#786): over a store that faults windows in, extract without the
+    // per-product closure walk, tracking and dropping what each batch's
+    // synchronous extract captured, after one sweep of the views earlier
+    // readers left behind; over an async-only store, walk and pin as before.
+    const faultsIn = model.sourceReadsSynchronously
+
+    if ( faultsIn ) {
+      model.releaseAllSourceViews()
+    }
+
     const flushProductBatch = async () => {
 
       if ( pending.length === 0 ) {
@@ -1759,22 +1778,34 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
       try {
 
-        await Promise.all( pending.map( ( localID ) =>
-          conwayGeometry.ensureResidentForProductExtract(
-              localID, pins, leafSpans ) ) )
+        if ( !faultsIn ) {
+          await Promise.all( pending.map( ( localID ) =>
+            conwayGeometry.ensureResidentForProductExtract(
+                localID, pins, leafSpans ) ) )
+        }
 
-        for ( const localID of pending ) {
+        // Synchronous, and views released once per batch, for the reasons
+        // given in pumpGeometryBatchAsync_.
+        const extractBatch = () => {
 
-          try {
-            conwayGeometry.extractProductGeometryByLocalID( localID )
-          } catch ( error ) {
-            Logger.error(
-                `Error extracting product localID ${localID}: ` +
-                `${error instanceof Error ? error.message : String( error )}` )
+          for ( const localID of pending ) {
+
+            try {
+              conwayGeometry.extractProductGeometryByLocalID( localID )
+            } catch ( error ) {
+              Logger.error(
+                  `Error extracting product localID ${localID}: ` +
+                  `${error instanceof Error ? error.message : String( error )}` )
+            }
+
+            ++completed
           }
+        }
 
-          model.releaseSourceViews( pins )
-          ++completed
+        if ( faultsIn ) {
+          model.readTrackingSourceViews( extractBatch )
+        } else {
+          extractBatch()
         }
       } finally {
         model.releaseSourceViews( pins )
@@ -3329,6 +3360,50 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
     if (batchIDs.length > 0) {
 
+      const model = this.model[0]
+
+      // A store that reads synchronously faults every missing window in at
+      // the read itself (WindowedStepBufferProvider.acquire), so the
+      // per-product #ref closure walk below buys this batch nothing it would
+      // not get anyway: the walk only makes records resident and pins them,
+      // and the extract reads exactly those records (conway#786). It costs a
+      // lot on faceted-brep models. A 309 MB ARCHICAD 22 IFC2X3 model walks
+      // 14.0 M records (963 per product, 96% IfcPolyLoop / IfcFace /
+      // IfcFaceOuterBound / IfcCartesianPoint). In headless Chromium its
+      // geometry took 22.3 s windowed against 9.7 s buffered, and a worker
+      // CPU profile put 7.5 s in the walk and 2.5 s in releasing its
+      // views after every product. Skipping both, the
+      // phase takes about 12.5 s, and the 860 MB Revit model (26 records
+      // per product) does not get slower. Geometry is byte-identical on all
+      // four models measured.
+      //
+      // What the walk guaranteed, and why each holds without it here:
+      //  - Residency for the synchronous extract. With `readSync` a miss
+      //    faults in; without it a miss throws, so an async-only store
+      //    keeps the walk.
+      //  - Pins against eviction mid-batch. A view of an evicted window
+      //    stays valid (eviction only drops the provider's reference; see
+      //    WindowedStepBufferProvider.faultInSync_), and a record without a
+      //    view faults its window in again, so eviction mid-product costs a
+      //    re-read, never a wrong or failed one.
+      //  - Containment of a failed read to its product (conway#526). A
+      //    readSync that throws surfaces in the extract, inside the
+      //    per-product catch below.
+      //  - Dropping the views so the LRU's evictions free memory. The walk
+      //    named the records to release; here the extract is synchronous, so
+      //    tracking captured views for its duration catches exactly what it
+      //    read (StepModelBase.readTrackingSourceViews), and the views that
+      //    readers before the pump left behind are swept once, on the first
+      //    batch. Without that sweep those views kept 260-330 MB of evicted
+      //    windows alive through the whole phase (GC'd worker backing store,
+      //    Chromium): the walk had been releasing them as it reached them.
+      const faultsIn = model.sourceReadsSynchronously
+
+      if (faultsIn && !this.sourceViewsSwept_) {
+        model.releaseAllSourceViews()
+        this.sourceViewsSwept_ = true
+      }
+
       // One pin set for the batch so mapped geometry stays resident
       // across the instances that share it.
       const pins = new Set<number>()
@@ -3338,9 +3413,11 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
       try {
 
         const prefetchStart = Date.now()
-        await Promise.all(batchIDs.map((localID) =>
-          this.conwayGeometry_.ensureResidentForProductExtract(
-              localID, pins, leafSpans)))
+        if (!faultsIn) {
+          await Promise.all(batchIDs.map((localID) =>
+            this.conwayGeometry_.ensureResidentForProductExtract(
+                localID, pins, leafSpans)))
+        }
         profile.prefetchMs += Date.now() - prefetchStart
         if ( pins.size > profile.pinMax ) {
           profile.pinMax = pins.size
@@ -3348,21 +3425,34 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
         profile.lastPins = pins.size
 
         const extractStart = Date.now()
-        for (const localID of batchIDs) {
 
-          try {
-            if (this.conwayGeometry_.extractProductGeometryByLocalID(localID)) {
-              ++extracted
+        // Synchronous by construction: no await between the first product
+        // and the last, which is what readTrackingSourceViews requires.
+        // Views are released once per batch, not after every product as
+        // they were: on a store without readSync nothing can be evicted
+        // during this loop (only an ensure evicts, and none runs until the
+        // loop ends), so releasing views of pinned windows freed nothing
+        // and cost 2.5 s on the model above.
+        const extractBatch = () => {
+
+          for (const localID of batchIDs) {
+
+            try {
+              if (this.conwayGeometry_.extractProductGeometryByLocalID(localID)) {
+                ++extracted
+              }
+            } catch (error) {
+              Logger.error(
+                  `Error extracting product localID ${localID}: ` +
+                  `${error instanceof Error ? error.message : String(error)}`)
             }
-          } catch (error) {
-            Logger.error(
-                `Error extracting product localID ${localID}: ` +
-                `${error instanceof Error ? error.message : String(error)}`)
           }
+        }
 
-          // Drop JS views after each product; chunks stay pinned for
-          // the rest of the batch so rematerialise is a cache hit.
-          this.model[0].releaseSourceViews(pins)
+        if (faultsIn) {
+          model.readTrackingSourceViews(extractBatch)
+        } else {
+          extractBatch()
         }
         profile.extractMs += Date.now() - extractStart
 

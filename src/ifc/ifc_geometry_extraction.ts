@@ -51,7 +51,7 @@ import {
   FlattenedPointsResult,
 } from '../../dependencies/conway-geom'
 import { Uint32Sink } from '../step/parsing/uint32_sink'
-import { StepBufferNotResidentError } from '../step/step_buffer_provider'
+import { StepBufferNotResidentError, StepSourceReadError } from '../step/step_buffer_provider'
 import {
   DanglingReferenceError,
   isUnresolvedReferenceError,
@@ -6177,7 +6177,11 @@ export class IfcGeometryExtraction {
 
     } catch (error) {
 
-      if (!(error instanceof StepBufferNotResidentError)) {
+      // A failed store read is not a missing grid: fail the product, which
+      // the pump logs, rather than place it as if the grid were absent
+      // (StepSourceReadError, conway#786).
+      if (!(error instanceof StepBufferNotResidentError) ||
+          error instanceof StepSourceReadError) {
         throw error
       }
 
@@ -6215,7 +6219,8 @@ export class IfcGeometryExtraction {
         }
       } catch (error) {
 
-        if (!(error instanceof StepBufferNotResidentError)) {
+        if (!(error instanceof StepBufferNotResidentError) ||
+            error instanceof StepSourceReadError) {
           throw error
         }
 
@@ -7279,6 +7284,12 @@ export class IfcGeometryExtraction {
     } catch ( error ) {
 
       if ( strictResidency && error instanceof StepBufferNotResidentError ) {
+        throw error
+      }
+
+      // A failed store read is never a malformed row (StepSourceReadError,
+      // conway#786), strict or not.
+      if ( error instanceof StepSourceReadError ) {
         throw error
       }
 
@@ -9042,6 +9053,14 @@ export class IfcGeometryExtraction {
               }
             } catch ( error ) {
 
+              // A failed store read fails the whole product (the pump logs
+              // it, conway#526) rather than delivering it with this item
+              // missing: the bytes were unreadable, not malformed
+              // (StepSourceReadError, conway#786).
+              if ( error instanceof StepSourceReadError && !this.quietRecoverableLogging ) {
+                throw error
+              }
+
               if ( this.quietRecoverableLogging ) {
                 // Preview prefix: expected on a truncated tail — skip.
               } else if ( error instanceof Error ) {
@@ -9112,6 +9131,11 @@ export class IfcGeometryExtraction {
                 this.extractStyledItem(styledItem_)
               }
             } catch ( error ) {
+
+              // As in the loop above: a failed read fails the product.
+              if ( error instanceof StepSourceReadError && !this.quietRecoverableLogging ) {
+                throw error
+              }
 
               if ( this.quietRecoverableLogging ) {
                 // Preview prefix: expected on a truncated tail — skip.
