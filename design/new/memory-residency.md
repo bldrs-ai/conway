@@ -141,8 +141,8 @@ re-request loop, and residency alone can fix it.
 
 The window's **slot count** is now a policy rather than a constant. The
 provider starts at the shipped 16 and doubles the cap when a measurement
-interval shows the workload thrashing, bounded by 256 MiB and by the store's
-own size. Chunk size does not change: re-chunking would invalidate the views
+interval shows the workload thrashing, bounded by 160 MiB (#785 shipped 256 MiB; #786's
+measurements lowered it) and by the store's own size. Chunk size does not change: re-chunking would invalidate the views
 descriptors hold over live chunks, and the 4 MiB granularity is exactly what
 keeps a sweep's read count low (a 256 KiB x 256 window at the same 64 MB
 fixes D3D to 89.9 s but costs PSB +10%, because its 583 reads become 7,047).
@@ -182,7 +182,8 @@ never leaves 16 — so its wall-clock spread is run-to-run noise, not the
 policy.
 
 **The memory cost, stated plainly:** a model that trips the trigger holds up
-to `min(fileBytes, 256 MiB)` of source chunks for the provider's life,
+to `min(fileBytes, 160 MiB)` of source chunks for the provider's life
+(#785 shipped 256 MiB; #786's measurements lowered it to 160),
 against 64 MB before. That is never more than the fully-resident provider
 would have held, and it is bought in exchange for not churning 47 GB of
 4 MiB buffers through the allocator. It is *not* released when the load
