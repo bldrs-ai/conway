@@ -89,8 +89,8 @@ const DEFAULT_MAX_RESIDENT_CHUNKS = 16
  * is the memory cost of the policy and it is deliberate: a thrashing model
  * trades transient garbage (D3D churned 47 GB of 4 MiB buffers) for bounded
  * retention.
- */
-/* The ceiling: 160 MiB, 40 of the default 4 MiB chunks, so growth goes
+ *
+ * The ceiling: 160 MiB, 40 of the default 4 MiB chunks, so growth goes
  * 16 -> 32 -> 40 (issue #786). #785 shipped 256 MiB. Since #787 (the IFC
  * product pump skips its per-product closure walk over a store that reads
  * synchronously) the rest of the growth is outside the product loop:
