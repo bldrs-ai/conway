@@ -746,6 +746,7 @@ jobs:
       # Paths are absolute so the render step can run from anywhere.
       - name: Collect digest-changed models for the visual diff
         id: vdiff
+        continue-on-error: true
         run: |
           python3 - "$PWD/models" <<'PYEOF'
           import os, subprocess, sys
@@ -785,41 +786,81 @@ jobs:
           PYEOF
 
       # The "before" engine: the conway commit that produced the committed
-      # baseline. Every bless commit this workflow makes carries a body line
-      # `conway <ref> @ <40-hex sha>` (see commit-message below), so the most
-      # recent such commit on the target repo's main names it. Every green
-      # merge to conway main auto-publishes `<version>-g<shorthash>`, so that
-      # commit is normally installable from npm; if it was never published (or
-      # no bless commit is found), the comment says so rather than diffing
-      # against some other engine and calling it the baseline. A hand-edited
-      # baseline commit after the last bless (e.g. a failed.csv tweak) does
-      # not change which engine produced the digests, so it is skipped.
+      # baseline. Every green merge to conway main auto-publishes
+      # `<version>-g<shorthash>`, so once it is known it is normally
+      # installable from npm. Where it is recorded, in order:
+      #
+      #   1. regression/test_models/engine.txt in the committed baseline.
+      #      Each bless writes it (see "Record the engine behind this
+      #      baseline" below) into the tree it commits, so it survives any
+      #      merge style. Read from HEAD, i.e. the baseline being replaced.
+      #   2. Baselines blessed before engine.txt existed: the latest
+      #      `conway <ref> @ <40-hex sha>` line in a commit message on main,
+      #      which every bless commit carries. A squash merge can drop that
+      #      line and leave an older one to be found, and a hand-made digest
+      #      commit can land after it. So the line is only trusted if no
+      #      per-model digest CSV changed on main after its commit; otherwise
+      #      the engine is unknown. (A failed.csv or errors.csv tweak, like
+      #      test-models#66, does not change which engine made the digests.)
+      #
+      # Unknown or unpublished means no render, and the comment says why:
+      # diffing against some other engine and calling it the baseline would
+      # be worse than no picture.
       - name: Find the engine behind the committed baseline
         id: blessed
         if: steps.vdiff.outputs.count != '0'
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.REBLESS_TOKEN }}
           REPO: ${{ matrix.target.repo }}
         run: |
-          python3 - <<'PYEOF'
-          import json, os, re, subprocess
-          repo = os.environ['REPO']
-          out = os.environ['GITHUB_OUTPUT']
-          sha = ''
-          for page in range(1, 6):
-              r = subprocess.run(['gh', 'api', f'repos/{repo}/commits?sha=main&per_page=100&page={page}'],
-                                 capture_output=True, text=True)
+          python3 - "$PWD/models" <<'PYEOF'
+          import json, os, re, subprocess, sys
+          root, repo = sys.argv[1], os.environ['REPO']
+          meta = {'errors.csv', 'failed.csv', 'main.csv', 'changes.csv',
+                  'zero_geometry.csv'}
+          sha, source = '', ''
+
+          recorded = subprocess.run(
+              ['git', 'show', 'HEAD:regression/test_models/engine.txt'],
+              cwd=root, capture_output=True, text=True)
+          if recorded.returncode == 0:
+              m = re.search(r'^conway \S+ @ ([0-9a-f]{40})$', recorded.stdout, re.M)
+              if m:
+                  sha, source = m.group(1), 'engine.txt'
+
+          def api(path):
+              r = subprocess.run(['gh', 'api', path], capture_output=True, text=True)
               if r.returncode != 0:
-                  print(f'::warning::could not list {repo} commits: {r.stderr.strip()[:200]}')
-                  break
-              commits = json.loads(r.stdout)
-              for c in commits:
-                  m = re.search(r'^conway \S+ @ ([0-9a-f]{40})$', c['commit']['message'], re.M)
-                  if m:
-                      sha = m.group(1)
-                      break
-              if sha or len(commits) < 100:
-                  break
+                  raise RuntimeError(r.stderr.strip()[:200])
+              return json.loads(r.stdout)
+
+          if not sha:
+              marker = None
+              try:
+                  for page in range(1, 6):
+                      commits = api(f'repos/{repo}/commits?sha=main&per_page=100&page={page}')
+                      for c in commits:
+                          m = re.search(r'^conway \S+ @ ([0-9a-f]{40})$', c['commit']['message'], re.M)
+                          if m:
+                              marker = (c['sha'], m.group(1))
+                              break
+                      if marker or len(commits) < 100:
+                          break
+                  if marker:
+                      files = api(f'repos/{repo}/compare/{marker[0]}...main').get('files', [])
+                      later = [f['filename'] for f in files
+                               if f['filename'].startswith('regression/test_models/')
+                               and f['filename'].endswith('.csv')
+                               and os.path.basename(f['filename']) not in meta]
+                      if later:
+                          print(f'::warning::{len(later)} digest CSV(s) changed on main after the bless commit '
+                                f'{marker[0][:8]}, so it may not name the engine behind them: {", ".join(later[:10])}')
+                      else:
+                          sha, source = marker[1], f'bless commit {marker[0][:8]}'
+              except RuntimeError as err:
+                  print(f'::warning::could not read {repo} history: {err}')
+
           version = ''
           if sha:
               r = subprocess.run(['npm', 'view', '@bldrs-ai/conway', 'versions', '--json'],
@@ -830,13 +871,15 @@ jobs:
                   if len(g) == 2 and len(g[1]) >= 7 and sha.startswith(g[1]):
                       version = v
                       break
-          print(f'last blessed engine: {sha or "not found"} -> npm {version or "not published"}')
-          with open(out, 'a') as fh:
-              fh.write(f'sha={sha}\nversion={version}\n')
+          print(f'baseline engine: {sha or "unknown"} ({source or "no record"}) -> npm {version or "not published"}')
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as fh:
+              fh.write(f'sha={sha}\nversion={version}\nsource={source}\n')
           PYEOF
 
       - name: Install the baseline engine
+        id: baseinstall
         if: steps.blessed.outputs.version != ''
+        continue-on-error: true
         run: |
           mkdir -p engines/base
           TGZ=$(cd engines && npm pack "@bldrs-ai/conway@${{ steps.blessed.outputs.version }}" --silent)
@@ -864,6 +907,17 @@ jobs:
             *)    VERSION="$REF_NAME" ;;
           esac
           echo "label=${VERSION} (${SHA:0:8})" >> "$GITHUB_OUTPUT"
+
+      # The provenance the next rc's visual diff reads (see "Find the engine
+      # behind the committed baseline"). It sits under regression/test_models
+      # so add-paths commits it with the digests it describes, and it is a
+      # .txt so no digest collector (here or in build.yml) mistakes it for a
+      # model. Written after the lookup above, which read the previous one
+      # from HEAD.
+      - name: Record the engine behind this baseline
+        run: |
+          printf 'conway %s @ %s\n' "${{ github.ref_name }}" "${{ github.sha }}" \
+            > models/regression/test_models/engine.txt
 
       # Open (or update) a PR in the target repo with only the baseline diff.
       # add-paths scopes the commit to regression/test_models so nothing else
@@ -924,7 +978,7 @@ jobs:
       # job's budget (see the timeout note on the job).
       - name: Render before/after pairs for the baseline PR
         id: vrender
-        if: steps.cpr.outputs.pull-request-number != '' && steps.vdiff.outputs.count != '0' && steps.blessed.outputs.version != ''
+        if: steps.cpr.outputs.pull-request-number != '' && steps.vdiff.outputs.count != '0' && steps.baseinstall.outcome == 'success'
         continue-on-error: true
         timeout-minutes: 30
         run: |
@@ -943,7 +997,10 @@ jobs:
       # publish and comment steps run whenever the render ran, not only when
       # it succeeded.
       - name: Upload visual diff images
-        if: steps.vrender.outcome == 'success' || steps.vrender.outcome == 'failure'
+        # Public target only: a conway run artifact lives under conway's
+        # visibility and retention, so renders of private models never go
+        # there. The private repo's own branch below is their only copy.
+        if: matrix.target.name != 'private' && (steps.vrender.outcome == 'success' || steps.vrender.outcome == 'failure')
         continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
@@ -991,8 +1048,8 @@ jobs:
       # why there are none. Public images embed from raw.githubusercontent.com
       # as build.yml's do. A private repo's raw host needs a token, so its
       # images are linked through github.com/<repo>/raw/<sha>/..., which
-      # serves them to a signed-in member; the run artifact above holds the
-      # same PNGs either way.
+      # serves them to a signed-in member. For the public target the run
+      # artifact above holds the same PNGs; the private target has none.
       - name: Compose the visual diff comment
         id: vcomment
         if: steps.cpr.outputs.pull-request-number != ''
@@ -1003,6 +1060,8 @@ jobs:
           COUNT: ${{ steps.vdiff.outputs.count }}
           BLESSED_SHA: ${{ steps.blessed.outputs.sha }}
           BLESSED_VERSION: ${{ steps.blessed.outputs.version }}
+          BLESSED_SOURCE: ${{ steps.blessed.outputs.source }}
+          INSTALL: ${{ steps.baseinstall.outcome }}
           RENDER: ${{ steps.vrender.outcome }}
           ASSETS_SHA: ${{ steps.vassets.outputs.sha }}
           ASSETS_DEST: ${{ steps.vassets.outputs.dest }}
@@ -1014,11 +1073,13 @@ jobs:
             if [ "${COUNT:-0}" = "0" ]; then
               echo "No per-model digest changed in this baseline, so there is nothing to render."
             elif [ -z "$BLESSED_SHA" ]; then
-              echo "_Not rendered: no \`conway <ref> @ <sha>\` bless commit was found on \`${REPO}\` main, so the engine behind the committed baseline is unknown._"
+              echo "_Not rendered: the engine behind the committed baseline is unknown. There is no \`regression/test_models/engine.txt\`, and no \`conway <ref> @ <sha>\` bless commit on \`${REPO}\` main that later digest changes leave standing. See [the run](${RUN_URL})._"
             elif [ -z "$BLESSED_VERSION" ]; then
               echo "_Not rendered: the engine behind the committed baseline (\`${BLESSED_SHA:0:8}\`) has no published \`@bldrs-ai/conway\` version to install._"
+            elif [ "$INSTALL" != "success" ]; then
+              echo "_Not rendered: installing \`@bldrs-ai/conway@${BLESSED_VERSION}\` failed; see [the run](${RUN_URL})._"
             elif [ -z "$ASSETS_SHA" ] || [ ! -f vdout/report.md ]; then
-              echo "_Rendering or publishing failed; see [the run](${RUN_URL}) for the log and any images in its artifacts._"
+              echo "_Rendering or publishing failed; see [the run](${RUN_URL}) for the log._"
             else
               if [ "$RENDER" != "success" ]; then
                 echo "_The render step did not finish (it is capped at 30 min, or a model crashed it); the rows below are the ones it completed. See [the run](${RUN_URL})._"
@@ -1029,7 +1090,7 @@ jobs:
               else
                 BASE="https://raw.githubusercontent.com/${REPO}/${ASSETS_SHA}/${ASSETS_DEST}"
               fi
-              echo "Before: \`@bldrs-ai/conway@${BLESSED_VERSION}\`, the engine that produced the committed baseline. After: this rc's build, the one these digests come from."
+              echo "Before: \`@bldrs-ai/conway@${BLESSED_VERSION}\`, the engine that produced the committed baseline (from ${BLESSED_SOURCE}). After: this rc's build, the one these digests come from."
               echo "Each row shares one camera framed on the union of both bounds, so scale differences are real."
               echo ""
               sed "s|RAW_URL_BASE|${BASE}|g" vdout/report.md

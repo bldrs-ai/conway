@@ -169,10 +169,13 @@ published engine of their day. `rc-regression.yml` therefore renders exactly
 the models whose committed digests the baseline PR changes, with no drift
 between its two sides:
 
-- **before:** the engine that produced the committed baseline. The most
-  recent `conway <ref> @ <sha>` line in a bless commit on the target repo's
-  `main` names it, and auto-publish makes it installable as
-  `@bldrs-ai/conway@<version>-g<shorthash>`. If either step comes up empty,
+- **before:** the engine that produced the committed baseline. Each bless
+  records it in `regression/test_models/engine.txt` (`conway <ref> @ <sha>`),
+  committed with the digests, so it survives any merge style. Baselines
+  blessed before that file existed fall back to the latest such line in a
+  bless commit message on `main`, trusted only if no per-model digest CSV
+  changed after that commit. Auto-publish makes the engine installable as
+  `@bldrs-ai/conway@<version>-g<shorthash>`. If any step comes up empty,
   the comment says so instead of picking another engine.
 - **after:** the rc's own build, the one whose digests are being blessed.
 
@@ -183,7 +186,8 @@ the private repo. It overlaps the per-PR diffs on purpose: a second check,
 and one whose rows correspond to the diff being merged. It can't fail the
 rc: every step is `continue-on-error` and the render is capped at 30 min.
 Private images are linked through `github.com/<repo>/raw/…`, which needs a
-signed-in member; the run's `rc-visual-diff-*` artifact holds the same PNGs.
+signed-in member, and are never uploaded as a conway run artifact; the
+public target's `rc-visual-diff-*` artifact holds its PNGs too.
 
 **Perf baselines are artifact-anchored, not committed.** The `perf-three-*`
 jobs diff against the most recent prior `perf-three-{public,private}-<run_id>`
