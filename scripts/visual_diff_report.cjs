@@ -12,7 +12,8 @@
  *
  * Usage:
  *   visual_diff_report.cjs --models <changed_models.txt> \
- *     --base <package root> --cand <package root> --out <dir> [--max N]
+ *     --base <package root> --cand <package root> --out <dir> [--max N] \
+ *     [--base-label <text>] [--cand-label <text>]
  *
  * <changed_models.txt>: one absolute model path per line, optionally
  * followed by a tab and `new` for models whose digest has no committed
@@ -39,6 +40,10 @@ function parseArgs() {
     opts[args[i].replace(/^--/, '')] = args[i + 1]
   }
   opts.max = parseInt(opts.max, 10)
+  // Column headings. The per-PR job keeps the defaults; rc-regression names
+  // its base as the engine of the last blessed baseline, not main.
+  opts.baseLabel = opts['base-label'] || 'base (main)'
+  opts.candLabel = opts['cand-label'] || 'candidate (this PR)'
   // Minimum fraction of pixels that must differ between the before/after
   // render for a row to be shown. The digest gate and the visual-diff base
   // (published npm) use different baselines, so a flagged model can render
@@ -166,7 +171,38 @@ function main() {
   const skipped = models.length > opts.max ? models.slice(opts.max) : []
   const selected = models.slice(0, opts.max)
 
+  /**
+   * Write report.md from the rows so far. Called after every model as well
+   * as at the end, so a run that is killed part-way (rc-regression caps the
+   * render step) still leaves the rows it finished, with a line saying how
+   * far it got, instead of no report at all.
+   *
+   * @param {number|null} done models processed so far, or null when finished
+   */
+  const writeReport = (done) => {
+    let report = `| model | ${opts.baseLabel} | ${opts.candLabel} | Δ pixels |\n` +
+        '| --- | --- | --- | --- |\n'
+    report += rows.join('\n') + '\n'
+    if (unchanged.length > 0) {
+      report += `\n_${unchanged.length} digest-changed model(s) rendered below the ` +
+          `${(opts.diffThreshold * 100).toFixed(2)}% pixel-diff threshold ` +
+          `(no visible change vs the base engine; not shown): ` +
+          `${unchanged.join(', ')}_\n`
+    }
+    if (skipped.length > 0) {
+      report += `\n_${skipped.length} more changed model(s) not rendered ` +
+          `(cap ${opts.max}): ${skipped.map((m) => path.basename(m.file)).join(', ')}_\n`
+    }
+    if (done !== null) {
+      report += `\n_Stopped after ${done} of ${selected.length} model(s); ` +
+          `the rest were not rendered._\n`
+    }
+    fs.writeFileSync(path.join(opts.out, 'report.md'), report)
+  }
+
+  let processed = 0
   for (const { file: model, isNew } of selected) {
+    writeReport(processed++)
     const name = path.basename(model)
     const nameCell = isNew ? `\`${name}\` _(new)_` : `\`${name}\``
     const slug = slugify(name)
@@ -256,20 +292,7 @@ function main() {
     fs.rmSync(work, { recursive: true, force: true })
   }
 
-  let report = '| model | base (main) | candidate (this PR) | Δ pixels |\n' +
-      '| --- | --- | --- | --- |\n'
-  report += rows.join('\n') + '\n'
-  if (unchanged.length > 0) {
-    report += `\n_${unchanged.length} digest-changed model(s) rendered below the ` +
-        `${(opts.diffThreshold * 100).toFixed(2)}% pixel-diff threshold ` +
-        `(no visible change vs the base engine; not shown): ` +
-        `${unchanged.join(', ')}_\n`
-  }
-  if (skipped.length > 0) {
-    report += `\n_${skipped.length} more changed model(s) not rendered ` +
-        `(cap ${opts.max}): ${skipped.map((m) => path.basename(m.file)).join(', ')}_\n`
-  }
-  fs.writeFileSync(path.join(opts.out, 'report.md'), report)
+  writeReport(null)
   process.stderr.write(
       `visual-diff: wrote ${rows.length} row(s), ` +
       `${unchanged.length} below threshold\n`)
