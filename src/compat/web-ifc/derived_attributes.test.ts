@@ -84,7 +84,7 @@ describe('a derived `*` keeps its attribute slot (conway#788)', () => {
     // sits, so these pin the rule rather than a schema.
     expect(parse('1.,*);')).toEqual([[real(1), DERIVED], ParseResult.COMPLETE])
     expect(parse('(*,1.),$);')).toEqual([[[DERIVED, real(1)], null], ParseResult.COMPLETE])
-    expect(parse('IFCX(*,1.),$);')).toEqual([[DERIVED, real(1), null], ParseResult.COMPLETE])
+    expect(parse('IFCX(*),1.);')).toEqual([[DERIVED, real(1)], ParseResult.COMPLETE])
   })
 
   test('an IfcSIUnit reads Dimensions, UnitType, Prefix and Name from their own slots', async () => {
@@ -142,10 +142,12 @@ describe('a derived `*` keeps its attribute slot (conway#788)', () => {
     api.CloseModel(modelID)
   }, 120000)
 
-  test('an IFC2X3 header reads the same lines (one parser for every IFC schema)', () => {
-    const ifc2x3 = new TextEncoder().encode(
-        new TextDecoder().decode(buffer).replace("FILE_SCHEMA(('IFC4'))", "FILE_SCHEMA(('IFC2X3'))"))
-    const modelID = api.OpenModel(ifc2x3, SETTINGS)
+  test.each(['IFC2X3', 'IFC4X3_ADD2'])('an %s header reads the same lines (one parser for every IFC schema)', (schema) => {
+    // IFC4X3 opens through the IFC4-compatible route, whose raw lines also
+    // pass through maskRawArguments (ifc4x3_ifc4_compat.ts).
+    const other = new TextEncoder().encode(
+        new TextDecoder().decode(buffer).replace("FILE_SCHEMA(('IFC4'))", `FILE_SCHEMA(('${schema}'))`))
+    const modelID = api.OpenModel(other, SETTINGS)
     const ifc4 = api.OpenModel(buffer, SETTINGS)
 
     expect(line(modelID, LENGTH_UNIT).Name).toEqual(enumeration('METRE'))

@@ -1576,7 +1576,9 @@ export default class StepParser<TypeIDType> extends StepHeaderParser {
 
           // `*` is a redeclared-derived attribute (IfcSIUnit's Dimensions,
           // a sub-context's four inherited context attributes, an oriented
-          // edge's EdgeStart / EdgeEnd, AP214's oriented_* and si_unit). It
+          // edge's EdgeStart / EdgeEnd, AP214's oriented_* and
+          // mechanism_base_placement; AP214's si_unit only appears inside
+          // complex records, which this parse never sees). It
           // still occupies its slot, and the line converters
           // (ifc2x4_helper.ts FromTape) read arguments by position, so it
           // must yield a value. Stepping over it silently used to shift
