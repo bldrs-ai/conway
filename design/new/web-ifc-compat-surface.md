@@ -289,17 +289,27 @@ An IFC4X3 file with a definition set does not reach this parse at all.
 The IFC4-compatible decoding route refuses it, because the deriver gives
 an aggregate of an entity no value shape (conway#765).
 
-Three defects of the same parse remain, outside conway#763, and the
-attributes after each one shift:
+A derived `*` keeps its slot as `{type: 0}`, web-ifc's own shape for it,
+so it stays distinct from a `$` (`null`). Until conway#788 it was dropped,
+and every later attribute read one slot early, the last one missing:
+`IFCSIUNIT(*,.LENGTHUNIT.,.MILLI.,.METRE.)` read as `Dimensions`
+LENGTHUNIT, `UnitType` MILLI, `Prefix` METRE and no `Name`. The records
+that write `*` ahead of another attribute are `IfcSIUnit`,
+`IfcGeometricRepresentationSubContext` and `IfcOrientedEdge` in every IFC
+schema, and AP214's `oriented_edge`, the other `oriented_*` and
+`mechanism_base_placement`. AP214's `si_unit` and `conversion_based_unit`
+write `*` too, but always inside a complex record, which the raw path does
+not parse at all.
+
+Two defects of the same parse remain (conway#764), and the attributes
+after each one shift:
 - A list nested in a record-level list (`IfcCartesianPointList.CoordList`)
   closes into the record's top-level arguments, not its parent list.
-- A derived `*` (`IFCSIUNIT(*,…)`) is dropped rather than kept as a
-  placeholder.
 - A binary value (`"0FF"`) is matched but not kept. That includes one
   written in place, `IFCBINARY("0FF")` as an `IfcValue`.
 
-See conway#764. A zero written with an exponent (`0.E0`) fails the record
-outright (conway#767). `scripts/raw_line_parity.mjs` is the before/after
+A zero written with an exponent (`0.E0`) fails the record outright
+(conway#767). `scripts/raw_line_parity.mjs` is the before/after
 check for any change here: geometry reads through the generated
 entities, so the regression digests never see this parse.
 
