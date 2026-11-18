@@ -1379,6 +1379,9 @@ export default class StepParser<TypeIDType> extends StepHeaderParser {
 
           case ATTRIBUTE_PARSE_TYPE.DERIVED:
 
+            // A slot like any other; see the record-level arm below.
+            target().push({ type: 0 })
+
             input.step()
             break
 
@@ -1569,10 +1572,30 @@ export default class StepParser<TypeIDType> extends StepHeaderParser {
           input.step()
           break
 
-        case ATTRIBUTE_PARSE_TYPE.DERIVED:
+        case ATTRIBUTE_PARSE_TYPE.DERIVED: {
+
+          // `*` is a redeclared-derived attribute (IfcSIUnit's Dimensions,
+          // a sub-context's four inherited context attributes, an oriented
+          // edge's EdgeStart / EdgeEnd, AP214's oriented_* and si_unit). It
+          // still occupies its slot, and the line converters
+          // (ifc2x4_helper.ts FromTape) read arguments by position, so it
+          // must yield a value. Stepping over it silently used to shift
+          // every later attribute one slot early and drop the last
+          // (conway#788).
+          //
+          // `{ type: 0 }` is what web-ifc's own raw line gives `*` (checked
+          // against web-ifc@0.0.35), keeping it distinct from `$` (null).
+          const derived = { type: 0 }
+
+          if (containerStack.length > 0) {
+            containerStack[containerStack.length - 1].push(derived)
+          } else {
+            indexResult.push(derived)
+          }
 
           input.step()
           break
+        }
 
         default:
       }
