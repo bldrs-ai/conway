@@ -1584,7 +1584,8 @@ export default class StepParser<TypeIDType> extends StepHeaderParser {
           // (conway#788).
           //
           // `{ type: 0 }` is what web-ifc's own raw line gives `*` (checked
-          // against web-ifc@0.0.35), keeping it distinct from `$` (null).
+          // against the pinned web-ifc devDependency, package 0.0.35, whose
+          // engine reports 0.0.34), keeping it distinct from `$` (null).
           const derived = { type: 0 }
 
           if (containerStack.length > 0) {

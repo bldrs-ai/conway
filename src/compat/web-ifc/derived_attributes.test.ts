@@ -13,9 +13,11 @@
 // fields by position in the record and never had the shift.
 //
 // `*` now reads as `{ type: 0 }`, what web-ifc's own GetLine returns for it
-// (checked against web-ifc@0.0.35, this repo's devDependency, on
-// data/derived_attributes.ifc), so a value-less `$` (null) and a derived `*`
-// stay distinguishable as they are upstream.
+// (checked on data/derived_attributes.ifc against this repo's web-ifc
+// devDependency: package 0.0.35, whose engine reports 0.0.34), so a
+// value-less `$` (null) and a derived `*` stay distinguishable as they are
+// upstream. This is conway#764's second defect; its nested-list and binary
+// defects are separate arms and still open.
 import * as fs from 'fs'
 
 import { beforeAll, describe, expect, test } from '@jest/globals'
