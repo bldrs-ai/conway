@@ -45,6 +45,8 @@ async function main() {
     const initializationStatus = await conwaywasm.initialize()
 
     if (!initializationStatus) {
+      console.error('Conway geometry engine failed to initialize')
+      process.exitCode = 1
       return
     }
 
