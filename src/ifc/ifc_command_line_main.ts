@@ -506,10 +506,12 @@ function doWork() {
 /**
  * Serialize the geometry.
  *
- * A failure here logs, sets `process.exitCode = 1` and carries on with the
- * other outputs, rather than throwing: what was written stays usable, but
- * the exit status still says the run failed, so a caller such as
- * scripts/visual_diff_report.cjs doesn't take it for a clean export.
+ * A failure here logs and sets `process.exitCode = 1` rather than throwing:
+ * what was already written stays usable, but the exit status still says the
+ * run failed, so a caller such as scripts/visual_diff_report.cjs doesn't take
+ * it for a clean export. A failed generation or file write carries on with
+ * the other outputs; a buffer/URI count mismatch returns at once, skipping
+ * the formats after it.
  *
  * @param scene
  * @param fileNameNoExtension
