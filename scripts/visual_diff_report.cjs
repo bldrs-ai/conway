@@ -128,8 +128,12 @@ function exportGlb(packageRoot, modelPath, scratchDir, timeoutMs) {
         process.execPath,
         ['--experimental-specifier-resolution=node', cli, '-g', modelPath],
         // maxBuffer well above the CLI's chatter: execFile kills a child that
-        // overflows it, which would read as an export failure.
-        { cwd: scratchDir, timeout: timeoutMs, maxBuffer: 64 * 1024 * 1024 },
+        // overflows it, which would read as an export failure. SIGKILL, not
+        // the default SIGTERM, for the same reason the batch runner uses it
+        // (ifc_regression_batch_main.ts): a child wedged in wasm can ignore
+        // SIGTERM, and execFile waits for the exit before calling back.
+        { cwd: scratchDir, timeout: timeoutMs, maxBuffer: 64 * 1024 * 1024,
+          killSignal: 'SIGKILL' },
         (err, stdout, stderr) => {
           // Fall through to the GLB scan on error: some models exit non-zero
           // after still writing usable geometry (per-element extraction errors).
