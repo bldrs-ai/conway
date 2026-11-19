@@ -13,7 +13,7 @@
  * Usage:
  *   visual_diff_report.cjs --models <changed_models.txt> \
  *     --base <package root> --cand <package root> --out <dir> [--max N] \
- *     [--base-label <text>] [--cand-label <text>]
+ *     [--base-label <text>] [--cand-label <text>] [--export-timeout <seconds>]
  *
  * <changed_models.txt>: one absolute model path per line, optionally
  * followed by a tab and `new` for models whose digest has no committed
@@ -28,7 +28,7 @@
  */
 'use strict'
 
-const { execFileSync } = require('child_process')
+const { execFile, execFileSync } = require('child_process')
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
@@ -43,6 +43,12 @@ function parseArgs() {
   // Column headings. The per-PR job keeps the defaults; rc-regression names
   // its base as the engine of the last blessed baseline, not main.
   opts.baseLabel = opts['base-label'] || 'base (main)'
+  // Per-export kill timeout. The default keeps the per-PR job's 10 minutes;
+  // rc-regression passes a tighter one, since a model that loads in about a
+  // minute but has not exported in a few is hung, not slow (conway#792: a
+  // GLB writer that hit bad_alloc and never exited ate a whole 10 minutes).
+  opts.exportTimeoutMs = (opts['export-timeout'] !== undefined ?
+    parseFloat(opts['export-timeout']) : 600) * 1000
   opts.candLabel = opts['cand-label'] || 'candidate (this PR)'
   // Minimum fraction of pixels that must differ between the before/after
   // render for a row to be shown. The digest gate and the visual-diff base
@@ -101,31 +107,50 @@ function cliFor(modelPath) {
 
 /**
  * Export a model to GLB with one engine. Runs the CLI in a scratch cwd
- * (the exporter writes output files into cwd) and returns ALL non-Draco
+ * (the exporter writes output files into cwd) and resolves to ALL non-Draco
  * GLB chunk paths (large models export as several chunk files that only
  * form the whole model together — rendering just one silently drops the
  * rest), or an empty list if the export produced nothing.
+ *
+ * Asynchronous so the base and candidate exports of one model run side by
+ * side: the export is most of a model's cost, and the two are independent.
+ * Each is its own process with its own scratch dir; measured digest-pass
+ * memory (~1.3 GB on the rc runner) leaves room for two.
+ *
+ * @return {Promise<{glbs: string[], diagnostic: string, seconds: number}>}
  */
-function exportGlb(packageRoot, modelPath, scratchDir) {
+function exportGlb(packageRoot, modelPath, scratchDir, timeoutMs) {
   fs.mkdirSync(scratchDir, { recursive: true })
   const cli = path.join(packageRoot, cliFor(modelPath))
-  let diagnostic = ''
-  try {
-    execFileSync(
+  const started = Date.now()
+  return new Promise((resolve) => {
+    execFile(
         process.execPath,
         ['--experimental-specifier-resolution=node', cli, '-g', modelPath],
-        { cwd: scratchDir, stdio: 'pipe', timeout: 10 * 60 * 1000 },
+        // maxBuffer well above the CLI's chatter: execFile kills a child that
+        // overflows it, which would read as an export failure.
+        { cwd: scratchDir, timeout: timeoutMs, maxBuffer: 64 * 1024 * 1024 },
+        (err, stdout, stderr) => {
+          // Fall through to the GLB scan on error: some models exit non-zero
+          // after still writing usable geometry (per-element extraction errors).
+          let diagnostic = ''
+          if (err) {
+            err.stderr = stderr
+            diagnostic = childFailureDiagnostic(err,
+                `exporter (${path.basename(String(modelPath))})`)
+            if (err.killed) {
+              diagnostic = `killed after ${Math.round(timeoutMs / 1000)}s export timeout` +
+                  (diagnostic ? `; ${diagnostic}` : '')
+            }
+          }
+          const glbs = fs.readdirSync(scratchDir)
+              .filter((f) => f.endsWith('.glb') && !f.includes('draco'))
+              .map((f) => path.join(scratchDir, f))
+              .sort()
+          resolve({ glbs, diagnostic, seconds: (Date.now() - started) / 1000 })
+        },
     )
-  } catch (err) {
-    // Fall through to the GLB scan: some models exit non-zero after still
-    // writing usable geometry (per-element extraction errors).
-    diagnostic = childFailureDiagnostic(err, `exporter (${path.basename(String(modelPath))})`)
-  }
-  const glbs = fs.readdirSync(scratchDir)
-      .filter((f) => f.endsWith('.glb') && !f.includes('draco'))
-      .map((f) => path.join(scratchDir, f))
-      .sort()
-  return { glbs, diagnostic }
+  })
 }
 
 /**
@@ -148,7 +173,7 @@ function slugify(name) {
   return name.replace(/\.[^.]+$/, '').replace(/[^A-Za-z0-9_-]+/g, '_')
 }
 
-function main() {
+async function main() {
   const opts = parseArgs()
   // Each line is `<model path>` or `<model path>\tnew` — the workflow marks
   // models whose digest CSV is untracked (first appearance in the smoke
@@ -209,8 +234,14 @@ function main() {
     const work = fs.mkdtempSync(path.join(os.tmpdir(), `vdiff-${slug}-`))
     process.stderr.write(`visual-diff: ${name}\n`)
 
-    const base = exportGlb(opts.base, model, path.join(work, 'base'))
-    const cand = exportGlb(opts.cand, model, path.join(work, 'cand'))
+    const [base, cand] = await Promise.all([
+      exportGlb(opts.base, model, path.join(work, 'base'), opts.exportTimeoutMs),
+      exportGlb(opts.cand, model, path.join(work, 'cand'), opts.exportTimeoutMs),
+    ])
+    // Timings in the job log, so the next look at where a render's time
+    // went does not have to reconstruct them from line timestamps.
+    process.stderr.write(`visual-diff: ${name} exports base ${base.seconds.toFixed(1)}s, ` +
+        `cand ${cand.seconds.toFixed(1)}s\n`)
 
     if (base.glbs.length === 0 && cand.glbs.length === 0) {
       const why = (base.diagnostic || cand.diagnostic || '')
@@ -301,7 +332,10 @@ function main() {
 // Run as a CLI, but stay require()-able so parseMetric can be unit-tested
 // without executing main().
 if (require.main === module) {
-  main()
+  main().catch((err) => {
+    process.stderr.write(`visual-diff: ${err && err.stack ? err.stack : err}\n`)
+    process.exit(1)
+  })
 }
 
 module.exports = { parseMetric }
