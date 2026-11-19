@@ -1070,6 +1070,7 @@ jobs:
         env:
           REPO: ${{ matrix.target.repo }}
           TARGET: ${{ matrix.target.name }}
+          COLLECT: ${{ steps.vdiff.outcome }}
           COUNT: ${{ steps.vdiff.outputs.count }}
           BLESSED_SHA: ${{ steps.blessed.outputs.sha }}
           BLESSED_VERSION: ${{ steps.blessed.outputs.version }}
@@ -1083,7 +1084,11 @@ jobs:
           {
             echo "## Visual Diff (digest-changed & new models)"
             echo ""
-            if [ "${COUNT:-0}" = "0" ]; then
+            # A collector that errored emits no count; that is "unchecked",
+            # not "nothing changed", so test its outcome before the count.
+            if [ "$COLLECT" != "success" ] || [ -z "$COUNT" ]; then
+              echo "_Not rendered: collecting the digest-changed models failed, so this baseline's changes were not checked visually. See [the run](${RUN_URL})._"
+            elif [ "$COUNT" = "0" ]; then
               echo "No per-model digest changed in this baseline, so there is nothing to render."
             elif [ -z "$BLESSED_SHA" ]; then
               echo "_Not rendered: the engine behind the committed baseline is unknown. There is no \`regression/test_models/engine.txt\`, and no \`conway <ref> @ <sha>\` bless commit on \`${REPO}\` main that later digest changes leave standing. See [the run](${RUN_URL})._"
