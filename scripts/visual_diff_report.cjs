@@ -18,7 +18,9 @@
  * <changed_models.txt>: one absolute model path per line, optionally
  * followed by a tab and `new` for models whose digest has no committed
  * baseline yet (first appearance in the smoke subset) — their rows are
- * always shown, never threshold-suppressed.
+ * always shown, never threshold-suppressed. So are rows whose export on
+ * either side failed or was killed, with the reason, even when that export
+ * still left GLBs that render identically.
  * <package root>: a directory containing compiled/src/... (an unpacked npm
  * package or a built working tree).
  *
@@ -246,6 +248,17 @@ async function main() {
     // went does not have to reconstruct them from line timestamps.
     process.stderr.write(`visual-diff: ${name} exports base ${base.seconds.toFixed(1)}s, ` +
         `cand ${cand.seconds.toFixed(1)}s\n`)
+    // An export that failed or was killed can still have written its GLBs
+    // first (conway#792: the base engine wrote BLSN_007's, then hung until
+    // the timeout killed it). Its pair can then render below the threshold,
+    // so the failure has to keep the row and ride in it, or the report reads
+    // as a clean no-op. A side with no GLBs already says why in its own
+    // cell, so the note carries only the failures that left GLBs behind.
+    const exportNote = [
+      base.glbs.length > 0 && base.diagnostic && `base: ${base.diagnostic}`,
+      cand.glbs.length > 0 && cand.diagnostic && `candidate: ${cand.diagnostic}`,
+    ].filter(Boolean).join('; ').replace(/\|/g, '\\|').slice(0, 200)
+    const noteSuffix = exportNote ? `<br>_export: \`${exportNote}\`_` : ''
 
     if (base.glbs.length === 0 && cand.glbs.length === 0) {
       const why = (base.diagnostic || cand.diagnostic || '')
@@ -292,7 +305,8 @@ async function main() {
         // already shipped). A missing/garbled metric (older render, crash)
         // falls back to SHOWING the row — never hide a real diff on a glitch.
         // New smoke models are never suppressed (see the models parse above).
-        if (!isNew && metric && metric.changedFraction < opts.diffThreshold) {
+        if (!isNew && !exportNote && metric &&
+            metric.changedFraction < opts.diffThreshold) {
           fs.rmSync(path.join(opts.out, `${slug}-before.png`), { force: true })
           fs.rmSync(path.join(opts.out, `${slug}-after.png`), { force: true })
           unchanged.push(name)
@@ -303,7 +317,7 @@ async function main() {
               `| ${nameCell} ` +
               `| ![before](RAW_URL_BASE/${slug}-before.png) ` +
               `| ![after](RAW_URL_BASE/${slug}-after.png) ` +
-              `| ${badge} |`)
+              `| ${badge}${noteSuffix} |`)
         }
         fs.rmSync(work, { recursive: true, force: true })
         continue
@@ -323,7 +337,7 @@ async function main() {
     rows.push(
         `| ${nameCell} ` +
         `| ${renderSingle(base, 'base', 'before')} ` +
-        `| ${renderSingle(cand, 'candidate', 'after')} | n/a |`)
+        `| ${renderSingle(cand, 'candidate', 'after')} | n/a${noteSuffix} |`)
     fs.rmSync(work, { recursive: true, force: true })
   }
 
