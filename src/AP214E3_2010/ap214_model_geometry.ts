@@ -44,7 +44,10 @@ export class AP214ModelGeometry implements ModelGeometry {
     }
 
     this.meshes_.set( mesh.localID, mesh )
-    this.size.noteAdded( mesh.localID, mesh )
+    // Pending, not counted: under staged face tessellation this mesh's
+    // triangles land at the next finalizeStagedFaces(), which settles the
+    // tracker (AP214GeometryExtraction.finalizeStagedFaces).
+    this.size.notePending( mesh.localID, mesh )
 
     if ( parentLocalID !== void 0 ) {
 

@@ -820,6 +820,12 @@ export class AP214GeometryExtraction {
     if ( this.useStagedFaces ) {
       this.conwayModel.finalizeStagedFaces()
     }
+
+    // Every mesh stored since the last flush now holds its triangles, so
+    // measure them for Statistics.geometryMemory (GeometrySizeTracker's
+    // "Deferred entries"). Unconditional: without staging there is nothing
+    // outstanding, and settling here is still the only place STEP counts.
+    this.model.geometry.size.settle()
   }
 
   /**

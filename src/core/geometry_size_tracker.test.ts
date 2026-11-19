@@ -86,4 +86,68 @@ describe( 'GeometrySizeTracker', () => {
     expect( size.bytes ).toBe( 0 )
     expect( size.peakBytes ).toBe( 800 )
   } )
+
+  // STEP's staged face tessellation stores a mesh before its triangles land;
+  // counting it at add time would read it empty forever.
+  test( 'a pending entry is measured at settle(), after its staged work lands', () => {
+    const size = new GeometrySizeTracker()
+    let vertexElements = 0
+    const staged = {
+      type: CanonicalMeshType.BUFFER_GEOMETRY,
+      localID: 1,
+      geometry: { GetVertexDataSize: () => vertexElements, GetIndexDataSize: () => 0 },
+    } as unknown as CanonicalMesh
+
+    size.notePending( 1, staged )
+
+    expect( size.bytes ).toBe( 0 )
+
+    // finalizeStagedFaces() appends the queued faces to the native.
+    vertexElements = 100
+    size.settle()
+
+    expect( size.bytes ).toBe( 800 )
+    expect( size.peakBytes ).toBe( 800 )
+
+    // Settled entries are not measured again.
+    vertexElements = 1000
+    size.settle()
+
+    expect( size.bytes ).toBe( 800 )
+  } )
+
+  test( 'a pending entry removed before settle() is dropped unmeasured', () => {
+    const size = new GeometrySizeTracker()
+    const freed = {
+      type: CanonicalMeshType.BUFFER_GEOMETRY,
+      localID: 1,
+      geometry: {
+        GetVertexDataSize: () => {
+          throw new Error( 'measured a freed native' )
+        },
+        GetIndexDataSize: () => 0,
+      },
+    } as unknown as CanonicalMesh
+
+    size.notePending( 1, freed )
+    size.noteRemoved( 1 )
+    size.settle()
+
+    expect( size.bytes ).toBe( 0 )
+    expect( size.peakBytes ).toBe( 0 )
+  } )
+
+  test( 'notePending replaces a counted entry under the same key', () => {
+    const size = new GeometrySizeTracker()
+
+    size.noteAdded( 1, mesh( 1, 100, 0 ) )
+    size.notePending( 1, mesh( 1, 10, 0 ) )
+
+    expect( size.bytes ).toBe( 0 )
+
+    size.settle()
+
+    expect( size.bytes ).toBe( 80 )
+    expect( size.peakBytes ).toBe( 800 )
+  } )
 } )

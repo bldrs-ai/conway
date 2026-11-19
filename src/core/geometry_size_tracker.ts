@@ -47,10 +47,20 @@ export function canonicalMeshBytes( mesh: CanonicalMesh ): number {
  *
  * Entries are counted per key, as calculateGeometrySize() does: a native
  * cached under two local IDs counts twice in both, so the two agree.
+ *
+ * **Deferred entries.** STEP's staged face tessellation (the MT build with a
+ * scalable allocator) stores a mesh BEFORE its triangles exist: the face's
+ * job is queued and only appended to the native at the next
+ * finalizeStagedFaces(), which never passes through the store again. Counting
+ * such a mesh at add time measures it empty, permanently. notePending()
+ * queues the entry instead, and settle() — called right after each flush —
+ * measures what has landed. An entry removed while still pending is dropped
+ * uncounted (its native may already be freed).
  */
 export class GeometrySizeTracker {
 
   private readonly bytesByKey_ = new Map< number, number >()
+  private readonly pending_ = new Map< number, CanonicalMesh >()
   private bytes_ = 0
   private peakBytes_ = 0
 
@@ -93,13 +103,58 @@ export class GeometrySizeTracker {
   }
 
   /**
+   * Queue an entry whose native may still have staged work outstanding, to
+   * be measured at the next settle(). Replaces whatever was counted, or
+   * queued, under its key.
+   *
+   * @param key The entry's local ID.
+   * @param mesh The mesh stored under it.
+   */
+  public notePending( key: number, mesh: CanonicalMesh ): void {
+
+    this.noteRemoved( key )
+    this.pending_.set( key, mesh )
+  }
+
+  /**
+   * Measure every queued entry, now that its staged work has landed. Must
+   * only be called when no staged job targets a queued native, i.e. right
+   * after a flush.
+   */
+  public settle(): void {
+
+    if ( this.pending_.size === 0 ) {
+      return
+    }
+
+    // Count all of them before taking the peak: they landed together.
+    for ( const [key, mesh] of this.pending_ ) {
+
+      const bytes = canonicalMeshBytes( mesh )
+
+      if ( bytes !== 0 ) {
+        this.bytesByKey_.set( key, bytes )
+        this.bytes_ += bytes
+      }
+    }
+
+    this.pending_.clear()
+
+    if ( this.bytes_ > this.peakBytes_ ) {
+      this.peakBytes_ = this.bytes_
+    }
+  }
+
+  /**
    * Stop counting an entry. Uses the bytes recorded when it was added, so it
    * is safe to call after the native has been freed, and a no-op for a key
-   * never counted.
+   * never counted. A pending entry is dropped without being measured.
    *
    * @param key The entry's local ID.
    */
   public noteRemoved( key: number ): void {
+
+    this.pending_.delete( key )
 
     const bytes = this.bytesByKey_.get( key )
 
