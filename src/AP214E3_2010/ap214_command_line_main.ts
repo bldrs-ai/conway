@@ -456,6 +456,7 @@ function serializeGeometry(
 
       if (gltfResult.buffers.size() !== gltfResult.bufferUris.size()) {
         Logger.error('Buffer size !== Buffer URI size!\n')
+        process.exitCode = 1
         return
       }
 
@@ -500,6 +501,7 @@ function serializeGeometry(
 
       if (gltfResultDraco.buffers.size() !== gltfResultDraco.bufferUris.size()) {
         Logger.error('Buffer size !== Buffer URI size!\n')
+        process.exitCode = 1
         return
       }
 
