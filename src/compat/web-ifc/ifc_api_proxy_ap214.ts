@@ -584,6 +584,29 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
    *
    * @return {number} The count.
    */
+  /**
+   * The model's geometry high-water mark in bytes (conway#740 follow-up) —
+   * see IfcApiModelPassthrough.getGeometryPeakBytes. The same tracker as the
+   * IFC proxy's, so both formats report geometryMemory alike.
+   *
+   * Undefined on a classic (non-deferred) open: its geometryMemory was
+   * measured by calculateGeometrySize() after extraction deleted its CSG
+   * temporaries, and the peak — which still counts those operands — must
+   * not overwrite it when a later whole-model ask refreshes statistics.
+   *
+   * @return {number | undefined} Peak bytes, deferred opens only.
+   */
+  getGeometryPeakBytes(): number | undefined {
+    return this.deferredMode_ ?
+      this.model[1].model.geometry.size.peakBytes :
+      void 0
+  }
+
+  /**
+   * See IfcApiModelPassthrough.getProductsWithGeometryCount.
+   *
+   * @return {number} The count.
+   */
   getProductsWithGeometryCount(): number {
 
     const model = this.model[0]

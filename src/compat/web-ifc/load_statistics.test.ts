@@ -254,6 +254,147 @@ describe( 'products with geometry', () => {
   } )
 } )
 
+describe( 'geometry memory on the demand path', () => {
+
+  // A deferred open builds nothing, so the open's calculateGeometrySize() is
+  // 0, and geometryMemory used to stay there for the whole load. The pump now
+  // raises it to the geometry store's high-water mark (GeometrySizeTracker).
+  //
+  // Each open gets its own IfcAPI: a SECOND STEP open in one IfcAPI currently
+  // builds meshes with no vertices at all (calculateGeometrySize() and the
+  // streamed geometry are both empty), which would make this measure that
+  // instead. Tracked separately; not what this test is about.
+  test.each( [ 'data/index.ifc', 'data/nema-23-76mm.step' ] )( '%s', async ( fixture ) => {
+
+    await observeDiagnostics( async () => {
+
+      const classicApi = new IfcAPI()
+
+      await classicApi.Init()
+
+      const classicID = classicApi.OpenModel( read( fixture ), SETTINGS )
+
+      classicApi.StreamAllMeshes( classicID, () => {} )
+
+      const classic = classicApi.getStatistics( classicID ).getGeometryMemory() ?? 0
+
+      expect( classic ).toBeGreaterThan( 0 )
+
+      const deferredApi = new IfcAPI()
+
+      await deferredApi.Init()
+
+      const deferredID = await deferredApi.OpenModelStreamed( read( fixture ), DEFER )
+
+      expect( deferredApi.getStatistics( deferredID ).getGeometryMemory() ?? 0 ).toBe( 0 )
+
+      for ( ;; ) {
+        const { extracted, remaining } =
+          await deferredApi.ExtractGeometryBatchAsync( deferredID, 8, () => {} )
+
+        if ( extracted === 0 && remaining === 0 ) {
+          break
+        }
+      }
+
+      const deferred = deferredApi.getStatistics( deferredID ).getGeometryMemory() ?? 0
+
+      // The same per-mesh measure as the classic figure, over the same
+      // geometry, so the peak is at least what the classic open ended with.
+      expect( deferred ).toBeGreaterThan( 0 )
+      expect( deferred ).toBeGreaterThanOrEqual( classic * 0.99 )
+
+      classicApi.CloseModel( classicID )
+      deferredApi.CloseModel( deferredID )
+    } )
+  }, 120000 )
+} )
+
+describe( 'geometry memory from a batch that reports no work', () => {
+
+  // A deferred STEP whose final unit throws after producing child meshes is
+  // caught, settled and counted done, so the batch returns
+  // {extracted: 0, remaining: 0} with geometry stored. The time and
+  // products-with-geometry accounting skip such a call; geometryMemory must
+  // not. No fixture throws that way, so the passthrough is stubbed into it.
+  test( 'is still raised to the peak', async () => {
+
+    await observeDiagnostics( async () => {
+
+      const api = new IfcAPI()
+
+      await api.Init()
+
+      const modelID = await api.OpenModelStreamed( read( 'data/index.ifc' ), DEFER )
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const proxy = ( api as any ).models.get( modelID )
+      const peakMb = 3
+
+      proxy.extractGeometryBatchAsync = async () => ( { extracted: 0, remaining: 0 } )
+      proxy.getGeometryPeakBytes = () => peakMb * 1024 * 1024
+
+      expect( api.getStatistics( modelID ).getGeometryMemory() ?? 0 ).toBe( 0 )
+
+      await api.ExtractGeometryBatchAsync( modelID, 8, () => {} )
+
+      expect( api.getStatistics( modelID ).getGeometryMemory() ).toBe( peakMb )
+
+      api.CloseModel( modelID )
+    } )
+  }, 120000 )
+} )
+
+describe( 'geometry memory on a classic open', () => {
+
+  // A classic open measures geometryMemory with calculateGeometrySize()
+  // after extraction has deleted its CSG temporaries, while the store's
+  // running peak still counts those operands. Later whole-model asks
+  // (StreamAllMeshes*, LoadAllGeometry) refresh the statistics from the
+  // passthrough's peak, so a classic passthrough must report none — or a
+  // model with boolean results would read its peak instead of what it holds.
+  // No fixture has a non-void boolean result (index.ifc's are openings,
+  // which go to the void store), so the gate is asserted on the passthrough
+  // itself, alongside the user-visible value.
+  test.each( [ 'data/index.ifc', 'data/nema-23-76mm.step' ] )(
+      '%s: no peak from a classic open, so a whole-model read keeps the measured value',
+      async ( fixture ) => {
+
+    await observeDiagnostics( async () => {
+
+      const classicApi = new IfcAPI()
+
+      await classicApi.Init()
+
+      const classicID = classicApi.OpenModel( read( fixture ), SETTINGS )
+      const measured = classicApi.getStatistics( classicID ).getGeometryMemory() ?? 0
+
+      expect( measured ).toBeGreaterThan( 0 )
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      expect( ( classicApi as any ).models.get( classicID ).getGeometryPeakBytes() )
+          .toBeUndefined()
+
+      classicApi.StreamAllMeshes( classicID, () => {} )
+      classicApi.LoadAllGeometry( classicID )
+
+      expect( classicApi.getStatistics( classicID ).getGeometryMemory() ).toBe( measured )
+
+      classicApi.CloseModel( classicID )
+
+      const deferredApi = new IfcAPI()
+
+      await deferredApi.Init()
+
+      const deferredID = await deferredApi.OpenModelStreamed( read( fixture ), DEFER )
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      expect( typeof ( deferredApi as any ).models.get( deferredID ).getGeometryPeakBytes() )
+          .toBe( 'number' )
+
+      deferredApi.CloseModel( deferredID )
+    } )
+  }, 120000 )
+} )
+
 describe( 'STEP products with geometry stay on the product_definition identity', () => {
 
   // The numerator maps geometry owners (product_definition_shape for an

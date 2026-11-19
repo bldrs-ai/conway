@@ -1567,6 +1567,40 @@ export class IfcAPI {
     if (withGeometry !== void 0) {
       Logger.getStatistics(modelID)?.setProductsWithGeometryCount(withGeometry)
     }
+
+    this.refreshGeometryMemory_(modelID, result)
+  }
+
+  /**
+   * Raise the model's `geometryMemory` (MB) to its geometry high-water mark.
+   *
+   * The open sets it once from calculateGeometrySize(), which on a deferred
+   * open is 0: nothing is built until the pump runs. So it is refreshed
+   * wherever the products-with-geometry count is, from the store's running
+   * peak (GeometrySizeTracker) rather than its current size — under a
+   * residency budget the store only holds what was resident last. Only ever
+   * raised, and only on a deferred open: a classic open's value was measured
+   * after its CSG temporaries were deleted, while the peak still counts
+   * them, so its passthrough reports no peak and the measured value stands.
+   *
+   * @param modelID The model.
+   * @param result Its passthrough.
+   */
+  private refreshGeometryMemory_(
+      modelID: number, result: IfcApiModelPassthrough ): void {
+
+    const peakBytes = result.getGeometryPeakBytes?.()
+    const statistics = Logger.getStatistics(modelID)
+
+    if (peakBytes === void 0 || statistics === void 0) {
+      return
+    }
+
+    const peakMb = peakBytes / BYTES_PER_MIB
+
+    if (peakMb > (statistics.getGeometryMemory() ?? 0)) {
+      statistics.setGeometryMemory(peakMb)
+    }
   }
 
   /**
@@ -1593,7 +1627,18 @@ export class IfcAPI {
 
     const statistics = Logger.getStatistics(modelID)
 
-    if (statistics === void 0 || (pumped.extracted === 0 && pumped.remaining === 0)) {
+    if (statistics === void 0) {
+      return
+    }
+
+    // Ahead of the no-work guard below: a call can report
+    // {extracted: 0, remaining: 0} and still have stored geometry — e.g. a
+    // deferred STEP whose final unit threw after producing child meshes,
+    // which the batch catches, settles and counts as done. Refreshing is
+    // O(1) and only ever raises the value, so an empty call costs nothing.
+    this.refreshGeometryMemory_(modelID, result)
+
+    if (pumped.extracted === 0 && pumped.remaining === 0) {
       return
     }
 
