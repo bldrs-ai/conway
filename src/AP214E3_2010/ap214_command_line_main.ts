@@ -34,7 +34,13 @@ main()
  */
 async function main() {
   try {
-    await conwaywasm.initialize()
+    const initializationStatus = await conwaywasm.initialize()
+
+    if (!initializationStatus) {
+      console.error('Conway geometry engine failed to initialize')
+      process.exitCode = 1
+      return
+    }
 
     Environment.checkEnvironment()
     Logger.initializeWasmCallbacks()
@@ -42,6 +48,11 @@ async function main() {
     await doWork()
   } catch (error) {
     console.error('An error occurred:', error)
+    // Same as ifc_command_line_main.ts's catch (#713): without this an
+    // uncaught throw exits 0, and a caller can't tell it from a success.
+    // scripts/visual_diff_report.cjs relies on it to flag an export that
+    // threw after writing its GLBs (#795).
+    process.exitCode = 1
   }
 }
 
@@ -126,13 +137,13 @@ async function doWork() {
       } catch {
         console.log(
           'Error: couldn\'t read file, check that it is accessible at the specified path.')
-        exit()
+        exit(1)
       }
 
       if (indexAP214Buffer === void 0) {
         console.log(
           'Error: couldn\'t read file, check that it is accessible at the specified path.')
-        exit()
+        exit(1)
       }
 
       // create a statistics object
@@ -178,6 +189,7 @@ async function doWork() {
       const parseDataTimeEnd = Date.now()
 
       if (model === void 0) {
+        process.exitCode = 1
         return
       }
 
@@ -318,6 +330,13 @@ async function doWork() {
 /**
  * Serialize the geometry.
  *
+ * A failure here logs and sets `process.exitCode = 1` rather than throwing:
+ * what was already written stays usable, but the exit status still says the
+ * run failed, so a caller such as scripts/visual_diff_report.cjs doesn't take
+ * it for a clean export. A failed generation or file write carries on with
+ * the other outputs; a buffer/URI count mismatch returns at once, skipping
+ * the formats after it.
+ *
  * @param scene The scene to serialize
  * @param fileNameNoExtension The file name of the AP214 file sans extension.
  * @param maxGeometrySize The max geometry size per segment.
@@ -356,6 +375,7 @@ function serializeGeometry(
 
       if (glbResult.buffers.size() !== glbResult.bufferUris.size()) {
         Logger.error('Buffer size != Buffer URI size!\n')
+        process.exitCode = 1
         return
       }
 
@@ -370,10 +390,12 @@ function serializeGeometry(
           fs.writeFileSync(uri, managedBuffer)
         } catch (err) {
           Logger.error(`Error writing to file: ${err}`)
+          process.exitCode = 1
         }
       }
     } else {
       Logger.error('GLB generation unsuccessful')
+      process.exitCode = 1
     }
 
     glbResult.bufferUris?.delete()
@@ -398,6 +420,7 @@ function serializeGeometry(
 
       if (glbDracoResult.buffers.size() !== glbDracoResult.bufferUris.size()) {
         Logger.error('Buffer size != Buffer URI size!\n')
+        process.exitCode = 1
         return
       }
 
@@ -412,10 +435,12 @@ function serializeGeometry(
           fs.writeFileSync(uri, managedBuffer)
         } catch (err) {
           Logger.error(`Error writing to file: ${err}`)
+          process.exitCode = 1
         }
       }
     } else {
       console.error('GLB Draco generation unsuccessful')
+      process.exitCode = 1
     }
 
     glbDracoResult.bufferUris?.delete()
@@ -439,6 +464,7 @@ function serializeGeometry(
 
       if (gltfResult.buffers.size() !== gltfResult.bufferUris.size()) {
         Logger.error('Buffer size !== Buffer URI size!\n')
+        process.exitCode = 1
         return
       }
 
@@ -454,10 +480,12 @@ function serializeGeometry(
           fs.writeFileSync(uri, managedBuffer)
         } catch (err) {
           Logger.error(`Error writing to file: ${err}`)
+          process.exitCode = 1
         }
       }
     } else {
       Logger.error('GLTF generation unsuccessful')
+      process.exitCode = 1
     }
 
     gltfResult.bufferUris?.delete()
@@ -481,6 +509,7 @@ function serializeGeometry(
 
       if (gltfResultDraco.buffers.size() !== gltfResultDraco.bufferUris.size()) {
         Logger.error('Buffer size !== Buffer URI size!\n')
+        process.exitCode = 1
         return
       }
 
@@ -496,10 +525,12 @@ function serializeGeometry(
           fs.writeFileSync(uri, managedBuffer)
         } catch (err) {
           Logger.error(`Error writing to file: ${err}`)
+          process.exitCode = 1
         }
       }
     } else {
       Logger.error('Draco GLTF generation unsuccessful')
+      process.exitCode = 1
     }
 
     gltfResultDraco.bufferUris?.delete()
@@ -583,6 +614,7 @@ function geometryExtraction(
 
   if (extractionResult !== ExtractResult.COMPLETE) {
     console.error('Could not extract geometry, exiting...')
+    process.exitCode = 1
     return void 0
   }
 
