@@ -1579,8 +1579,9 @@ export class IfcAPI {
    * wherever the products-with-geometry count is, from the store's running
    * peak (GeometrySizeTracker) rather than its current size — under a
    * residency budget the store only holds what was resident last. Only ever
-   * raised, so a classic open's value, measured with everything built,
-   * stands.
+   * raised, and only on a deferred open: a classic open's value was measured
+   * after its CSG temporaries were deleted, while the peak still counts
+   * them, so its passthrough reports no peak and the measured value stands.
    *
    * @param modelID The model.
    * @param result Its passthrough.

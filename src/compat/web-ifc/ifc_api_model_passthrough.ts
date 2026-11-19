@@ -88,8 +88,11 @@ export interface IfcApiModelPassthrough {
    * (GeometrySizeTracker's peak). Grows as a demand pump extracts, and stays
    * at its high-water mark when a residency budget evicts; IfcAPI copies it
    * onto the model's Statistics as geometryMemory (MB).
+   *
+   * Undefined on a classic (non-deferred) open, whose geometryMemory was
+   * measured after its CSG temporaries were deleted and must stand.
    */
-  getGeometryPeakBytes?(): number
+  getGeometryPeakBytes?(): number | undefined
 
   getCoordinationMatrix(): number[]
 

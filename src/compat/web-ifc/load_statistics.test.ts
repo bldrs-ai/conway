@@ -310,6 +310,57 @@ describe( 'geometry memory on the demand path', () => {
   }, 120000 )
 } )
 
+describe( 'geometry memory on a classic open', () => {
+
+  // A classic open measures geometryMemory with calculateGeometrySize()
+  // after extraction has deleted its CSG temporaries, while the store's
+  // running peak still counts those operands. Later whole-model asks
+  // (StreamAllMeshes*, LoadAllGeometry) refresh the statistics from the
+  // passthrough's peak, so a classic passthrough must report none — or a
+  // model with boolean results would read its peak instead of what it holds.
+  // No fixture has a non-void boolean result (index.ifc's are openings,
+  // which go to the void store), so the gate is asserted on the passthrough
+  // itself, alongside the user-visible value.
+  test.each( [ 'data/index.ifc', 'data/nema-23-76mm.step' ] )(
+      '%s: no peak from a classic open, so a whole-model read keeps the measured value',
+      async ( fixture ) => {
+
+    await observeDiagnostics( async () => {
+
+      const classicApi = new IfcAPI()
+
+      await classicApi.Init()
+
+      const classicID = classicApi.OpenModel( read( fixture ), SETTINGS )
+      const measured = classicApi.getStatistics( classicID ).getGeometryMemory() ?? 0
+
+      expect( measured ).toBeGreaterThan( 0 )
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      expect( ( classicApi as any ).models.get( classicID ).getGeometryPeakBytes() )
+          .toBeUndefined()
+
+      classicApi.StreamAllMeshes( classicID, () => {} )
+      classicApi.LoadAllGeometry( classicID )
+
+      expect( classicApi.getStatistics( classicID ).getGeometryMemory() ).toBe( measured )
+
+      classicApi.CloseModel( classicID )
+
+      const deferredApi = new IfcAPI()
+
+      await deferredApi.Init()
+
+      const deferredID = await deferredApi.OpenModelStreamed( read( fixture ), DEFER )
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      expect( typeof ( deferredApi as any ).models.get( deferredID ).getGeometryPeakBytes() )
+          .toBe( 'number' )
+
+      deferredApi.CloseModel( deferredID )
+    } )
+  }, 120000 )
+} )
+
 describe( 'STEP products with geometry stay on the product_definition identity', () => {
 
   // The numerator maps geometry owners (product_definition_shape for an
