@@ -1627,7 +1627,18 @@ export class IfcAPI {
 
     const statistics = Logger.getStatistics(modelID)
 
-    if (statistics === void 0 || (pumped.extracted === 0 && pumped.remaining === 0)) {
+    if (statistics === void 0) {
+      return
+    }
+
+    // Ahead of the no-work guard below: a call can report
+    // {extracted: 0, remaining: 0} and still have stored geometry — e.g. a
+    // deferred STEP whose final unit threw after producing child meshes,
+    // which the batch catches, settles and counts as done. Refreshing is
+    // O(1) and only ever raises the value, so an empty call costs nothing.
+    this.refreshGeometryMemory_(modelID, result)
+
+    if (pumped.extracted === 0 && pumped.remaining === 0) {
       return
     }
 
@@ -1638,8 +1649,6 @@ export class IfcAPI {
     if (withGeometry !== void 0) {
       statistics.setProductsWithGeometryCount(withGeometry)
     }
-
-    this.refreshGeometryMemory_(modelID, result)
   }
 
   /**

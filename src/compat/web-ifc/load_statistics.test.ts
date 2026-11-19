@@ -310,6 +310,40 @@ describe( 'geometry memory on the demand path', () => {
   }, 120000 )
 } )
 
+describe( 'geometry memory from a batch that reports no work', () => {
+
+  // A deferred STEP whose final unit throws after producing child meshes is
+  // caught, settled and counted done, so the batch returns
+  // {extracted: 0, remaining: 0} with geometry stored. The time and
+  // products-with-geometry accounting skip such a call; geometryMemory must
+  // not. No fixture throws that way, so the passthrough is stubbed into it.
+  test( 'is still raised to the peak', async () => {
+
+    await observeDiagnostics( async () => {
+
+      const api = new IfcAPI()
+
+      await api.Init()
+
+      const modelID = await api.OpenModelStreamed( read( 'data/index.ifc' ), DEFER )
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const proxy = ( api as any ).models.get( modelID )
+      const peakMb = 3
+
+      proxy.extractGeometryBatchAsync = async () => ( { extracted: 0, remaining: 0 } )
+      proxy.getGeometryPeakBytes = () => peakMb * 1024 * 1024
+
+      expect( api.getStatistics( modelID ).getGeometryMemory() ?? 0 ).toBe( 0 )
+
+      await api.ExtractGeometryBatchAsync( modelID, 8, () => {} )
+
+      expect( api.getStatistics( modelID ).getGeometryMemory() ).toBe( peakMb )
+
+      api.CloseModel( modelID )
+    } )
+  }, 120000 )
+} )
+
 describe( 'geometry memory on a classic open', () => {
 
   // A classic open measures geometryMemory with calculateGeometrySize()
