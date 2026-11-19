@@ -17,13 +17,14 @@ import { describe, expect, test } from '@jest/globals'
  * compiled entry points, the way the script does.
  *
  * Verified as discriminating: against main's build the unreadable-input
- * cases below exit 0 for both CLIs. Each CLI also exports a small fixture
- * here and must exit 0 and write a GLB, so a CLI that fails everything
- * can't pass.
+ * and failed-write cases below exit 0 for both CLIs. Each CLI also exports
+ * a small fixture here and must exit 0 and write its GLB, so a CLI that
+ * fails everything can't pass.
  *
- * Not covered: the GLB-writer failure paths (generation unsuccessful, a
- * buffer/URI count mismatch, a failed file write) have no repo fixture that
- * reaches them; they set the exit code the same way.
+ * Not covered: a failed engine initialize, a parse or extraction failure,
+ * an unsuccessful GLB/GLTF generation and a buffer/URI count mismatch. No
+ * input reaches them, and the owner chose not to add test-only fault
+ * injection to the shipped CLIs (#796); they set the exit code the same way.
  */
 
 const REPO_ROOT = process.cwd()
@@ -48,6 +49,20 @@ for (const { entry } of CLIS) {
     // `yarn build-incremental` didn't run, and every case would misreport.
     throw new Error(`${entry} is missing; run \`yarn build-incremental\` first.`)
   }
+}
+
+/**
+ * The first GLB a CLI writes for an input: `<name>_test0.glb` next to it
+ * (`${fileNameNoExtension}_test` in each CLI's serializeGeometry, plus the
+ * chunk index). The good-export case checks the name, so a change to it
+ * fails there rather than silently missing the failed-write case.
+ *
+ * @param input Path of the model being exported.
+ * @return {string} Path of the GLB the CLI writes for chunk 0.
+ */
+function firstGlbFor(input: string): string {
+  return path.join(path.dirname(input),
+      `${path.basename(input, path.extname(input))}_test0.glb`)
 }
 
 /**
@@ -96,7 +111,25 @@ describe('exporter CLIs report failure in their exit status', () => {
         fs.copyFileSync(fixture, copy)
 
         expect(exitCodeOf(entry, ['-g', copy], scratch)).toBe(0)
-        expect(fs.readdirSync(scratch).some((f) => f.endsWith('.glb'))).toBe(true)
+        expect(fs.statSync(firstGlbFor(copy)).isFile()).toBe(true)
+      } finally {
+        fs.rmSync(scratch, { recursive: true, force: true })
+      }
+    }, SUBPROCESS_TIMEOUT_MS)
+
+    test(`${name}: a failed GLB write exits non-zero`, () => {
+      // A directory where the GLB goes makes its writeFileSync throw
+      // (EISDIR), even as root, where a read-only directory wouldn't. The
+      // CLI logs it and carries on with the other outputs, so only the exit
+      // status says the run failed.
+      const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'conway-exit-status-'))
+
+      try {
+        const copy = path.join(scratch, path.basename(fixture))
+        fs.copyFileSync(fixture, copy)
+        fs.mkdirSync(firstGlbFor(copy))
+
+        expect(exitCodeOf(entry, ['-g', copy], scratch)).not.toBe(0)
       } finally {
         fs.rmSync(scratch, { recursive: true, force: true })
       }
