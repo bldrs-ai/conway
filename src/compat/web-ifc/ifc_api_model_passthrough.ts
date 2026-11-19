@@ -83,6 +83,14 @@ export interface IfcApiModelPassthrough {
    */
   getProductsWithGeometryCount?(): number
 
+  /**
+   * The most geometry bytes the model's geometry store has held at once
+   * (GeometrySizeTracker's peak). Grows as a demand pump extracts, and stays
+   * at its high-water mark when a residency budget evicts; IfcAPI copies it
+   * onto the model's Statistics as geometryMemory (MB).
+   */
+  getGeometryPeakBytes?(): number
+
   getCoordinationMatrix(): number[]
 
   /**

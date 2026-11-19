@@ -880,6 +880,21 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
    *
    * @return {number} The count.
    */
+  /**
+   * The model's geometry high-water mark in bytes (conway#740 follow-up) —
+   * see IfcApiModelPassthrough.getGeometryPeakBytes.
+   *
+   * @return {number} Peak bytes.
+   */
+  getGeometryPeakBytes(): number {
+    return this.model[1].model.geometry.size.peakBytes
+  }
+
+  /**
+   * See IfcApiModelPassthrough.getProductsWithGeometryCount.
+   *
+   * @return {number} The count.
+   */
   getProductsWithGeometryCount(): number {
     return this.model[1].geometryOwnerCount
   }

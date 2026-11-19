@@ -4,6 +4,7 @@ import { ModelGeometry } from '../core/model'
 import IfcStepModel from './ifc_step_model'
 import { IfcBooleanResult, IfcGeometricRepresentationItem } from './ifc4_gen'
 import { CanonicalMaterial, getMTLCleanName } from '../core/canonical_material'
+import { GeometrySizeTracker } from '../core/geometry_size_tracker'
 
 
 /**
@@ -12,6 +13,12 @@ import { CanonicalMaterial, getMTLCleanName } from '../core/canonical_material'
 export class IfcModelGeometry implements ModelGeometry {
 
   private readonly meshes_ = new Map<number, CanonicalMesh>()
+
+  /**
+   * Running geometry bytes and their high-water mark, for
+   * Statistics.geometryMemory on the demand path — see GeometrySizeTracker.
+   */
+  public readonly size = new GeometrySizeTracker()
 
   /**
    * Construct this with an IFC step model.
@@ -45,6 +52,7 @@ export class IfcModelGeometry implements ModelGeometry {
       if ( value.temporary ) {
 
         this.meshes_.delete( key )
+        this.size.noteRemoved( key )
 
         const isLastReference =
           this.model.geometryResidency.releaseReference( this, key )
@@ -95,6 +103,7 @@ export class IfcModelGeometry implements ModelGeometry {
     }
 
     this.meshes_.set(mesh.localID, mesh)
+    this.size.noteAdded( mesh.localID, mesh )
     this.model.geometryResidency.noteAdded( this, mesh )
   }
 
@@ -110,6 +119,7 @@ export class IfcModelGeometry implements ModelGeometry {
     if (value !== void 0) {
 
       this.meshes_.delete(localID)
+      this.size.noteRemoved(localID)
 
       // Freeing the native is the residency's call, not ours: a native can be
       // cached under more than one local ID (6 % of D3D's), and freeing one

@@ -1,5 +1,6 @@
 import { CanonicalMesh, CanonicalMeshType } from '../core/canonical_mesh'
 import { ModelGeometry } from '../core/model'
+import { GeometrySizeTracker } from '../core/geometry_size_tracker'
 
 
 /**
@@ -9,6 +10,13 @@ export class AP214ModelGeometry implements ModelGeometry {
 
   private readonly meshes_ = new Map< number, CanonicalMesh >()
   private readonly children_ = new Map< number, number[] >()
+
+  /**
+   * Running geometry bytes and their high-water mark, for
+   * Statistics.geometryMemory on the demand path — see GeometrySizeTracker.
+   * The same tracker as IfcModelGeometry's, so the two formats report alike.
+   */
+  public readonly size = new GeometrySizeTracker()
 
   /**
    * @return {number}
@@ -36,6 +44,7 @@ export class AP214ModelGeometry implements ModelGeometry {
     }
 
     this.meshes_.set( mesh.localID, mesh )
+    this.size.noteAdded( mesh.localID, mesh )
 
     if ( parentLocalID !== void 0 ) {
 
@@ -63,6 +72,7 @@ export class AP214ModelGeometry implements ModelGeometry {
     if ( value !== void 0 ) {
 
       this.meshes_.delete( localID )
+      this.size.noteRemoved( localID )
 
       if ( value.type === CanonicalMeshType.BUFFER_GEOMETRY ) {
 
@@ -81,6 +91,7 @@ export class AP214ModelGeometry implements ModelGeometry {
       if ( value.temporary ) {
 
         this.meshes_.delete( key )
+        this.size.noteRemoved( key )
 
         if (value.type === CanonicalMeshType.BUFFER_GEOMETRY) {
 

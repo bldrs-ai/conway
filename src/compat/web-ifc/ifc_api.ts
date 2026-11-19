@@ -1567,6 +1567,39 @@ export class IfcAPI {
     if (withGeometry !== void 0) {
       Logger.getStatistics(modelID)?.setProductsWithGeometryCount(withGeometry)
     }
+
+    this.refreshGeometryMemory_(modelID, result)
+  }
+
+  /**
+   * Raise the model's `geometryMemory` (MB) to its geometry high-water mark.
+   *
+   * The open sets it once from calculateGeometrySize(), which on a deferred
+   * open is 0: nothing is built until the pump runs. So it is refreshed
+   * wherever the products-with-geometry count is, from the store's running
+   * peak (GeometrySizeTracker) rather than its current size — under a
+   * residency budget the store only holds what was resident last. Only ever
+   * raised, so a classic open's value, measured with everything built,
+   * stands.
+   *
+   * @param modelID The model.
+   * @param result Its passthrough.
+   */
+  private refreshGeometryMemory_(
+      modelID: number, result: IfcApiModelPassthrough ): void {
+
+    const peakBytes = result.getGeometryPeakBytes?.()
+    const statistics = Logger.getStatistics(modelID)
+
+    if (peakBytes === void 0 || statistics === void 0) {
+      return
+    }
+
+    const peakMb = peakBytes / BYTES_PER_MIB
+
+    if (peakMb > (statistics.getGeometryMemory() ?? 0)) {
+      statistics.setGeometryMemory(peakMb)
+    }
   }
 
   /**
@@ -1604,6 +1637,8 @@ export class IfcAPI {
     if (withGeometry !== void 0) {
       statistics.setProductsWithGeometryCount(withGeometry)
     }
+
+    this.refreshGeometryMemory_(modelID, result)
   }
 
   /**

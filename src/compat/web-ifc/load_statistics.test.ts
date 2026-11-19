@@ -254,6 +254,62 @@ describe( 'products with geometry', () => {
   } )
 } )
 
+describe( 'geometry memory on the demand path', () => {
+
+  // A deferred open builds nothing, so the open's calculateGeometrySize() is
+  // 0, and geometryMemory used to stay there for the whole load. The pump now
+  // raises it to the geometry store's high-water mark (GeometrySizeTracker).
+  //
+  // Each open gets its own IfcAPI: a SECOND STEP open in one IfcAPI currently
+  // builds meshes with no vertices at all (calculateGeometrySize() and the
+  // streamed geometry are both empty), which would make this measure that
+  // instead. Tracked separately; not what this test is about.
+  test.each( [ 'data/index.ifc', 'data/nema-23-76mm.step' ] )( '%s', async ( fixture ) => {
+
+    await observeDiagnostics( async () => {
+
+      const classicApi = new IfcAPI()
+
+      await classicApi.Init()
+
+      const classicID = classicApi.OpenModel( read( fixture ), SETTINGS )
+
+      classicApi.StreamAllMeshes( classicID, () => {} )
+
+      const classic = classicApi.getStatistics( classicID ).getGeometryMemory() ?? 0
+
+      expect( classic ).toBeGreaterThan( 0 )
+
+      const deferredApi = new IfcAPI()
+
+      await deferredApi.Init()
+
+      const deferredID = await deferredApi.OpenModelStreamed( read( fixture ), DEFER )
+
+      expect( deferredApi.getStatistics( deferredID ).getGeometryMemory() ?? 0 ).toBe( 0 )
+
+      for ( ;; ) {
+        const { extracted, remaining } =
+          await deferredApi.ExtractGeometryBatchAsync( deferredID, 8, () => {} )
+
+        if ( extracted === 0 && remaining === 0 ) {
+          break
+        }
+      }
+
+      const deferred = deferredApi.getStatistics( deferredID ).getGeometryMemory() ?? 0
+
+      // The same per-mesh measure as the classic figure, over the same
+      // geometry, so the peak is at least what the classic open ended with.
+      expect( deferred ).toBeGreaterThan( 0 )
+      expect( deferred ).toBeGreaterThanOrEqual( classic * 0.99 )
+
+      classicApi.CloseModel( classicID )
+      deferredApi.CloseModel( deferredID )
+    } )
+  }, 120000 )
+} )
+
 describe( 'STEP products with geometry stay on the product_definition identity', () => {
 
   // The numerator maps geometry owners (product_definition_shape for an
