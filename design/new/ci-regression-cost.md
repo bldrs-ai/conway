@@ -185,6 +185,9 @@ up to 60 models), one comment on the baseline PR, images on a
 the private repo. It overlaps the per-PR diffs on purpose: a second check,
 and one whose rows correspond to the diff being merged. It can't fail the
 rc: every step is `continue-on-error` and the render is capped at 30 min.
+Each model's two exports run side by side, each killed after 3 min (a model
+that loads in about a minute and has not exported in three is hung, as in
+conway#792); measured cost is about 2-3x the model's digest-pass load time.
 Private images are linked through `github.com/<repo>/raw/…`, which needs a
 signed-in member, and are never uploaded as a conway run artifact; the
 public target's `rc-visual-diff-*` artifact holds its PNGs too.

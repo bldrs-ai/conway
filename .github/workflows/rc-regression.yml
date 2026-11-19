@@ -130,15 +130,19 @@ jobs:
     #   blessed digest pass                            ~20m30s -> cap    35m
     #   gc-off control pass (perf_ab only)             ~20m    -> cap    35m
     #   gates, summaries, artifact, bless, PR, post       ~15s  -> budget  3m
-    #   baseline-PR visual diff (render capped)            ?     -> cap    30m
+    #   baseline-PR visual diff (private, 20 models)    ~15m   -> cap    30m
     #                                                            --------
     #                                       perf_ab run:          113m
     #                                       plain rc  :            78m
     #
-    # The visual diff's real cost is not measured yet: it renders each
-    # changed model twice (up to 60), so it scales with the rc's churn, not
-    # the corpus. It is capped at 30 and cannot fail the job; replace the
-    # "?" with a measured time after the first rc that runs it.
+    # The visual diff scales with the rc's churn, not the corpus: per
+    # changed model it exports twice (base and candidate, side by side) and
+    # rasterizes the pair, about 2-3x the model's digest-pass load time.
+    # Measured on run 44427996967 with the exports still serial: public, 38
+    # models in 4m55s; private, 13 of 20 models in ~20m before one export
+    # hung (conway#792) and the cap cut the rest. Running the two exports
+    # side by side took a local re-run of the public 38 from 4m46s to 3m08s,
+    # which puts the private 20 at roughly 15m. Re-measure on the next rc.
     #
     # 120 leaves ~7 min over the perf_ab budget, and every heavy pass is
     # separately capped, so a wedge is cancelled inside its own step long
@@ -992,6 +996,7 @@ jobs:
             --base engines/base --cand "$GITHUB_WORKSPACE" \
             --out vdout --max 60 \
             --diff-threshold 0.0005 \
+            --export-timeout 180 \
             --base-label "last blessed (${BLESSED_SHA:0:8})" \
             --cand-label "this rc (${GITHUB_SHA:0:8})"
         env:
