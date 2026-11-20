@@ -1836,15 +1836,25 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
     await flushProductBatch()
 
+    // The aggregate pass follows the same rule as the product loop above
+    // (see the note in pumpGeometryBatchAsync_'s aggregate loop): over a
+    // store that faults windows in, no relationship prefetch, and the
+    // relationship's extract runs with its captured views tracked and
+    // dropped; over an async-only store, prefetch and pin as before.
     for ( const relAggregate of model.types( IfcRelAggregates ) ) {
 
       const leafSpans: { address: number, length: number }[] = []
-      const pins =
+      const pins = faultsIn ? new Set< number >() :
         await conwayGeometry.ensureResidentForAggregateExtract(
             relAggregate, leafSpans )
 
       try {
-        conwayGeometry.extractRelAggregateGeometry( relAggregate )
+        if ( faultsIn ) {
+          model.readTrackingSourceViews(
+              () => conwayGeometry.extractRelAggregateGeometry( relAggregate ) )
+        } else {
+          conwayGeometry.extractRelAggregateGeometry( relAggregate )
+        }
       } catch ( error ) {
         Logger.error(
             `Error extracting aggregate ${relAggregate.expressID}: ` +
@@ -3474,6 +3484,34 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     // demandAggregateStepper_ and conway#549 §7. The prefetch and its pins
     // stay attached to the relationship, not to the batch, so a relationship
     // that spans batches is paged in once.
+    //
+    // Over a store that reads synchronously the aggregate pass gets the
+    // product pass's treatment (conway#786, above): no AggregateExtractPager,
+    // whose `begin` pages the relationship and its relating product's closure
+    // and whose `ensureForStep` pages and pins each wave of related products'
+    // closures ahead of the stepper. Each step is synchronous between its
+    // yields, so it runs inside readTrackingSourceViews and drops what it
+    // captured, and a miss faults its window in. The pager's waves pinned
+    // windows the LRU then could not evict, so the window grew and evicted
+    // other windows that were read again. On D3D (headless Chromium, OPFS
+    // sync access handle, medians of 5) store reads went 684 -> 586, the
+    // final window 158 -> 126 MB, peak worker backing store 1,389 -> 989 MB
+    // and geometry 52.1 -> 46.7 s; geometry is byte-identical on all four
+    // models measured, and none got slower.
+    // An async-only store keeps the pager, since a miss there throws. A read
+    // that fails fails its related product, not the relationship
+    // (IfcGeometryExtraction.extractRelatedProductGeometry_).
+    const aggregateModel = this.model[0]
+    const aggregateFaultsIn = aggregateModel.sourceReadsSynchronously
+
+    // The product pass sweeps on its first batch; a model whose products
+    // are all aggregate targets reaches here without one.
+    if (this.demandCursor_ >= products.length && aggregateFaultsIn &&
+        !this.sourceViewsSwept_) {
+      aggregateModel.releaseAllSourceViews()
+      this.sourceViewsSwept_ = true
+    }
+
     if (this.demandCursor_ >= products.length) {
 
       while (extracted < budget &&
@@ -3484,14 +3522,16 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
           const relAggregate = this.relAggregateAt_(this.demandAggregatesCursor_)
 
-          this.demandAggregatePager_ =
-            await this.conwayGeometry_.beginAggregateExtract(
-                relAggregate, budget)
+          if (!aggregateFaultsIn) {
+            this.demandAggregatePager_ =
+              await this.conwayGeometry_.beginAggregateExtract(
+                  relAggregate, budget)
+          }
           this.demandAggregateSteps_ = 0
           this.demandAggregateStepper_ =
             this.conwayGeometry_.extractRelAggregateGeometryIncremental(
                 relAggregate)
-        } else if (this.demandAggregatePager_ === void 0) {
+        } else if (this.demandAggregatePager_ === void 0 && !aggregateFaultsIn) {
 
           // Dropped by a spill mid-relationship (spillSourceToExternalStore):
           // page what is left of it through the store, from the step the
@@ -3512,7 +3552,10 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
         let done = false
 
         try {
-          done = this.demandAggregateStepper_.next().done === true
+          const stepper = this.demandAggregateStepper_
+          done = (aggregateFaultsIn ?
+            aggregateModel.readTrackingSourceViews(() => stepper.next()) :
+            stepper.next()).done === true
         } catch (error) {
           Logger.error(
               'Error extracting aggregate ' +
