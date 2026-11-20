@@ -8874,7 +8874,7 @@ export class IfcGeometryExtraction {
 
           if ( productRepresentation instanceof IfcProduct ) {
 
-            this.extractProductGeometry( productRepresentation, masterRelVoids )
+            this.extractRelatedProductGeometry_( productRepresentation, masterRelVoids )
 
             yield ++extractedCount
           }
@@ -8891,7 +8891,7 @@ export class IfcGeometryExtraction {
 
           if ( relatedProduct !== void 0 ) {
 
-            this.extractProductGeometry( relatedProduct, masterRelVoids )
+            this.extractRelatedProductGeometry_( relatedProduct, masterRelVoids )
 
             yield ++extractedCount
           }
@@ -8935,6 +8935,44 @@ export class IfcGeometryExtraction {
       if ( masterRelVoids !== void 0 ) {
         masterRelVoids[ 0 ].delete()
       }
+    }
+  }
+
+  /**
+   * One related product of {@link extractRelAggregateGeometryIncremental}:
+   * {@link extractProductGeometry}, with a failed store read stopping that
+   * product rather than the relationship.
+   *
+   * A `StepSourceReadError` (a store's `readSync` threw, conway#786) means
+   * this product's bytes were unavailable, not that the relationship is
+   * malformed. Left to the stepper's catch, it abandoned every related
+   * product after this one, and those are aggregate targets the product
+   * pass leaves to this pass (aggregateTargetLocalIDs), so they went missing
+   * as well. Here the product's extraction stops at the failed read and is
+   * logged once, with the message the pumps' per-product catch writes
+   * (conway#526), and the stepper goes on to the next product. Nothing is
+   * rolled back: representation items this product had already added to
+   * the scene before the failing one stay there, exactly as they do when
+   * the product pass's own catch takes a failed read (conway#786). Anything
+   * other than a failed read still reaches the stepper's catch, as before.
+   *
+   * @param product The related product.
+   * @param masterRelVoids The relating object's rel-voids, caller-owned.
+   */
+  private extractRelatedProductGeometry_(
+      product: IfcProduct,
+      masterRelVoids: [ NativeVectorGeometry, number[] ] | undefined ): void {
+
+    try {
+      this.extractProductGeometry( product, masterRelVoids )
+    } catch ( error ) {
+
+      if ( !( error instanceof StepSourceReadError ) ) {
+        throw error
+      }
+
+      Logger.error(
+          `Error extracting product localID ${product.localID}: ${error.message}` )
     }
   }
 
@@ -9417,6 +9455,10 @@ export class IfcGeometryExtraction {
  * non-products to reach the next product would page the whole run at once,
  * and an `IfcTypeObject` with `RepresentationMaps` is 1,607 records of
  * closure by itself (conway#566 review).
+ *
+ * Only over a store that reads asynchronously. Over one with `readSync`
+ * the pumps step the relationship without a pager and let each read fault
+ * its window in (IfcApiProxyIfc, conway#786).
  */
 export class AggregateExtractPager {
 

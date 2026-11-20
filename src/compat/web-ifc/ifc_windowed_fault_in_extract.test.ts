@@ -21,7 +21,11 @@
 //    OpenModelStream) follows the same rule;
 //  - a synchronous read that throws fails its product (logged once, by the
 //    pump) and nothing else: no product is delivered partial and the load
-//    goes on (StepSourceReadError).
+//    goes on (StepSourceReadError);
+//  - the aggregate pass (the second product pass, over IfcRelAggregates)
+//    follows the same rule, in both opens, tracking views per related
+//    product rather than per relationship, and a failed read stops its
+//    related product rather than abandoning the relationship.
 //
 // Every open here runs at a 256-byte window with a cap of one chunk from the
 // start (WindowedStepBufferProvider.defaultWindowForTests), so the parse,
@@ -58,11 +62,6 @@ const FIXTURES = [
   'data/grid_placement.ifc',
 ]
 
-// The fixtures whose product pump reads enough at the tiny window to evict
-// a window and fault it in again. aggregate_paged_prefetch.ifc's geometry is
-// all under its aggregate, which the aggregate pager pages ahead.
-const REREADS = new Set( FIXTURES.filter( ( path ) => !path.includes( 'aggregate_paged_prefetch' ) ) )
-
 // Small enough that every product's records span several windows, with a
 // cap of 1 so the extract evicts and re-faults windows mid-product.
 const TINY_CHUNK_BYTES = 256
@@ -94,8 +93,8 @@ interface WindowedModel {
 /**
  * The most records one batch of the product pump pinned: its closure walk
  * is the only thing that pins into that set, so 0 means no product was
- * walked. (The aggregate pager walks its related products through its own
- * pins, outside this change's scope.)
+ * walked. (The aggregate pass does not pin into it; see the aggregate tests
+ * at the end of this file.)
  *
  * @param api The API.
  * @param modelID The model.
@@ -275,7 +274,7 @@ describe( 'windowed IFC pump over a store that faults windows in (conway#786)', 
     // The window really was too small: the pump's reads faulted windows
     // in, and some window was evicted and faulted in again during it.
     expect( provider.syncFaultCount ).toBeGreaterThan( faultsAtOpen )
-    expect( Math.max( ...store.syncReadsAt.values() ) > 1 ).toBe( REREADS.has( path ) )
+    expect( Math.max( ...store.syncReadsAt.values() ) ).toBeGreaterThan( 1 )
 
     api.CloseModel( modelID )
   }, 120000 )
@@ -546,6 +545,276 @@ describe( 'a failed synchronous read fails its product, not the load (conway#786
 
     // No product is delivered partial: everything that arrived is exactly
     // what the resident open delivers for it.
+    for ( const [ expressID, placed ] of meshes ) {
+      expect( placed ).toEqual( expected.get( expressID ) )
+    }
+
+    api.CloseModel( modelID )
+  }, 120000 )
+} )
+
+
+describe( 'windowed IFC aggregate pass over a store that faults windows in (conway#786)', () => {
+
+  // Twelve parts, every one of them under one IfcRelAggregates, so the
+  // whole model's geometry comes from the aggregate pass.
+  const AGGREGATE = 'data/aggregate_paged_prefetch.ifc'
+
+  /**
+   * Count the aggregate pass's prefetches: the deferred pump's wave pager
+   * and the non-deferred open's whole-relationship prefetch.
+   *
+   * @return {{pagers: number, prefetches: number}} The live counts.
+   */
+  function countAggregateWalks(): { pagers: number, prefetches: number } {
+
+    const counter = { pagers: 0, prefetches: 0 }
+    const beginPager = IfcGeometryExtraction.prototype.beginAggregateExtract
+    const prefetch = IfcGeometryExtraction.prototype.ensureResidentForAggregateExtract
+
+    jest.spyOn( IfcGeometryExtraction.prototype, 'beginAggregateExtract' )
+        .mockImplementation( function ( this: IfcGeometryExtraction, ...args ) {
+          ++counter.pagers
+          return beginPager.apply( this, args )
+        } )
+
+    jest.spyOn( IfcGeometryExtraction.prototype, 'ensureResidentForAggregateExtract' )
+        .mockImplementation( function ( this: IfcGeometryExtraction, ...args ) {
+          ++counter.prefetches
+          return prefetch.apply( this, args )
+        } )
+
+    return counter
+  }
+
+  test( 'deferred pump: no aggregate pager, windows evicted and faulted in, geometry identical to resident', async () => {
+
+    jest.spyOn( console, 'warn' ).mockImplementation( () => {} )
+
+    const expected = await residentGeometry( AGGREGATE )
+    const walks = countAggregateWalks()
+    const store = syncStore( new Uint8Array( fs.readFileSync( AGGREGATE ) ) )
+    const { api, modelID, model, provider } = await openWindowed( AGGREGATE, store )
+    const faultsAtOpen = provider.syncFaultCount
+
+    store.syncReadsAt.clear()
+
+    // pump() also checks, after every batch, that no view is left tracked:
+    // the aggregate steps run inside readTrackingSourceViews.
+    expect( await pump( api, modelID, model ) ).toEqual( expected )
+    expect( walks.pagers ).toBe( 0 )
+
+    // With the pager, the parts' closures were paged and pinned ahead of
+    // the stepper and no window was read twice; without it the stepper's
+    // own reads evict and fault windows back in.
+    expect( provider.syncFaultCount ).toBeGreaterThan( faultsAtOpen )
+    expect( Math.max( ...store.syncReadsAt.values() ) ).toBeGreaterThan( 1 )
+
+    api.CloseModel( modelID )
+  }, 120000 )
+
+  test( 'deferred pump: without readSync the aggregate pager still pages', async () => {
+
+    jest.spyOn( console, 'warn' ).mockImplementation( () => {} )
+
+    const expected = await residentGeometry( AGGREGATE )
+    const walks = countAggregateWalks()
+    const bytes = new Uint8Array( fs.readFileSync( AGGREGATE ) )
+    const { api, modelID, model, provider } = await openWindowed( AGGREGATE, new InMemoryStepByteStore( bytes ) )
+
+    expect( await pump( api, modelID, model ) ).toEqual( expected )
+    expect( walks.pagers ).toBeGreaterThan( 0 )
+    expect( provider.syncFaultCount ).toBe( 0 )
+
+    api.CloseModel( modelID )
+  }, 120000 )
+
+  test( 'non-deferred open: no aggregate prefetch with readSync, geometry identical to resident; one without', async () => {
+
+    jest.spyOn( console, 'warn' ).mockImplementation( () => {} )
+
+    const bytes = new Uint8Array( fs.readFileSync( AGGREGATE ) )
+    const reference = new IfcAPI()
+
+    await reference.Init()
+
+    const referenceID = reference.OpenModel( bytes.slice(), EAGER )
+    const expected = new Map< number, string[] >()
+
+    reference.StreamAllMeshes( referenceID, ( mesh ) => {
+      expected.set( mesh.expressID, flatten( reference, referenceID, mesh, expected.get( mesh.expressID ) ) )
+    } )
+    reference.CloseModel( referenceID )
+
+    expect( expected.size ).toBeGreaterThan( 0 )
+
+    const walks = countAggregateWalks()
+
+    for ( const withReadSync of [ true, false ] ) {
+
+      walks.prefetches = 0
+
+      const store = withReadSync ? syncStore( bytes ) : new InMemoryStepByteStore( bytes )
+      const { api, modelID } = await openWindowed( AGGREGATE, store, EAGER )
+      const meshes = new Map< number, string[] >()
+
+      api.StreamAllMeshes( modelID, ( mesh ) => {
+        meshes.set( mesh.expressID, flatten( api, modelID, mesh, meshes.get( mesh.expressID ) ) )
+      } )
+
+      expect( meshes ).toEqual( expected )
+      expect( walks.prefetches > 0 ).toBe( !withReadSync )
+
+      api.CloseModel( modelID )
+    }
+  }, 120000 )
+
+  /**
+   * Watch the views tracked as the aggregate stepper resumes: the most a
+   * step found still tracked when it started. With tracking per step that
+   * is always 0, since the previous step's views were dropped when its
+   * next() returned; with one tracking span over the whole relationship,
+   * every step after the first starts with the earlier steps' views held.
+   *
+   * @return {{steps: number, maxHeldAtStep: number}} The live record.
+   */
+  function watchAggregateSteps(): { steps: number, maxHeldAtStep: number } {
+
+    const record = { steps: 0, maxHeldAtStep: 0 }
+    const incremental = IfcGeometryExtraction.prototype.extractRelAggregateGeometryIncremental
+
+    jest.spyOn( IfcGeometryExtraction.prototype, 'extractRelAggregateGeometryIncremental' )
+        .mockImplementation( function* ( this: IfcGeometryExtraction, ...args ) {
+
+          const model = this.model as unknown as WindowedModel
+
+          for ( const step of incremental.apply( this, args ) ) {
+
+            yield step
+
+            // Resumed: the start of the next step's next().
+            ++record.steps
+            record.maxHeldAtStep = Math.max( record.maxHeldAtStep, model.capturedSourceViewCount )
+          }
+        } )
+
+    return record
+  }
+
+  test.each( [ [ 'deferred', SETTINGS ], [ 'non-deferred', EAGER ] ] )(
+      '%s open: views are tracked and dropped per related product, not per relationship',
+      async ( _name, settings ) => {
+
+        jest.spyOn( console, 'warn' ).mockImplementation( () => {} )
+
+        const record = watchAggregateSteps()
+        const store = syncStore( new Uint8Array( fs.readFileSync( AGGREGATE ) ) )
+        const { api, modelID, model } = await openWindowed( AGGREGATE, store, settings as Loadersettings )
+
+        if ( settings === SETTINGS ) {
+          await pump( api, modelID, model )
+        } else {
+          api.StreamAllMeshes( modelID, () => {} )
+        }
+
+        // Twelve parts: eleven resumptions inside the relationship.
+        expect( record.steps ).toBeGreaterThanOrEqual( 11 )
+        expect( record.maxHeldAtStep ).toBe( 0 )
+        expect( model.capturedSourceViewCount ).toBe( 0 )
+
+        api.CloseModel( modelID )
+      }, 120000 )
+
+  test( 'a model whose products are all aggregate targets drops earlier readers\' views on its first aggregate batch', async () => {
+
+    // The fixture with its IfcElementAssembly taken out and the project as
+    // the relating object: every IfcProduct left is a related part, so the
+    // product pass has nothing to extract and never runs the sweep its
+    // first batch would (see the deferred pump's aggregate loop).
+    const text = fs.readFileSync( AGGREGATE, 'utf8' )
+        .replace( /^#100=IFCELEMENTASSEMBLY\(.*\);\n/m, '' )
+        .replace( /(#500=IFCRELAGGREGATES\([^,]*,\$,\$,\$,)#100,/, '$1#1,' )
+
+    expect( text ).not.toContain( 'IFCELEMENTASSEMBLY' )
+    expect( text ).toMatch( /#500=IFCRELAGGREGATES\([^,]*,\$,\$,\$,#1,/ )
+
+    const bytes = new Uint8Array( Buffer.from( text, 'utf8' ) )
+    const { api, modelID, model } = await openWindowed( AGGREGATE, syncStore( bytes ) )
+
+    // An IfcGroup in RelatedObjects: the aggregate pass materialises it
+    // from the columns and reads none of its bytes, so only the sweep can
+    // drop a view of it.
+    const groupLocalID = model.resolveExpressID( 150 ) as number
+
+    model.getElementByExpressID( 150 )?.extractLineArguments()
+
+    expect( model.descriptorCache_[ groupLocalID ]?.buffer ).toBeDefined()
+
+    const { extracted } = await api.ExtractGeometryBatchAsync( modelID, 1 )
+
+    expect( extracted ).toBeGreaterThan( 0 )
+    expect( model.descriptorCache_[ groupLocalID ]?.buffer ).toBeUndefined()
+
+    api.CloseModel( modelID )
+  }, 120000 )
+
+  test( 'a failed synchronous read stops its related product, and the rest of the relationship extracts whole', async () => {
+
+    jest.spyOn( console, 'warn' ).mockImplementation( () => {} )
+
+    const expected = await residentGeometry( AGGREGATE )
+    const bytes = new Uint8Array( fs.readFileSync( AGGREGATE ) )
+
+    // The window holding Part_1's profile: read only by that part's
+    // extract (and, at this window size, perhaps a neighbour's).
+    const profile = Buffer.from( bytes ).indexOf( '#1025=IFCRECTANGLEPROFILEDEF(' )
+    const failing = Math.floor( profile / TINY_CHUNK_BYTES ) * TINY_CHUNK_BYTES
+
+    expect( profile ).toBeGreaterThan( 0 )
+
+    const good = syncStore( bytes )
+    let failures = 0
+    const store: StepExternalByteStore = {
+      byteLength: good.byteLength,
+      read: good.read,
+      readSync: ( offset: number, length: number ) => {
+
+        if ( offset === failing ) {
+          ++failures
+          throw new Error( 'simulated handle failure' )
+        }
+
+        return good.readSync!( offset, length )
+      },
+    }
+
+    const errors: string[] = []
+
+    jest.spyOn( Logger, 'error' ).mockImplementation( ( ( message: string ) => {
+      errors.push( message )
+    } ) as typeof Logger.error )
+
+    // pump() checks after every batch, the throwing one included, that no
+    // view is left tracked.
+    const { api, modelID, model } = await openWindowed( AGGREGATE, store )
+    const meshes = await pump( api, modelID, model )
+
+    expect( failures ).toBeGreaterThan( 0 )
+
+    const failed = errors.filter( ( message ) =>
+      message.startsWith( 'Error extracting product' ) && message.includes( 'simulated handle failure' ) )
+
+    // Each failed part logged once, the relationship never abandoned, and
+    // only the failed parts missing. Every part here has a single
+    // representation item, so a failed part delivers nothing; a part with
+    // several keeps the items it added before the failing one (nothing is
+    // rolled back, as in the product pass).
+    expect( failed.length ).toBeGreaterThan( 0 )
+    expect( failed.length ).toBe( new Set( failed ).size )
+    expect( errors.some( ( message ) => message.startsWith( 'Error processing relAggregate' ) ) ).toBe( false )
+    expect( meshes.size ).toBe( expected.size - failed.length )
+    expect( meshes.size ).toBeGreaterThan( 0 )
+
     for ( const [ expressID, placed ] of meshes ) {
       expect( placed ).toEqual( expected.get( expressID ) )
     }
