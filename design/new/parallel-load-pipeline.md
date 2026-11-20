@@ -56,6 +56,9 @@ two on the model that shows it.
    213.6 MB file — 220× amplification**; `agg.step` is another 27.5 %.
    Index build is **1.6 %** and per-product extraction **1.3 %**
    *(measured here)*. Filed as **[#616](https://github.com/bldrs-ai/conway/issues/616)**.
+   *(Since #798 the pager runs only over async-only stores: over a
+   `readSync` store the aggregate pass faults windows in without it; see
+   memory-residency.md §4.)*
    PSB does not show it at all. **Perfect parallelism in the two phases
    this milestone targets saves under 2 % of a D3D load while #616 burns
    56 %.** The mechanism is measured; it is **not diagnosed**, and this
@@ -1152,7 +1155,8 @@ Three things fall out, and none is about parallelism:
   paging its windowed source. The load read **47.1 GB from a 213.6 MB
   file** (220× re-read) and spent 63.1 s inside `readSync`; the other
   ~87 s inside `ensureForStep` is closure walking and pin bookkeeping,
-  not I/O. **Filed as #616.**
+  not I/O. **Filed as #616.** *(Measured before #798, which removed the pager
+  from the `readSync` path; see memory-residency.md §4.)*
 - **`sceneWalk` is 6.5 %, and it is structurally quadratic.**
   `streamNewMeshes_` re-walks the scene once per batch; 4,018 batches over
   a scene growing to 192,022 meshes. This is the same structure §9's

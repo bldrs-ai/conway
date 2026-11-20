@@ -1838,9 +1838,14 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
     // The aggregate pass follows the same rule as the product loop above
     // (see the note in pumpGeometryBatchAsync_'s aggregate loop): over a
-    // store that faults windows in, no relationship prefetch, and the
-    // relationship's extract runs with its captured views tracked and
+    // store that faults windows in, no relationship prefetch, and each
+    // related product's step runs with its captured views tracked and
     // dropped; over an async-only store, prefetch and pin as before.
+    //
+    // Per step, not per relationship: a view keeps its window alive after
+    // the LRU evicts it, so tracking across a whole relationship would hold
+    // every window that relationship read until its last part, and a
+    // relationship can span most of a file.
     for ( const relAggregate of model.types( IfcRelAggregates ) ) {
 
       const leafSpans: { address: number, length: number }[] = []
@@ -1850,8 +1855,13 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
       try {
         if ( faultsIn ) {
-          model.readTrackingSourceViews(
-              () => conwayGeometry.extractRelAggregateGeometry( relAggregate ) )
+
+          const stepper =
+            conwayGeometry.extractRelAggregateGeometryIncremental( relAggregate )
+
+          while ( model.readTrackingSourceViews( () => stepper.next() ).done !== true ) {
+            // Each step is one related product; see above.
+          }
         } else {
           conwayGeometry.extractRelAggregateGeometry( relAggregate )
         }

@@ -181,6 +181,28 @@ PSB's store traffic is *bit-identical* — same 583 reads, same 2,754 MB, cap
 never leaves 16 — so its wall-clock spread is run-to-run noise, not the
 policy.
 
+**Since #798 the pager runs only over async-only stores.** Over a store
+with `readSync`, which is every store Share's engine worker opens today, the
+aggregate pass runs no `AggregateExtractPager` and no
+`ensureResidentForAggregateExtract` prefetch, in either the deferred pump or
+the non-deferred open. Each related product's step reads synchronously and
+faults its windows in (`WindowedStepBufferProvider.faultInSync_`), and the
+views it captured are dropped when the step returns
+(`StepModelBase.readTrackingSourceViews`). This is the same rule #787
+applied to the product pass. The pager's pinned waves had held windows the
+LRU could not evict, so the window grew and other windows were read again.
+Measured on D3D in headless Chromium (Share's source-mode bench, windowed
+arm over the OPFS sync access handle, cold loads, medians of 5 interleaved
+rounds):
+- store reads 684 → 586, and the final window 158 → 126 MB;
+- peak worker backing store 1,389 → 989 MB;
+- geometry 52.1 → 46.7 s.
+
+PSB and a 243 MB ARCHICAD model are unchanged, and a 309 MB ARCHICAD 22
+IFC2X3 model's geometry went 13.6 → 12.8 s. Geometry is byte-identical on
+all four. The pager, its waves and the numbers in the table above still
+describe an async-only store.
+
 **The memory cost, stated plainly:** a model that trips the trigger holds up
 to `min(fileBytes, 160 MiB)` of source chunks for the provider's life
 (#785 shipped 256 MiB; #786's measurements lowered it to 160),
