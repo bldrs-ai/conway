@@ -125,11 +125,30 @@ def parse_shard(path: str, root: str | None = None) -> tuple[str, list[str]]:
                     resolve_private(Path(root), entries)]
 
 
-def exclude_regex(names: list[str]) -> str:
-    """Batch CLI exclude regex: model FILES whose basename is NOT in names."""
-    alts = '|'.join(re.escape(n) for n in names)
+def exclude_regex(selectors: list[str]) -> str:
+    """Batch CLI exclude regex: model FILES this shard does NOT want.
+
+    A selector is a basename for a public shard and a corpus-relative
+    PATH for a private one. The batch tests this against
+    `path.join(parentPath, name)` (collectIFCFiles), so a path selector
+    matches `models/ifc/<dir>/<file>` through the optional `.*/` prefix,
+    and a basename selector still matches wherever it sits.
+
+    Path selectors are why `cmd_regex` resolves a private shard rather
+    than reducing it to basenames: a basename would admit a same-named
+    file in another directory, which `cmd_pull` never materialized - so
+    the batch would meet it as an LFS stub and fail the shard, or digest
+    it and overwrite the selected model's same-stem outputs (codex
+    review of this PR). Public shards keep basenames; their duplicate
+    case is documented in find_paths and predates sharding.
+
+    Extension-anchored on purpose: the batch applies this same regex to
+    DIRECTORIES as it walks, and a pattern a directory could match would
+    stop recursion entirely.
+    """
+    alts = '|'.join(re.escape(s) for s in selectors)
     return (
-        rf'^(?!.*/(?:{alts})$)'
+        rf'^(?!(?:.*/)?(?:{alts})$)'
         r'.*\.(?:[iI][fF][cC]|[sS][tT][eE][pP]|[sS][tT][pP])$'
     )
 
@@ -179,8 +198,18 @@ def is_lfs_stub(path: Path) -> bool:
 
 
 def cmd_regex(args: argparse.Namespace) -> None:
-    _, names = parse_shard(args.shard, args.root)
-    print(exclude_regex(names), end='')
+    corpus, entries = shard_entries(args.shard)
+    if corpus == 'private':
+        if args.root is None:
+            raise SystemExit(
+                f'{args.shard} is a private shard, so building its filter '
+                'needs the corpus root')
+        # Resolved PATHS, not basenames: see exclude_regex.
+        selectors = [rel for _, rel in
+                     resolve_private(Path(args.root), entries)]
+    else:
+        selectors = entries
+    print(exclude_regex(selectors), end='')
 
 
 def cmd_corpus(args: argparse.Namespace) -> None:
