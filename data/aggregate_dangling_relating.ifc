@@ -1,0 +1,95 @@
+ISO-10303-21;
+HEADER;
+FILE_DESCRIPTION((''),'2;1');
+FILE_NAME('aggregate_dangling_relating.ifc','2026-09-18T00:00:00',(''),(''),'','','');
+FILE_SCHEMA(('IFC4'));
+ENDSEC;
+DATA;
+/* Synthetic model for conway#708 / bldrs-ai/ops#28: an IfcRelAggregates
+   whose RelatingObject cannot be resolved must skip that relationship and
+   be counted, never end the load.
+
+   Three relationships, one control and one per flavour of unresolved
+   reference — the two the step layer distinguishes (see
+   src/step/dangling_reference_error.ts), which throw different errors from
+   the same getter and both have to be absorbed:
+
+     #700  RelatingObject -> #100, a real IfcElementAssembly.   CONTROL.
+     #500  RelatingObject -> #11,  an IFCSIUNIT: indexed, but not an
+           IfcObjectDefinition, so the generated getter throws a bare
+           Error('Value in STEP was incorrectly typed'). This is the
+           production shape — a SketchUp Pro 2015 IFC4X3_RC2 export,
+           Sentry SHARE-1PA.
+     #600  RelatingObject -> #9999, absent from the file entirely, so the
+           same getter throws DanglingReferenceError.
+
+   Both defective relationships carry ONE related part each, with its own
+   geometry. They are aggregate targets, so the product pass defers them and
+   the aggregates pass is the only thing that would extract them — which is
+   the point: the pass abandons a relationship it cannot read the relating
+   object of, so those two boxes are the geometry a skip costs, and the
+   control's box is the geometry it must NOT cost.
+
+   The two defects share one diagnostic message and so one Logger entry,
+   whose `count` is 2 and whose `expressIDs` are #500 and #600. That is the
+   "skips are counted" claim in its smallest testable form: a message that
+   interpolated the error text would split them into two entries of count 1,
+   because DanglingReferenceError writes #9999 into its own message. */
+#1=IFCPROJECT('2MGsW4SvH5ROrTn3s4kgQ1',$,'AggregateDanglingRelating',$,$,$,$,(#20),#10);
+#10=IFCUNITASSIGNMENT((#11));
+/* Not an IfcObjectDefinition — #500 points its RelatingObject here. */
+#11=IFCSIUNIT(*,.LENGTHUNIT.,$,.METRE.);
+#20=IFCGEOMETRICREPRESENTATIONCONTEXT($,'Model',3,1.0E-05,#21,$);
+#21=IFCAXIS2PLACEMENT3D(#22,$,$);
+#22=IFCCARTESIANPOINT((0.,0.,0.));
+#23=IFCDIRECTION((0.,0.,1.));
+/* The one well-formed relating object. */
+#100=IFCELEMENTASSEMBLY('1Tq8dAzOT0TvHTaVhCPZk0',$,'Assembly',$,$,#101,$,$,$,.NOTDEFINED.);
+#101=IFCLOCALPLACEMENT($,#21);
+/* Part under the control relationship: 1m box at x=0. */
+#1000=IFCBUILDINGELEMENTPART('0xGJZ4L0j9duhJ9dO$vPT2',$,'Part_Control',$,$,#1001,#1002,$,$);
+#1001=IFCLOCALPLACEMENT(#101,#1010);
+#1002=IFCPRODUCTDEFINITIONSHAPE($,$,(#1003));
+#1003=IFCSHAPEREPRESENTATION(#20,'Body','SweptSolid',(#1004));
+#1004=IFCEXTRUDEDAREASOLID(#1005,#1008,#23,1.);
+#1005=IFCRECTANGLEPROFILEDEF(.AREA.,$,#1006,1.,1.);
+#1006=IFCAXIS2PLACEMENT2D(#1007,$);
+#1007=IFCCARTESIANPOINT((0.5,0.5));
+#1008=IFCAXIS2PLACEMENT3D(#1009,$,$);
+#1009=IFCCARTESIANPOINT((0.,0.,0.));
+#1010=IFCAXIS2PLACEMENT3D(#1011,$,$);
+#1011=IFCCARTESIANPOINT((0.,0.,0.));
+/* Part under the mistyped relationship: 1m box at x=2. */
+#1020=IFCBUILDINGELEMENTPART('3Tg8Kpq8j4y9oHRPhbcXZ1',$,'Part_Mistyped',$,$,#1021,#1022,$,$);
+#1021=IFCLOCALPLACEMENT(#101,#1030);
+#1022=IFCPRODUCTDEFINITIONSHAPE($,$,(#1023));
+#1023=IFCSHAPEREPRESENTATION(#20,'Body','SweptSolid',(#1024));
+#1024=IFCEXTRUDEDAREASOLID(#1025,#1028,#23,1.);
+#1025=IFCRECTANGLEPROFILEDEF(.AREA.,$,#1026,1.,1.);
+#1026=IFCAXIS2PLACEMENT2D(#1027,$);
+#1027=IFCCARTESIANPOINT((0.5,0.5));
+#1028=IFCAXIS2PLACEMENT3D(#1029,$,$);
+#1029=IFCCARTESIANPOINT((0.,0.,0.));
+#1030=IFCAXIS2PLACEMENT3D(#1031,$,$);
+#1031=IFCCARTESIANPOINT((2.,0.,0.));
+/* Part under the dangling relationship: 1m box at x=4. */
+#1040=IFCBUILDINGELEMENTPART('1kkOPpRjP7$evtIEnVM2Q3',$,'Part_Dangling',$,$,#1041,#1042,$,$);
+#1041=IFCLOCALPLACEMENT(#101,#1050);
+#1042=IFCPRODUCTDEFINITIONSHAPE($,$,(#1043));
+#1043=IFCSHAPEREPRESENTATION(#20,'Body','SweptSolid',(#1044));
+#1044=IFCEXTRUDEDAREASOLID(#1045,#1048,#23,1.);
+#1045=IFCRECTANGLEPROFILEDEF(.AREA.,$,#1046,1.,1.);
+#1046=IFCAXIS2PLACEMENT2D(#1047,$);
+#1047=IFCCARTESIANPOINT((0.5,0.5));
+#1048=IFCAXIS2PLACEMENT3D(#1049,$,$);
+#1049=IFCCARTESIANPOINT((0.,0.,0.));
+#1050=IFCAXIS2PLACEMENT3D(#1051,$,$);
+#1051=IFCCARTESIANPOINT((4.,0.,0.));
+/* Mistyped: #11 is an IFCSIUNIT, not an IfcObjectDefinition. */
+#500=IFCRELAGGREGATES('3HP3HXWQ55evtXCnwJlQb0',$,$,$,#11,(#1020));
+/* Dangling: #9999 is not in the file. */
+#600=IFCRELAGGREGATES('2pxYzWbG52pQRXSU9$Nz13',$,$,$,#9999,(#1040));
+/* Control: a real assembly over a real part. */
+#700=IFCRELAGGREGATES('0Z3aJ3sbrEUAJ$ItEsr5v2',$,$,$,#100,(#1000));
+ENDSEC;
+END-ISO-10303-21;

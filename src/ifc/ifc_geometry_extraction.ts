@@ -51,9 +51,10 @@ import {
   FlattenedPointsResult,
 } from '../../dependencies/conway-geom'
 import { Uint32Sink } from '../step/parsing/uint32_sink'
-import { StepBufferNotResidentError } from '../step/step_buffer_provider'
+import { StepBufferNotResidentError, StepSourceReadError } from '../step/step_buffer_provider'
 import {
   DanglingReferenceError,
+  isUnresolvedReferenceError,
   unresolvedReferenceError,
 } from '../step/dangling_reference_error'
 import { DanglingPlacementError } from './dangling_placement_error'
@@ -146,6 +147,10 @@ import {
   IfcMaterialConstituent,
   IfcMaterialProfile,
   IfcProject,
+  IfcUnitAssignment,
+  IfcDerivedUnit,
+  IfcMonetaryUnit,
+  IfcNamedUnit,
   IfcSIUnit,
   IfcSIPrefix,
   IfcUnitEnum,
@@ -183,6 +188,8 @@ import {
   IfcTShapeProfileDef,
   IfcZShapeProfileDef,
   IfcRelAggregates,
+  IfcRelDefinesByType,
+  IfcTypeObject,
   IfcObjectDefinition,
   IfcTriangulatedFaceSet,
   IfcPolygonalBoundedHalfSpace,
@@ -206,7 +213,7 @@ import EntityTypesIfc from './ifc4_gen/entity_types_ifc.gen'
 import { IfcMaterialCache } from './ifc_material_cache'
 import { IfcSceneBuilder, IfcSceneTransform } from './ifc_scene_builder'
 import IfcStepModel from './ifc_step_model'
-import Logger from '../logging/logger'
+import Logger, { DATA_DEFECT } from '../logging/logger'
 import {
   arraysToWasmHeap, arrayToWasmHeap, freeAll, wasmHeapView, withRelease,
 } from '../core/wasm_heap'
@@ -381,6 +388,16 @@ const REL_AGGREGATES_RELATING_DEPTH = 3
 const REL_ASSOCIATES_RELATED_OFFSET = 4
 const REL_ASSOCIATES_RELATED_BASE = 4
 const REL_ASSOCIATES_RELATED_DEPTH = 2
+
+/** IfcRelDefinesByType.RelatedObjects — see IfcRelDefinesByType.gen.ts. */
+const REL_DEFINES_BY_TYPE_RELATED_OFFSET = 4
+const REL_DEFINES_BY_TYPE_RELATED_BASE = 4
+const REL_DEFINES_BY_TYPE_RELATED_DEPTH = 3
+
+/** IfcRelDefinesByType.RelatingType — see IfcRelDefinesByType.gen.ts. */
+const REL_DEFINES_BY_TYPE_RELATING_OFFSET = 5
+const REL_DEFINES_BY_TYPE_RELATING_BASE = 4
+const REL_DEFINES_BY_TYPE_RELATING_DEPTH = 3
 const COORD_INDEX_FIELD_OFFSET = 0
 
 const POLYGONAL_INDEX_SINK_CAPACITY = 65536
@@ -450,10 +467,15 @@ export class IfcGeometryExtraction {
   private csgDepth: number = 0
 
   /**
-   * IfcGridAxis local ID -> the IfcGrid that lists it, built on the first
-   * IfcGridPlacement a model contains (see `gridByAxis`).
+   * IfcGridAxis local ID -> local ID of the IfcGrid that lists it, built on
+   * the first IfcGridPlacement a model contains (see `gridByAxis`).
+   *
+   * IDs rather than entities: an entity held here outlives the model's
+   * descriptor cache, and its memoised placement and axis curves keep their
+   * descriptors' views of the source, which pinned a buffered open's whole
+   * source past `spillSourceToExternalStore` (bldrs-ai/Share#2139).
    */
-  private gridByAxis_?: Map<number, IfcGrid>
+  private gridByAxis_?: Map<number, number>
 
   /**
    * Construct a geometry extraction from an IFC step model and conway model
@@ -1881,6 +1903,12 @@ export class IfcGeometryExtraction {
           newMaterial.baseColor = style.DiffuseColour !== null ?
             extractColorOrFactorMultiply(style.DiffuseColour, surfaceColor) : surfaceColor
 
+          // baseColor and legacyColor have different consumers, so both must be
+          // written: the GLB/native export path reads baseColor, while the
+          // web-ifc compat layer builds `PlacedGeometry.color` from legacyColor
+          // (ifc_api_proxy_ifc.ts, streamed_preview_channel.ts) — that is the
+          // API Share consumes. Leaving either at its constructed default hands
+          // that consumer 0.8 grey for a fully styled model.
           newMaterial.legacyColor = surfaceColor
           newMaterial.roughness = extractSpecularHighlight(style.SpecularHighlight)
           newMaterial.specular = style.SpecularColour !== null ?
@@ -1981,8 +2009,22 @@ export class IfcGeometryExtraction {
             // handling)
           }
 
-          newMaterial.baseColor =
+          const surfaceColor =
             extractColorRGBPremultiplied(style.SurfaceColour, 1 - transparency)
+
+          // Both, for the same reason as the rendering branch above: the
+          // native/GLB path reads baseColor and the web-ifc compat layer reads
+          // legacyColor. This branch used to set baseColor alone, so a model
+          // whose styles are all plain IFCSURFACESTYLESHADING (no
+          // IfcSurfaceStyleRendering — legal, and what Renga emits) exported
+          // correct GLB colours while Share rendered every placement at the
+          // 0.8-grey default and auto-coloured the model
+          // (bldrs-ai/test-models-private#61). Shading carries no diffuse
+          // factor, so the two are the same premultiplied surface colour; the
+          // rendering branch keeps legacyColor as the *undiffused* surface
+          // colour, which is the same quantity.
+          newMaterial.baseColor = surfaceColor
+          newMaterial.legacyColor = surfaceColor
 
         }
 
@@ -4306,15 +4348,52 @@ export class IfcGeometryExtraction {
               isSpace,
               true)
 
-          const styledItemLocalID =
-            this.materials.styledItemMap.get(representationItem.localID) ??
-            this.extractMaterialStyle(owningElement)
+          // Three style sources, tried in IFC precedence order: an explicit
+          // IfcStyledItem on geometry outranks anything derived from a
+          // material association, so the material path is the last resort.
+          // They also bind differently, which is why this is a chain of
+          // branches rather than one `??`.
+          //
+          // 1. A direct styledItemMap hit is an IfcStyledItem pointing at THIS
+          //    representation item, so extractStyledItem's `from.Item` branch
+          //    binds it to the mapped body — correct, since the style travels
+          //    with the shared geometry and every product mapping it wants it.
+          //
+          // 2. Otherwise a styled item on the IfcMappedItem itself or on one of
+          //    its mapped ancestors, bound (and overridden) on that mapped
+          //    item's localID. Still an explicit item style, so it must be
+          //    tried before the material association — checking the material
+          //    first silently inverted this precedence
+          //    (codex finding on bldrs-ai/conway#684): for a product that has
+          //    both, the product material won and the mapped item's own style
+          //    was never applied.
+          //
+          // 3. Last, extractMaterialStyle: IfcRelAssociatesMaterial ->
+          //    IfcMaterialDefinitionRepresentation, whose IfcStyledItem carries
+          //    `Item = $`. With neither an Item nor a representationItem
+          //    argument, extractStyledItem reaches no binding branch at all and
+          //    the geometry ended up with no material at all
+          //    (bldrs-ai/test-models-private#61 — mapped doors/windows/MEP). It
+          //    must not be bound to representationItem.localID to fix that: a
+          //    representation map is shared across products, so that would leak
+          //    one product's material onto every other instance of the same
+          //    body. It goes through the per-node override instead, keyed on
+          //    the owning product — localIDs are unique across entities, so a
+          //    product's ID cannot collide with a geometry key, the same way
+          //    case 2 keys its override on a mapped item's localID.
+          //
+          // IfcSceneBuilder.resolveGeometryNode_ consults the override ahead of
+          // the geometry's own assignment, so each product resolves its own
+          // style off the one shared body.
+          const directStyledItemLocalID =
+            this.materials.styledItemMap.get(representationItem.localID)
 
           let materialOverrideID: number | undefined = void 0
 
-          if (styledItemLocalID !== undefined) {
+          if (directStyledItemLocalID !== void 0) {
 
-            const styledItem = this.model.getElementByLocalID(styledItemLocalID) as IfcStyledItem
+            const styledItem =
+              this.model.getElementByLocalID(directStyledItemLocalID) as IfcStyledItem
 
             this.extractStyledItem(styledItem)
 
@@ -4342,6 +4421,25 @@ export class IfcGeometryExtraction {
               this.extractStyledItem(styledItemParent, styleParent)
 
               materialOverrideID = styleParent.localID
+
+            } else {
+
+              const materialStyledItemLocalID = this.extractMaterialStyle(owningElement)
+
+              if (materialStyledItemLocalID !== void 0) {
+
+                const styledItem =
+                  this.model.getElementByLocalID(materialStyledItemLocalID) as IfcStyledItem
+
+                const surfaceStyleID = this.extractStyledItem(styledItem)
+
+                if (surfaceStyleID !== void 0) {
+
+                  this.materials.addGeometryMapping(owningElement.localID, surfaceStyleID)
+
+                  materialOverrideID = owningElement.localID
+                }
+              }
             }
           }
 
@@ -5275,11 +5373,20 @@ export class IfcGeometryExtraction {
           const { pointer, length } = result
 
           // Use them in your WASM call
-          const bound3D: Bound3DObject = this.wasmModule.createSimpleBound3D(
+          // Through conwayModel, not wasmModule: the wrapper types
+          // closedByConstruction as required, and that is the ONLY place a
+          // missing argument is caught - embind does no arity check and would
+          // convert the absent bool to false, silently dropping closure.
+          // See bldrs-ai/conway-geom#195.
+          const bound3D: Bound3DObject = this.conwayModel.createSimpleBound3D(
             pointer,
             length,
             bound.Orientation,
             bound.type === EntityTypesIfc.IFCFACEOUTERBOUND ? 0 : 1,
+            // A poly loop IS a closed polygon and does not repeat its head.
+            // Passed explicitly rather than re-derived on the wasm side, so the
+            // closure fact crosses the boundary with the entity that knows it.
+            true,
           )
 
           // Push your result somewhere
@@ -5927,27 +6034,30 @@ export class IfcGeometryExtraction {
 
     if (gridByAxis === void 0) {
 
-      gridByAxis = new Map<number, IfcGrid>()
+      gridByAxis = new Map<number, number>()
 
       for (const grid of this.model.types(IfcGrid)) {
 
         for (const gridAxis of grid.UAxes) {
-          gridByAxis.set(gridAxis.localID, grid)
+          gridByAxis.set(gridAxis.localID, grid.localID)
         }
 
         for (const gridAxis of grid.VAxes) {
-          gridByAxis.set(gridAxis.localID, grid)
+          gridByAxis.set(gridAxis.localID, grid.localID)
         }
 
         for (const gridAxis of grid.WAxes ?? []) {
-          gridByAxis.set(gridAxis.localID, grid)
+          gridByAxis.set(gridAxis.localID, grid.localID)
         }
       }
 
       this.gridByAxis_ = gridByAxis
     }
 
-    return gridByAxis.get(axis.localID)
+    const gridLocalID = gridByAxis.get(axis.localID)
+
+    return gridLocalID === void 0 ?
+      void 0 : this.model.getElementByLocalID(gridLocalID) as IfcGrid
   }
 
   /**
@@ -6067,7 +6177,11 @@ export class IfcGeometryExtraction {
 
     } catch (error) {
 
-      if (!(error instanceof StepBufferNotResidentError)) {
+      // A failed store read is not a missing grid: fail the product, which
+      // the pump logs, rather than place it as if the grid were absent
+      // (StepSourceReadError, conway#786).
+      if (!(error instanceof StepBufferNotResidentError) ||
+          error instanceof StepSourceReadError) {
         throw error
       }
 
@@ -6105,7 +6219,8 @@ export class IfcGeometryExtraction {
         }
       } catch (error) {
 
-        if (!(error instanceof StepBufferNotResidentError)) {
+        if (!(error instanceof StepBufferNotResidentError) ||
+            error instanceof StepSourceReadError) {
           throw error
         }
 
@@ -6537,23 +6652,47 @@ export class IfcGeometryExtraction {
    *
    */
   populateStyledItemsMap() {
-    const styledItems = this.model.types(IfcStyledItem)
 
-    for (const styledItem of styledItems) {
-      try {
-        // IfcStyledItem.Item — same vtable slot as the generated
-        // getter's extractElement(0, 0, 1, true, ...). Hydrating Item
-        // would acquire the faceset record (often the packed geometry
-        // itself) for every styled item at once.
-        const itemLocalID = styledItem.extractReferenceLocalID(0, 0, 1, true)
+    const model = this.model
+    const styledItemMap = this.materials.styledItemMap
 
-        if (itemLocalID !== null) {
-          this.materials.styledItemMap.set(itemLocalID, styledItem.localID)
-        }
-      } catch (ex) {
-        this.handleMapPrepError_('IfcStyledItem', styledItem.expressID, ex)
-      }
-    }
+    // IfcStyledItem.Item is field 0. A plain `#n` reference is read from
+    // the record bytes (no descriptor or entity per styled item, which on
+    // sp-231MB was ~1.6–2.4 s and ~120 MB retained in one synchronous
+    // stretch); every other record — complex, inline, `$`, dangling,
+    // non-resident — takes the entity path below, at the same point in the
+    // walk, so the map and its insertion order are what they always were.
+    // No target type check: the entity path never had one either
+    // (extractReferenceLocalID only resolves).
+    model.forEachReferenceInFieldOfTypes(
+        [ IfcStyledItem ],
+        0,
+        ( styledItemLocalID, itemLocalID ) => {
+          styledItemMap.set( itemLocalID, styledItemLocalID )
+        },
+        ( styledItemLocalID ) => {
+
+          const styledItem = model.getElementByLocalID( styledItemLocalID )
+
+          // model.types() skips a record with no entity the same way.
+          if ( styledItem === void 0 ) {
+            return
+          }
+
+          try {
+            // IfcStyledItem.Item — same vtable slot as the generated
+            // getter's extractElement(0, 0, 1, true, ...). Hydrating Item
+            // would acquire the faceset record (often the packed geometry
+            // itself) for every styled item at once.
+            const itemLocalID = styledItem.extractReferenceLocalID(0, 0, 1, true)
+
+            if (itemLocalID !== null) {
+              styledItemMap.set(itemLocalID, styledItem.localID)
+            }
+          } catch (ex) {
+            this.handleMapPrepError_('IfcStyledItem', styledItem.expressID, ex)
+          }
+        } )
   }
 
   /**
@@ -6632,13 +6771,39 @@ export class IfcGeometryExtraction {
     }
 
     // Logger.info(`UnitsInContext expressID: ${unitsInContext.expressID}`)
-    for (const unit of unitsInContext.Units) {
+    for (const unit of this.readProjectUnits_(unitsInContext)) {
       // Logger.info(`Unit type: ${EntityTypesIfc[unit.type]}, expressID: ${unit.expressID}`)
 
       if (unit instanceof IfcSIUnit) {
-        const unitType = unit.UnitType
-        const unitName = unit.Name
-        const unitPrefix = unit.Prefix
+        let unitType: IfcUnitEnum
+        let unitName: IfcSIUnitName
+        let unitPrefix: IfcSIPrefix | null
+
+        // Every SI unit in the assignment is decoded here, not just the
+        // length unit this loop is looking for — so before conway#741 one
+        // unit whose UnitType or Name enum did not decode (extractLambda's
+        // "Value in STEP was incorrectly typed") threw out of the model
+        // constructor, and every open entry point returned -1 for a file
+        // whose geometry was fine. That is the production signature in
+        // conway#741 (store, streamed and classic opens all failing on
+        // "incorrectly typed" from extractLambda). Skip the unit instead:
+        // an unreadable AREAUNIT says nothing about length, and an
+        // unreadable LENGTHUNIT leaves the factor at its default (metres),
+        // which is what a file with no length unit already gets.
+        try {
+          unitType = unit.UnitType
+          unitName = unit.Name
+          unitPrefix = unit.Prefix
+        } catch (ex) {
+          if (!MATERIAL_RELATED_OBJECTS_PERMISSIVE) {
+            throw ex
+          }
+          Logger.error(
+              'Skipping an IfcSIUnit whose unit type or name could not be read',
+              unit.expressID,
+              DATA_DEFECT)
+          continue
+        }
 
         if (unitPrefix === null) {
           continue
@@ -6663,6 +6828,62 @@ export class IfcGeometryExtraction {
     }
   }
  
+
+  /**
+   * Read a project's IfcUnitAssignment.Units, keeping every element that
+   * resolves to a unit even when another element does not.
+   *
+   * The generated `Units` getter is all-or-nothing: one element that is not
+   * an IfcDerivedUnit / IfcMonetaryUnit / IfcNamedUnit — a `$`, a literal,
+   * or a reference to some other entity — throws "Value in select must be
+   * populated" for the whole list. extractLinearScalingFactor runs inside
+   * every open (classic, streamed, deferred and store-backed alike), so
+   * that one bad element made OpenModel* return -1 (conway#741). When the
+   * getter throws, walk the same field reference by reference instead and
+   * drop only the elements that do not resolve to a unit.
+   *
+   * @param assignment The project's UnitsInContext.
+   * @return {Array} The readable units, in file order.
+   */
+  private readProjectUnits_(
+      assignment: IfcUnitAssignment ): Array<IfcDerivedUnit | IfcMonetaryUnit | IfcNamedUnit> {
+
+    try {
+      return assignment.Units
+    } catch (ex) {
+      if (!MATERIAL_RELATED_OBJECTS_PERMISSIVE) {
+        throw ex
+      }
+    }
+
+    const units: Array<IfcDerivedUnit | IfcMonetaryUnit | IfcNamedUnit> = []
+
+    // IfcUnitAssignment.Units is the entity's only attribute, so it sits at
+    // vtable (0, 0, 0) — the same slot the generated getter reads.
+    assignment.forEachReferenceInField(0, 0, 0, (expressID) => {
+
+      const localID =
+        expressID !== void 0 ? this.model.resolveExpressID(expressID) : void 0
+      const element =
+        localID !== void 0 ? this.model.getElementByLocalID(localID) : void 0
+
+      if (element instanceof IfcDerivedUnit ||
+          element instanceof IfcMonetaryUnit ||
+          element instanceof IfcNamedUnit) {
+        units.push(element)
+      } else {
+        // One entry per skipped element, so `count` is how many were lost.
+        Logger.error(
+            'Skipping an IfcUnitAssignment element that is not a unit',
+            assignment.expressID,
+            DATA_DEFECT)
+      }
+
+      return true
+    })
+
+    return units
+  }
 
   /* eslint-disable no-magic-numbers */ // No magic numbers disabled
   /**
@@ -6729,8 +6950,28 @@ export class IfcGeometryExtraction {
 
 
   // Guards prepareExtractionMaps_ so the demand path and the whole-model
-  // walk can both trigger it without duplicating work.
+  // walk can both trigger it without duplicating work. Set when the LAST
+  // sweep has run, not the first — see extractionPrepCursor_.
   private extractionMapsPrepared_ = false
+
+  // The prep's sweeps and how many have run. Shared by the synchronous
+  // prep and prepareDemandExtractionAsync (conway#748), so whichever entry
+  // point arrives runs only the sweeps still outstanding. Advanced only
+  // after a sweep returns; a sweep that throws latches
+  // extractionPrepFailure_ instead (see runExtractionPrepStep_).
+  private prepSteps_?: ( () => void )[]
+  private extractionPrepCursor_ = 0
+  private extractionPrepFailure_?: { error: unknown }
+
+  // extractLinearScalingFactor has run (prepareUnits). Separate from the
+  // maps flag because a deferred open reads the units at open and the
+  // sweeps later.
+  private unitsPrepared_ = false
+
+  // ensureResidentForDemandPrep has paged and pinned the prep records, so a
+  // synchronous prep on a windowed source can read them. See the guard in
+  // prepareExtractionMaps_.
+  private demandPrepResidencyEnsured_ = false
 
   /* Relationship records paged and scanned at once by
    * ensureAggregateTargetLocalIDs. Each is a single small row, and the scan
@@ -7046,6 +7287,12 @@ export class IfcGeometryExtraction {
         throw error
       }
 
+      // A failed store read is never a malformed row (StepSourceReadError,
+      // conway#786), strict or not.
+      if ( error instanceof StepSourceReadError ) {
+        throw error
+      }
+
       // Malformed relationship rows are tolerated exactly like the
       // aggregates pass itself tolerates them (permissive catch) —
       // their targets simply stay in the first-pass walk.
@@ -7057,6 +7304,14 @@ export class IfcGeometryExtraction {
    * per-product demand path (Phase B2): linear scaling factor and the
    * cross-product maps (materials, material definitions, rel-voids, styled
    * items). Idempotent.
+   *
+   * Synchronous. A deferred compat open no longer runs this at open
+   * (conway#748): the pumps run it before their first batch, and the async
+   * pump runs it through {@link prepareDemandExtractionAsync}, which
+   * yields between the sweeps. Both drive the same step list, so a sync
+   * caller that arrives while the async prep is suspended between two
+   * sweeps finishes the remaining sweeps itself rather than extracting
+   * against half-built maps.
    */
   private prepareExtractionMaps_(): void {
 
@@ -7064,13 +7319,198 @@ export class IfcGeometryExtraction {
       return
     }
 
-    this.extractionMapsPrepared_ = true
+    this.throwIfExtractionPrepFailed_()
 
+    // A windowed source must have its prep records paged and pinned first,
+    // or every sweep's field reads throw StepBufferNotResidentError and
+    // handleMapPrepError_ swallows them in permissive mode: a model that
+    // extracts with no materials, voids or colours and says nothing. Before
+    // conway#748 every windowed deferred open ran the prep at open, after
+    // ensureResidentForDemandPrep, so no later caller could reach this
+    // unpaged. Now the prep waits for the first batch, and only the async
+    // pump pages for it — so a synchronous route into extraction on such a
+    // model has to fail here, loudly, rather than silently mis-extract.
+    if ( this.model.isSourceExternal && !this.demandPrepResidencyEnsured_ ) {
+      throw new Error(
+          'extraction maps on a windowed source need their records paged ' +
+          'first — call prepareDemandExtractionAsync (or ' +
+          'ensureResidentForDemandPrep then prepareDemandExtraction)' )
+    }
+
+    const steps = this.extractionPrepSteps_()
+
+    while ( this.extractionPrepCursor_ < steps.length ) {
+      this.runExtractionPrepStep_( steps )
+    }
+
+    this.finishExtractionPrep_()
+  }
+
+  /**
+   * Async twin of {@link prepareDemandExtraction} for the pump (conway#748):
+   * pages and pins the prep records on a windowed source, then runs the
+   * same sweeps as the synchronous prep with an event-loop yield between
+   * each, so the ~0.3–0.4 s a large model's prep costs (sp-231MB) is several
+   * tasks instead of one. Idempotent, and a no-op once prepared.
+   *
+   * The pins are held across the yields: the sweeps read the records they
+   * pin, and a yield that released them would let the LRU evict a record
+   * the next sweep reads. Nothing else can extract while this runs on the
+   * proxy's pump — the pump lock serialises it — and a synchronous caller
+   * that does arrive between sweeps finishes them itself (see
+   * {@link prepareExtractionMaps_}).
+   *
+   * @return {Promise<void>} Resolves once the maps are complete.
+   */
+  public async prepareDemandExtractionAsync(): Promise<void> {
+
+    if ( this.extractionMapsPrepared_ ) {
+      return
+    }
+
+    this.throwIfExtractionPrepFailed_()
+
+    const pins = await this.ensureResidentForDemandPrep()
+
+    try {
+
+      const steps = this.extractionPrepSteps_()
+
+      while ( this.extractionPrepCursor_ < steps.length ) {
+
+        this.runExtractionPrepStep_( steps )
+
+        // After every sweep, the last included: the caller's next work —
+        // the pump's first batch of extraction — would otherwise run in the
+        // same task as the final sweep (measured on sp-231MB: the styled-item
+        // sweep plus a 64-product batch made a 0.6 s block).
+        await yieldToEventLoop()
+      }
+
+      this.finishExtractionPrep_()
+
+    } finally {
+      this.model.releaseSourceViews( pins )
+      this.model.unpinLocalIDs( pins )
+      // The pins are gone, so a later synchronous prep — reachable only if
+      // a sweep threw — must not read as paged.
+      this.demandPrepResidencyEnsured_ = false
+    }
+  }
+
+  /**
+   * True once the cross-product extraction maps are complete, through
+   * either prep entry point. A lightweight (preview) prep also reports
+   * true, as it always has: it is the whole prep that instance will get.
+   *
+   * @return {boolean} Whether extraction may run without preparing.
+   */
+  public get isDemandExtractionPrepared(): boolean {
+    return this.extractionMapsPrepared_
+  }
+
+  /**
+   * The prep, as an ordered list of sweeps both entry points walk with the
+   * shared {@link extractionPrepCursor_}. Built once; the order is the
+   * pre-conway#748 order, which matters: the type-material inheritance
+   * must follow the direct association sweep, and nothing else here reads
+   * another sweep's output.
+   *
+   * @return {(() => void)[]} The sweeps.
+   */
+  private extractionPrepSteps_(): ( () => void )[] {
+
+    this.prepSteps_ ??= [
+      () => this.prepareUnits(),
+      () => this.populateRelMaterialsMap_(),
+      () => this.populateMaterialDefinitionsMap(),
+      () => this.populateRelVoidsMap(),
+      () => this.populateStyledItemsMap(),
+    ]
+
+    return this.prepSteps_
+  }
+
+  /**
+   * Run the sweep at the cursor, advancing past it only once it has
+   * returned. A sweep that throws — strict mode rethrows a malformed
+   * relationship from handleMapPrepError_ — latches the failure instead,
+   * and every later prep call rethrows it ({@link throwIfExtractionPrepFailed_}).
+   * Neither skipping the sweep nor re-running it is safe: skipping leaves
+   * its map incomplete under a prepared flag, and a re-run appends to maps
+   * the partial run already wrote (populateRelVoidsMap pushes) (codex on
+   * conway#751).
+   *
+   * @param steps The step list.
+   */
+  private runExtractionPrepStep_( steps: ( () => void )[] ): void {
+
+    try {
+      steps[ this.extractionPrepCursor_ ]()
+    } catch ( ex ) {
+      this.extractionPrepFailure_ = { error: ex }
+      throw ex
+    }
+
+    ++this.extractionPrepCursor_
+  }
+
+  /** Rethrow a latched prep failure — see {@link runExtractionPrepStep_}. */
+  private throwIfExtractionPrepFailed_(): void {
+
+    if ( this.extractionPrepFailure_ !== void 0 ) {
+      throw this.extractionPrepFailure_.error
+    }
+  }
+
+  /** Mark the maps complete and drop the step list. */
+  private finishExtractionPrep_(): void {
+    this.extractionMapsPrepared_ = true
+    this.prepSteps_ = void 0
+  }
+
+  /**
+   * The units half of the prep, alone: the project's linear scaling factor
+   * (and its name). Exactly once per extraction — extractLinearScalingFactor
+   * multiplies into the factor, so a second call would square the unit
+   * prefix — which is what lets a deferred open read the real factor at
+   * open (the proxy's linearScalingFactor, the spatial imposters' frame)
+   * while the expensive sweeps wait for the first geometry batch
+   * (conway#748). On a windowed source the caller pages the project's
+   * closure first ({@link ensureResidentForUnits}).
+   */
+  public prepareUnits(): void {
+
+    if ( this.unitsPrepared_ ) {
+      return
+    }
+
+    this.unitsPrepared_ = true
     this.extractLinearScalingFactor()
+  }
+
+  /**
+   * IfcRelAssociatesMaterial → relMaterialsMap, then the type-level
+   * materials pushed down onto occurrences ({@link inheritTypeMaterials_}).
+   * One step, because the inheritance must run strictly after the whole
+   * direct sweep.
+   */
+  private populateRelMaterialsMap_(): void {
 
     // populate relMaterialsMap
     const relAssociatesMaterials = this.model.types(IfcRelAssociatesMaterial)
     const productTypes = new Set< number >( IfcProduct.query )
+    const typeObjectTypes = new Set< number >( IfcTypeObject.query )
+
+    // Material associations whose related object is a TYPE object
+    // (IfcDoorType, IfcWindowType, ...) instead of an occurrence. The
+    // product filter below drops those — correctly, since a type object is
+    // an IfcTypeObject and not an IfcProduct, so it has no geometry of its
+    // own to colour — but the occurrences it defines still inherit its
+    // material. They are collected here keyed by the TYPE's local ID and
+    // pushed down onto occurrences by inheritTypeMaterials_ once the whole
+    // sweep has run; see that method for the precedence rule.
+    const typeMaterialsMap = new Map< number, number >()
 
     for (const relAssociateMaterial of relAssociatesMaterials) {
       try {
@@ -7093,22 +7533,21 @@ export class IfcGeometryExtraction {
                 return true
               }
 
-              const productLocalID = this.model.resolveExpressID( expressID )
+              const relatedLocalID = this.model.resolveExpressID( expressID )
 
-              if ( productLocalID === void 0 ) {
+              if ( relatedLocalID === void 0 ) {
                 return true
               }
 
-              const typeID = this.model.typeIDOf( productLocalID )
+              const typeID = this.model.typeIDOf( relatedLocalID )
 
-              if ( typeID === EntityTypesIfc.IFCOPENINGELEMENT ||
-                  typeID === EntityTypesIfc.IFCSPACE ||
-                  typeID === EntityTypesIfc.IFCOPENINGSTANDARDCASE ) {
+              if ( typeID !== void 0 && typeObjectTypes.has( typeID ) ) {
+                typeMaterialsMap.set( relatedLocalID, materialLocalID )
                 return true
               }
 
-              if ( typeID !== void 0 && productTypes.has( typeID ) ) {
-                this.materials.relMaterialsMap.set( productLocalID, materialLocalID )
+              if ( this.isMaterialTargetProductType_( typeID, productTypes ) ) {
+                this.materials.relMaterialsMap.set( relatedLocalID, materialLocalID )
               }
 
               return true
@@ -7121,14 +7560,139 @@ export class IfcGeometryExtraction {
       }
     }
 
-    // populate MaterialDefinitionsMap
-    this.populateMaterialDefinitionsMap()
+    // Fill occurrences that got no direct association from their type's,
+    // strictly after the sweep above so direct entries always win.
+    this.inheritTypeMaterials_( typeMaterialsMap, productTypes )
 
-    // populate relvoids map
-    this.populateRelVoidsMap()
+  }
 
-    // populate styled items map
-    this.populateStyledItemsMap()
+  /**
+   * Is a related object of an IfcRelAssociatesMaterial one whose geometry
+   * that material may colour?
+   *
+   * Openings and spaces are excluded: they do carry material associations
+   * in real files, but they are subtractive/void volumes rather than
+   * things the scene shows. Shared by the direct-association sweep and the
+   * type-inheritance pass so the two cannot drift apart on which products
+   * count — an occurrence excluded here must stay excluded when the same
+   * material arrives via its type.
+   *
+   * Takes the type ID rather than the local ID because both callers have
+   * already resolved it for their own dispatch.
+   *
+   * @param typeID The related object's entity type ID, or undefined when
+   * the model has no type for it.
+   * @param productTypes The IfcProduct type-ID set, hoisted by the caller.
+   * @return {boolean} True when a material association on this object
+   * should reach relMaterialsMap.
+   */
+  private isMaterialTargetProductType_(
+      typeID: number | undefined,
+      productTypes: ReadonlySet< number > ): boolean {
+
+    if ( typeID === void 0 ||
+        typeID === EntityTypesIfc.IFCOPENINGELEMENT ||
+        typeID === EntityTypesIfc.IFCSPACE ||
+        typeID === EntityTypesIfc.IFCOPENINGSTANDARDCASE ) {
+      return false
+    }
+
+    return productTypes.has( typeID )
+  }
+
+  /**
+   * Push type-level material associations down onto the occurrences that
+   * IfcRelDefinesByType binds to those types.
+   *
+   * A material may be associated with an occurrence (IfcDoor) or with its
+   * type (IfcDoorType); an occurrence without one of its own takes the
+   * type's. Precedence is the load-bearing rule: an occurrence-level
+   * IfcRelAssociatesMaterial ALWAYS overrides the type-level one (IFC4
+   * "Object Typing" — a type's assignments are defaults the occurrence may
+   * override), so this pass only ever fills a hole and never overwrites an
+   * entry the direct sweep wrote. Running it strictly after the WHOLE
+   * IfcRelAssociatesMaterial sweep is what makes that order-independent: a
+   * direct association written later in the file than its type's still
+   * wins, which a fill interleaved with the sweep could not guarantee.
+   *
+   * Without this, an occurrence whose material lives only on its type
+   * resolves no material at all and renders untinted — 272 of 5,351 scene
+   * placements on the Renga convenience-store model
+   * (bldrs-ai/test-models-private#61), all of them windows, doors, light
+   * fixtures and railings whose IfcRelAssociatesMaterial names the
+   * Type entity rather than the occurrence.
+   *
+   * @param typeMaterialsMap Material local ID per TYPE object local ID,
+   * collected by the direct sweep.
+   * @param productTypes The IfcProduct type-ID set, hoisted by the caller.
+   */
+  private inheritTypeMaterials_(
+      typeMaterialsMap: ReadonlyMap< number, number >,
+      productTypes: ReadonlySet< number > ): void {
+
+    if ( typeMaterialsMap.size === 0 ) {
+      // No type carries a material, so no IfcRelDefinesByType in this model
+      // can contribute one. Skip the sweep rather than walk (and, on a
+      // windowed source, page in) every type relationship for nothing.
+      return
+    }
+
+    const relMaterialsMap = this.materials.relMaterialsMap
+
+    for ( const relDefinesByType of this.model.types( IfcRelDefinesByType ) ) {
+
+      try {
+        // RelatingType as a bare local ID: hydrating the type object would
+        // pin its record on a windowed source for no gain, since
+        // typeMaterialsMap is keyed by local ID. Same reason the related
+        // objects go through forEachReferenceInField below.
+        const typeLocalID = relDefinesByType.extractReferenceLocalID(
+            REL_DEFINES_BY_TYPE_RELATING_OFFSET,
+            REL_DEFINES_BY_TYPE_RELATING_BASE,
+            REL_DEFINES_BY_TYPE_RELATING_DEPTH,
+            false )
+
+        if ( typeLocalID === null ) {
+          continue
+        }
+
+        const materialLocalID = typeMaterialsMap.get( typeLocalID )
+
+        if ( materialLocalID === void 0 ) {
+          continue
+        }
+
+        relDefinesByType.forEachReferenceInField(
+            REL_DEFINES_BY_TYPE_RELATED_OFFSET,
+            REL_DEFINES_BY_TYPE_RELATED_BASE,
+            REL_DEFINES_BY_TYPE_RELATED_DEPTH,
+            ( expressID ) => {
+
+              if ( expressID === void 0 ) {
+                return true
+              }
+
+              const productLocalID = this.model.resolveExpressID( expressID )
+
+              if ( productLocalID === void 0 ||
+                  relMaterialsMap.has( productLocalID ) ) {
+                // Occupied entry: the occurrence declared its own material
+                // and that wins over the type's.
+                return true
+              }
+
+              if ( this.isMaterialTargetProductType_(
+                  this.model.typeIDOf( productLocalID ), productTypes ) ) {
+                relMaterialsMap.set( productLocalID, materialLocalID )
+              }
+
+              return true
+            } )
+      } catch ( ex ) {
+        this.handleMapPrepError_(
+            'IfcRelDefinesByType', relDefinesByType.expressID, ex )
+      }
+    }
   }
 
   /**
@@ -7149,7 +7713,7 @@ export class IfcGeometryExtraction {
 
     if ( lightweightPreview && !this.extractionMapsPrepared_ ) {
       this.extractionMapsPrepared_ = true
-      this.extractLinearScalingFactor()
+      this.prepareUnits()
       this.populateMaterialDefinitionsMap()
       this.populateStyledItemsMap()
       return
@@ -7190,6 +7754,66 @@ export class IfcGeometryExtraction {
   }
 
   /**
+   * Page in and pin the project's closure — what {@link prepareUnits} reads
+   * (IfcProject → IfcUnitAssignment → its units) — on a windowed source.
+   * A small tree, which is why a deferred store-backed open can afford it
+   * at open while the full prep residency waits for the first batch
+   * (conway#748). A no-op returning an empty set on a resident source.
+   *
+   * @return {Promise<Set<number>>} The pinned local IDs — caller must
+   * {@link StepModelBase.unpinLocalIDs} once the units are read. On a
+   * rejection nothing stays pinned (see {@link pinForPrep_}).
+   */
+  public async ensureResidentForUnits(): Promise< Set< number > > {
+    return await this.pinForPrep_( ( pinned ) => this.pageForUnits_( pinned ) )
+  }
+
+  /**
+   * Run a paging walk into a fresh pin set, releasing everything it pinned
+   * if the walk rejects (a store read failing partway). Without this the
+   * partial set never reaches the caller — the walk's own `await` is what
+   * threw, before any caller's `finally` exists — so its holds stay pinned
+   * for the model's life, immune to LRU eviction, and a retry pins a
+   * second set on top (codex on conway#751). Each local ID in the set
+   * carries exactly one hold: the closure walk claims-then-pins, and the
+   * relationship loops pin only after a successful page.
+   *
+   * @param walk Pages and pins into the set it is given.
+   * @return {Promise<Set<number>>} The pinned set, on success.
+   */
+  private async pinForPrep_(
+      walk: ( pinned: Set< number > ) => Promise< void > ): Promise< Set< number > > {
+
+    const pinned = new Set< number >()
+
+    try {
+      await walk( pinned )
+    } catch ( ex ) {
+      this.model.releaseSourceViews( pinned )
+      this.model.unpinLocalIDs( pinned )
+      throw ex
+    }
+
+    return pinned
+  }
+
+  /**
+   * The walk behind {@link ensureResidentForUnits}.
+   *
+   * @param pinned Set to add the pinned local IDs to.
+   */
+  private async pageForUnits_( pinned: Set< number > ): Promise< void > {
+
+    if ( !this.model.isSourceExternal ) {
+      return
+    }
+
+    for ( const expressID of this.model.expressIDsOfTypes( IfcProject ) ) {
+      await this.model.ensureResidentClosureByExpressID( expressID, void 0, pinned )
+    }
+  }
+
+  /**
    * Page in every record {@link prepareDemandExtraction} will read, so
    * the relationship sweeps succeed on a windowed source. Call before
    * the first prepare on a model whose source is external.
@@ -7201,26 +7825,46 @@ export class IfcGeometryExtraction {
    * before the first product extract.
    *
    * @return {Promise<Set<number>>} Pinned local IDs — caller must
-   * {@link StepModelBase.unpinLocalIDs} after prepare/extract.
+   * {@link StepModelBase.unpinLocalIDs} after prepare/extract. On a
+   * rejection nothing stays pinned (see {@link pinForPrep_}).
    */
   public async ensureResidentForDemandPrep(): Promise< Set< number > > {
+    return await this.pinForPrep_( ( pinned ) => this.pageForDemandPrep_( pinned ) )
+  }
 
-    const pinned = new Set< number >()
+  /**
+   * The walk behind {@link ensureResidentForDemandPrep}.
+   *
+   * @param pinned Set to add the pinned local IDs to.
+   */
+  private async pageForDemandPrep_( pinned: Set< number > ): Promise< void > {
+
+    await this.pageForUnits_( pinned )
 
     if ( !this.model.isSourceExternal ) {
-      return pinned
+      return
     }
 
-    // Small trees: project units, material-definition style stacks.
-    for ( const type of [IfcProject, IfcMaterialDefinitionRepresentation] ) {
-
-      for ( const expressID of this.model.expressIDsOfTypes( type ) ) {
-        await this.model.ensureResidentClosureByExpressID( expressID, void 0, pinned )
-      }
+    // Small trees: material-definition style stacks (the project's units
+    // were paged above).
+    for ( const expressID of
+      this.model.expressIDsOfTypes( IfcMaterialDefinitionRepresentation ) ) {
+      await this.model.ensureResidentClosureByExpressID( expressID, void 0, pinned )
     }
 
+    // Every relationship prepareExtractionMaps_ sweeps has to be listed
+    // here, or its field reads throw StepBufferNotResidentError on a
+    // windowed source and handleMapPrepError_ swallows the throw in
+    // permissive mode — a sweep that silently does nothing rather than a
+    // loud failure. IfcRelDefinesByType is here for inheritTypeMaterials_;
+    // it needs no entry in the 1-hop pass below because that pass exists
+    // for relationship GETTERS, which hydrate their targets, and the
+    // type-inheritance sweep reads only the relationship's own bytes
+    // (extractReferenceLocalID / forEachReferenceInField) plus index
+    // columns (codex finding on bldrs-ai/conway#704).
     const recordOnlyTypes = [
       IfcRelAssociatesMaterial,
+      IfcRelDefinesByType,
       IfcRelVoidsElement,
       IfcStyledItem,
       IfcRelAggregates,
@@ -7275,7 +7919,12 @@ export class IfcGeometryExtraction {
       }
     }
 
-    return pinned
+    // Only now, with every record the sweeps read paged and pinned. Set any
+    // earlier and a synchronous prep landing in one of the awaits above
+    // would pass prepareExtractionMaps_'s guard and sweep rows that are not
+    // resident yet — the silent empty maps the guard exists to refuse
+    // (codex on conway#751).
+    this.demandPrepResidencyEnsured_ = true
   }
 
   /**
@@ -7676,6 +8325,34 @@ export class IfcGeometryExtraction {
         await this.ensureResidentForProductExtract(
             relating.localID, pinned, leafSpans )
       }
+
+    } catch ( error ) {
+
+      // The `RelatingObject` getter throws when the field names a record
+      // the schema cannot type there — a SketchUp Pro 2015 IFC4X3_RC2
+      // export is the case in production (Sentry SHARE-1PA), and it threw
+      // from here, out through beginAggregateExtract, out through
+      // ExtractGeometryBatchAsync, and took the whole load with it. That is
+      // what bldrs-ai/ops#28 forbids: a bad reference skips an entity, it
+      // does not end a load (conway#708).
+      //
+      // Nothing is reported here, deliberately. This is a PREFETCH — there
+      // is no relating record to page, and the relationship itself has not
+      // been skipped yet. The pass that skips it,
+      // extractRelAggregateGeometryIncremental, reads the same getter,
+      // throws the same error into its own permissive catch and reports it
+      // there, keyed on this relationship (see that catch). Reporting the
+      // same skip twice would make the per-entry counts Share sizes a
+      // defect by read double.
+      //
+      // Only the unresolved-reference family is absorbed. A
+      // StepBufferNotResidentError or any other paging failure still
+      // propagates: swallowing one would turn a residency bug into
+      // geometry that silently goes missing.
+      if ( !isUnresolvedReferenceError( error ) ) {
+        throw error
+      }
+
     } finally {
 
       if ( relatingLocalID !== null ) {
@@ -8197,7 +8874,7 @@ export class IfcGeometryExtraction {
 
           if ( productRepresentation instanceof IfcProduct ) {
 
-            this.extractProductGeometry( productRepresentation, masterRelVoids )
+            this.extractRelatedProductGeometry_( productRepresentation, masterRelVoids )
 
             yield ++extractedCount
           }
@@ -8214,7 +8891,7 @@ export class IfcGeometryExtraction {
 
           if ( relatedProduct !== void 0 ) {
 
-            this.extractProductGeometry( relatedProduct, masterRelVoids )
+            this.extractRelatedProductGeometry_( relatedProduct, masterRelVoids )
 
             yield ++extractedCount
           }
@@ -8223,9 +8900,30 @@ export class IfcGeometryExtraction {
     } catch (ex) {
       if (ex instanceof Error) {
         if (MATERIAL_RELATED_OBJECTS_PERMISSIVE) {
-          Logger.error(
-            `Error processing relAggregate\n\terror: ${ex.message}`,
-            relAggregate.expressID )
+
+          // The one report for a relationship this pass abandons, and so the
+          // one place it is counted — the prefetch that reads the same
+          // getter stays quiet for that reason (see
+          // ensureResidentForAggregateBase's catch).
+          //
+          // A bad reference is a defect in the FILE, not in conway, and
+          // carries the marker that says so (conway#708). Its message drops
+          // `ex.message` because that is the dedup key: a
+          // DanglingReferenceError spells the missing express ID into its
+          // own message, so interpolating it split one relationship-wide
+          // defect into one entry of count 1 per relationship and left
+          // `count` meaning nothing (see Logger's class doc). The express ID
+          // is already on the entry, where repeats union it.
+          if ( isUnresolvedReferenceError( ex ) ) {
+            Logger.error(
+              'Skipping IfcRelAggregates with an unresolved or mistyped STEP reference',
+              relAggregate.expressID,
+              DATA_DEFECT )
+          } else {
+            Logger.error(
+              `Error processing relAggregate\n\terror: ${ex.message}`,
+              relAggregate.expressID )
+          }
         } else {
           throw ex
         }
@@ -8237,6 +8935,44 @@ export class IfcGeometryExtraction {
       if ( masterRelVoids !== void 0 ) {
         masterRelVoids[ 0 ].delete()
       }
+    }
+  }
+
+  /**
+   * One related product of {@link extractRelAggregateGeometryIncremental}:
+   * {@link extractProductGeometry}, with a failed store read stopping that
+   * product rather than the relationship.
+   *
+   * A `StepSourceReadError` (a store's `readSync` threw, conway#786) means
+   * this product's bytes were unavailable, not that the relationship is
+   * malformed. Left to the stepper's catch, it abandoned every related
+   * product after this one, and those are aggregate targets the product
+   * pass leaves to this pass (aggregateTargetLocalIDs), so they went missing
+   * as well. Here the product's extraction stops at the failed read and is
+   * logged once, with the message the pumps' per-product catch writes
+   * (conway#526), and the stepper goes on to the next product. Nothing is
+   * rolled back: representation items this product had already added to
+   * the scene before the failing one stay there, exactly as they do when
+   * the product pass's own catch takes a failed read (conway#786). Anything
+   * other than a failed read still reaches the stepper's catch, as before.
+   *
+   * @param product The related product.
+   * @param masterRelVoids The relating object's rel-voids, caller-owned.
+   */
+  private extractRelatedProductGeometry_(
+      product: IfcProduct,
+      masterRelVoids: [ NativeVectorGeometry, number[] ] | undefined ): void {
+
+    try {
+      this.extractProductGeometry( product, masterRelVoids )
+    } catch ( error ) {
+
+      if ( !( error instanceof StepSourceReadError ) ) {
+        throw error
+      }
+
+      Logger.error(
+          `Error extracting product localID ${product.localID}: ${error.message}` )
     }
   }
 
@@ -8355,6 +9091,14 @@ export class IfcGeometryExtraction {
               }
             } catch ( error ) {
 
+              // A failed store read fails the whole product (the pump logs
+              // it, conway#526) rather than delivering it with this item
+              // missing: the bytes were unreadable, not malformed
+              // (StepSourceReadError, conway#786).
+              if ( error instanceof StepSourceReadError && !this.quietRecoverableLogging ) {
+                throw error
+              }
+
               if ( this.quietRecoverableLogging ) {
                 // Preview prefix: expected on a truncated tail — skip.
               } else if ( error instanceof Error ) {
@@ -8425,6 +9169,11 @@ export class IfcGeometryExtraction {
                 this.extractStyledItem(styledItem_)
               }
             } catch ( error ) {
+
+              // As in the loop above: a failed read fails the product.
+              if ( error instanceof StepSourceReadError && !this.quietRecoverableLogging ) {
+                throw error
+              }
 
               if ( this.quietRecoverableLogging ) {
                 // Preview prefix: expected on a truncated tail — skip.
@@ -8706,6 +9455,10 @@ export class IfcGeometryExtraction {
  * non-products to reach the next product would page the whole run at once,
  * and an `IfcTypeObject` with `RepresentationMaps` is 1,607 records of
  * closure by itself (conway#566 review).
+ *
+ * Only over a store that reads asynchronously. Over one with `readSync`
+ * the pumps step the relationship without a pager and let each read fault
+ * its window in (IfcApiProxyIfc, conway#786).
  */
 export class AggregateExtractPager {
 

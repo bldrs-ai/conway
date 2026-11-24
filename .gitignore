@@ -39,6 +39,8 @@ scripts/test_runs/
 # not descend into an excluded directory looking for negations.
 scripts/*/
 !scripts/debug/
+!scripts/kernel_compare/
+!scripts/schemas/
 benchmarks/*private
 
 #external
@@ -54,5 +56,4 @@ benchmarks/*private
 # Subagent git worktrees (transient scaffolding created per agent run)
 .claude/worktrees/
 
-# Byte-cache from the regression-shard helper scripts importing each other.
 __pycache__/

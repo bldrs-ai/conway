@@ -1,0 +1,5 @@
+# corpus: private
+# Headline IFC.
+# Code, not a filename: this repo is public. The mapping lives in
+# regression/shard_codes.txt in bldrs-ai/test-models-private.
+ILNA250

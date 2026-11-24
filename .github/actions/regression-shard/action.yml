@@ -164,7 +164,9 @@ runs:
         SHARD_FILE: ${{ inputs.shard-file }}
       run: |
         set -euo pipefail
-        REGEX=$(python3 "${{ github.action_path }}/shard_list.py" regex "$SHARD_FILE")
+        # `models` so a private shard's codes resolve through the corpus
+        # manifest; a public list ignores it.
+        REGEX=$(python3 "${{ github.action_path }}/shard_list.py" regex "$SHARD_FILE" models)
         node --experimental-specifier-resolution=node \
           ./compiled/src/ifc/ifc_regression_batch_main.js \
           -e "$REGEX" \

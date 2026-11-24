@@ -1,3 +1,0 @@
-# corpus: private
-# Headline STEP. BLSN_007.stp (~282 MB).
-BLSN_007.stp

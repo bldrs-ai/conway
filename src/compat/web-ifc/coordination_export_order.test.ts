@@ -104,9 +104,12 @@ describe( 'COORDINATE_TO_ORIGIN export-order independence (Share#1749)', () => {
     expect( Math.max( ...min.map( Math.abs ), ...max.map( Math.abs ) ) )
         .toBeLessThan( LARGE_COORDINATE_BUDGET_M )
 
-    // The applied-frame report (Share#1634) is not asserted here: only
-    // the deferred pump records it, and
-    // `ifc_api_preview_coordination.test.ts` already covers that path.
+    // The applied-frame report (Share#1634) is not asserted here — it is
+    // pinned against known authored coordinates in
+    // `coordination_baked_geometry.test.ts`, which this fixture cannot
+    // do — but it IS filled in on this classic open, and the note that
+    // used to stand here saying only the deferred pump records it is no
+    // longer true of any IFC emit site.
     api.CloseModel( modelID )
   }, 120000 )
 
@@ -115,10 +118,10 @@ describe( 'COORDINATE_TO_ORIGIN export-order independence (Share#1749)', () => {
     // Both paths derive through deriveCoordinationF64, so the snap has
     // to leave them identical — otherwise one model renders in two
     // places depending on which open Share happened to take. Compared
-    // through the emitted placements rather than
-    // GetAppliedCoordinationMatrix, which only the deferred pump fills
-    // in: on these two opens it reports the identity contract for both,
-    // so comparing it would pass no matter what the frames did.
+    // through the emitted placements, which is the property that
+    // actually matters to a consumer; the narrower claim that the two
+    // opens also AGREE on what GetAppliedCoordinationMatrix reports is
+    // asserted directly in `coordination_baked_geometry.test.ts`.
     const classicID = await api.OpenModel( georeferenced, { ...SETTINGS } )
     const classic = placementBounds( classicID )
     api.CloseModel( classicID )

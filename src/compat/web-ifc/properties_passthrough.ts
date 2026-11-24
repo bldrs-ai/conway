@@ -18,6 +18,26 @@ export interface Node {
   Name?: NodeValueHandle
   LongName?: NodeValueHandle
   GlobalId?: NodeValueHandle
+
+  // STEP (AP214/AP242) only; IFC nodes omit both. Declared here so a
+  // consumer of `getSpatialStructure()` can read them without a cast.
+
+  /**
+   * Ordered occurrence path (NAUO express ids, root→node, optionally ending in
+   * a solid's own id) — the STEP selection key. `[]` on a root, and on the
+   * synthetic wrapper of a multi-root file. See
+   * `design/new/step-metadata-nist.md` §"Occurrence identity".
+   */
+  occurrencePath?: number[]
+
+  /**
+   * Express ids of the `product_definition_shape`s describing this node: the
+   * ids a geometry instance reports as its owner. A row resolves to the node
+   * whose `occurrencePath` equals its own and whose list holds its owner,
+   * which is exact where the path alone is not (several roots all carry
+   * `[]`). `[]` on the synthetic multi-root wrapper.
+   */
+  productDefinitionShapeExpressIDs?: number[]
 }
 
 /**
@@ -36,25 +56,51 @@ export type IncludeProperties = boolean | 'names'
 export interface SpatialStructureOptions {
 
   /**
-   * STEP (AP214/AP242) only: surface ephemeral solid-level nodes beneath
-   * multibody products — pickable bodies that carry identity in the file but
-   * no product semantics (`type: 'solid'`, `ephemeral: true`). Ignored by the
-   * IFC surface. See `design/new/step-nonproduct-semantics.md`.
+   * STEP (AP214/AP242) only, default **true**: surface solid-level nodes
+   * beneath multibody products — pickable bodies that carry identity in the
+   * file but no product semantics (`type: 'solid'`, `ephemeral: true`).
+   * Ignored by the IFC surface.
+   *
+   * Pass `false` for a products-only outline. The scene stamps each such body
+   * with its own occurrence path either way, so with the layer off those paths
+   * resolve to no node — only do it for a consumer that does no path→node
+   * lookup. See `design/new/step-nonproduct-semantics.md`.
    */
   includeSolids?: boolean
+}
+
+/**
+ * Optional shaping of a recursive property read, beyond web-ifc parity.
+ */
+export interface PropertyReadOptions {
+
+  /**
+   * IFC only, default **false**: inline geometry representations in a
+   * recursive read. By default a reference to an IfcProductRepresentation
+   * (a product's `Representation`) or an IfcRepresentationMap (a type's
+   * `RepresentationMaps`) stays a `{type: 5, value}` handle: those are
+   * shape, not properties, and a product's can run to thousands of
+   * records. `true` restores web-ifc's full flatten, for head-to-heads.
+   * Ignored by the STEP surface.
+   */
+  includeRepresentations?: boolean
 }
 
 export interface PropertiesPassthrough {
 
   getIfcType(type: number): string | undefined
 
-  getItemProperties(id: number, recursive?: boolean ): Promise< any >
+  getItemProperties(
+    id: number, recursive?: boolean, options?: PropertyReadOptions ): Promise< any >
 
-  getPropertySets(elementID: number, recursive?: boolean ): Promise< any[] >
+  getPropertySets(
+    elementID: number, recursive?: boolean, options?: PropertyReadOptions ): Promise< any[] >
 
-  getTypeProperties(elementID: number, recursive?: boolean ): Promise< any[] >
+  getTypeProperties(
+    elementID: number, recursive?: boolean, options?: PropertyReadOptions ): Promise< any[] >
 
-  getMaterialsProperties(elementID: number, recursive?: boolean): Promise< any[] >
+  getMaterialsProperties(
+    elementID: number, recursive?: boolean, options?: PropertyReadOptions ): Promise< any[] >
 
   getSpatialStructure(
     includeProperties?: IncludeProperties,

@@ -66,6 +66,14 @@ function extractInlineElementAddress(
 }
 
 /**
+ * What a masked field reads as: a standalone `$`. Its base address is 0,
+ * so the inline-element fallback of a reference read can never resolve it
+ * (every STEP file starts with `ISO-10303-21;`, so no record lives at 0).
+ */
+const MASKED_FIELD: [number, number, Uint8Array] =
+  [ 0, 1, Uint8Array.of( '$'.charCodeAt( 0 ) ) ]
+
+/**
  * Merge the entity field descriptions.
  *
  * Merging uses "hasOwnProperty" semantics to avoid overwriting
@@ -1196,6 +1204,14 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
     const internalReference = this.guaranteeVTable( depth )
 
     if ( internalReference === void 0 || offset >= internalReference.vtableCount ) {
+
+      // A masked record (StepModelBase.setFieldMasks) reads every field past
+      // its mask as `$`, which each extractor already handles as absent:
+      // null for an optional field, a throw for a required one.
+      if ( internalReference?.maskedFieldCount !== void 0 ) {
+        return MASKED_FIELD
+      }
+
       throw new Error( 'Couldn\'t read field due to too few fields in record' )
     }
 
@@ -1304,6 +1320,11 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
       }
 
       if ( classReference.buffer === void 0 ) {
+        // Populates the model's CURRENT descriptor, where the neighbouring
+        // paths populate the entity's own (the Raw variants). That is the
+        // same object here: complex entries are reset in place and survive
+        // invalidate(true). If complexEntries_ were ever rebuilt on
+        // invalidate, this branch would need populateBufferEntryRaw too.
         this.model.populateBufferEntry( this.localID )
       }
 
@@ -1319,8 +1340,15 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
 
     const internalReference = this.internalReference_
 
+    // Populate THIS entity's descriptor, not whatever the model now holds
+    // for its local ID. They are one object until `invalidate(true)`, which
+    // `spillSourceToExternalStore` calls; an entity built before a spill and
+    // still held (an AP214 demand unit the pump has not reached yet) would
+    // otherwise fill the model's fresh descriptor and then read its own
+    // empty one (bldrs-ai/Share#2139). Its reads page through the current
+    // provider either way.
     if (internalReference.vtableIndex === void 0) {
-      const populated = this.model.populateVtableEntry(this.localID)
+      const populated = this.model.populateVtableEntryRaw(internalReference)
 
       if (!populated) {
         throw new Error('Entity does not have matching table entry to read from model')
@@ -1338,8 +1366,11 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
    * Guarantees the VTable of this has been parsed from the model so that values can be read out.
    */
   protected guaranteeBuffer(): void {
+    // This entity's descriptor, for the reason in guaranteeVTable: after a
+    // spill, a view released from it (releaseCapturedSourceViews) must be
+    // re-acquired into it, not into the model's newer one.
     if (this.internalReference_.buffer === void 0) {
-      this.model.populateBufferEntry(this.localID)
+      this.model.populateBufferEntryRaw(this.internalReference_)
     }
   }
 }

@@ -1,15 +1,110 @@
-import ModelFormatDetector, {ModelFormatType } from '../../format_detection/model_format_detector'
+import ModelFormatDetector, {
+  ModelFormatType,
+  describeUnrecognizedModel,
+} from '../../format_detection/model_format_detector'
 import ParsingBuffer from '../../parsing/parsing_buffer'
 import { Loadersettings } from './ifc_api'
 import { IfcApiModelPassthrough } from './ifc_api_model_passthrough'
 import { IfcApiProxyAP214 } from './ifc_api_proxy_ap214'
 import { IfcApiProxyIfc } from './ifc_api_proxy_ifc'
 import Logger from '../../logging/logger'
-import { StepExternalByteStore } from '../../step/step_buffer_provider'
+import {
+  StepExternalByteStore,
+  StoreNotSynchronousError,
+} from '../../step/step_buffer_provider'
+import {
+  HEADER_PREFIX_RETRY_BYTES,
+  assertSidecarDescribesStore,
+} from '../../step/step_index_open'
+import { UnrecognizedIfc4x3SchemaError } from '../../ifc/ifc_schema_selection'
+import { storeOpenRequirement } from './store_open_support'
+import {
+  IndexSidecarStaleError,
+  SidecarSourceIdentity,
+  readSidecarSourceIdentity,
+} from '../../step/parsing/index_sidecar'
 
 /** Prefix used to sniff FILE_SCHEMA without paging the whole file. */
 // eslint-disable-next-line no-magic-numbers
 const STORE_DETECT_PREFIX_BYTES = 64 * 1024
+
+/**
+ * Give this open attempt its own statistics object before anything can
+ * fail, so the failure recorders below never write onto a stale one.
+ *
+ * Logger's statistics map is module-level and outlives an IfcAPI, while
+ * model ids restart at 0 per IfcAPI — so without this, an open that throws
+ * before its proxy creates statistics would find (and annotate) an earlier
+ * load's object under the same id. The proxy still creates its own as it
+ * starts, replacing this one; that is the object a failure is then recorded
+ * on, together with whatever status the proxy set before throwing.
+ *
+ * @param modelID The id the open is attempted under.
+ */
+function beginOpenStatistics( modelID: number ): void {
+  Logger.createStatistics( modelID )
+}
+
+/**
+ * Record why an open is about to return -1 because conway did not
+ * recognise the bytes (conway#741). Logs the same "No type detected"
+ * message as before with the reason appended, and leaves status
+ * `UNRECOGNIZED_FORMAT` plus the reason on the attempt's statistics, where
+ * an embedder can read them under the id it attempted the open with.
+ *
+ * @param modelID The id the open was attempted under.
+ * @param data The bytes (or prefix) detection rejected.
+ */
+function recordUnrecognizedFormat( modelID: number, data: Uint8Array ): void {
+  const reason = describeUnrecognizedModel( data )
+  const statistics = Logger.getStatistics( modelID ) ?? Logger.createStatistics( modelID )
+
+  statistics.setLoadStatus( 'UNRECOGNIZED_FORMAT' )
+  statistics.setLoadFailureReason( reason )
+
+  Logger.error( `No type detected when constructing model: ${reason}` )
+}
+
+/**
+ * Record why an open is about to return -1 because the model constructor
+ * threw (conway#741). Keeps any status the proxy already set on the way
+ * down (`UNSUPPORTED_SCHEMA`, `PARSE_FAIL`, `HEADER PARSE: ...`) — embedders
+ * key on those, Share's 4x3 refusal dialog among them — and otherwise sets
+ * `OPEN_FAIL`. The reason is the exception's message.
+ *
+ * @param modelID The id the open was attempted under.
+ * @param error What the constructor threw.
+ */
+function recordOpenFailure( modelID: number, error: unknown ): void {
+  const statistics = Logger.getStatistics( modelID ) ?? Logger.createStatistics( modelID )
+  const status = statistics.getLoadStatus()
+
+  if ( error instanceof StoreNotSynchronousError ) {
+
+    // conway#757: a windowed STEP open over a store with no synchronous
+    // read. Not a failure of the file — the same bytes open buffered — so
+    // its own status, which an embedder keys its buffered fallback on.
+    statistics.setLoadStatus( 'STORE_NOT_SYNCHRONOUS' )
+  } else if ( error instanceof IndexSidecarStaleError ) {
+
+    // conway#756: the index-first open's "this sidecar is for some other
+    // file" — the one failure whose remedy is a parse. Its own status, so an
+    // embedder can key that fallback on it instead of on a message.
+    statistics.setLoadStatus( 'INDEX_STALE' )
+  } else if ( error instanceof UnrecognizedIfc4x3SchemaError ) {
+
+    // A FILE_SCHEMA spelling of the IFC4X3 family that conway has not
+    // verified (e.g. IFC4X3_RC4) is refused by selectIfcSchemaKindForHeader
+    // during the parse — a schema refusal like the IFC4X3 ones that already
+    // record UNSUPPORTED_SCHEMA, and the only one that did not say so. Seen
+    // in production (conway#741) reaching Share as a generic crash.
+    statistics.setLoadStatus( 'UNSUPPORTED_SCHEMA' )
+  } else if ( status === void 0 || status === 'OK' ) {
+    statistics.setLoadStatus( 'OPEN_FAIL' )
+  }
+
+  statistics.setLoadFailureReason( error instanceof Error ? error.message : String( error ) )
+}
 
 /**
  * The factory to construct models.
@@ -29,6 +124,8 @@ export class IfcApiModelPassthroughFactory {
       data: Uint8Array,
       wasmModule: any,
       settings?: Loadersettings ): IfcApiModelPassthrough | undefined {
+
+    beginOpenStatistics( modelID )
 
     const modelFormat = ModelFormatDetector.detect( new ParsingBuffer( data ) )
 
@@ -72,6 +169,7 @@ export class IfcApiModelPassthroughFactory {
             Logger.error( `Unknown error loading AP214 model in passthrough factory ${modelID}` )
           }
 
+          recordOpenFailure( modelID, e )
         }
 
         break
@@ -93,13 +191,14 @@ export class IfcApiModelPassthroughFactory {
             Logger.error( `Unknown error loading IFC model in passthrough factory ${modelID}` )
           }
 
+          recordOpenFailure( modelID, e )
         }
 
         break
 
       default:
 
-        Logger.error( 'No type detected when constructing model')
+        recordUnrecognizedFormat( modelID, data )
     }
   }
 
@@ -173,10 +272,12 @@ export class IfcApiModelPassthroughFactory {
   }
 
   /**
-   * Store-backed open (M1b): IFC models parse through a moving window
-   * over `store` and stay windowed from birth. Non-IFC formats are not
-   * implemented on this path — the caller should fall back to buffering
-   * and fromStreamed.
+   * Store-backed open (M1b; STEP since conway#757): IFC and AP214-family
+   * models parse through a moving window over `store` and stay windowed
+   * from birth. An AP214-family model needs a store with `readSync`
+   * (otherwise status STORE_NOT_SYNCHRONOUS); other formats are not on
+   * this path. Either way the caller falls back to buffering and
+   * fromStreamed.
    *
    * @param modelID
    * @param store External store holding the source bytes.
@@ -194,24 +295,189 @@ export class IfcApiModelPassthroughFactory {
     const prefix = await store.read( 0, prefixLen )
     const modelFormat = ModelFormatDetector.detect( new ParsingBuffer( prefix ) )
 
-    if ( modelFormat === ModelFormatType.IFC ) {
+    // Before the format branch, so the IFC-only refusal below also leaves
+    // this attempt's own (status-less) statistics under `modelID` rather
+    // than an earlier IfcAPI's object with a stale UNSUPPORTED_SCHEMA.
+    beginOpenStatistics( modelID )
+
+    if ( storeOpenRequirement( modelFormat ) !== void 0 ) {
 
       try {
 
-        return await IfcApiProxyIfc.createFromStore(
-            modelID, store, wasmModule, settings )
+        // One store-backed open per engine, the same shape for both
+        // (conway#757). The AP214 one needs a store that reads
+        // synchronously, and refuses one that cannot with
+        // StoreNotSynchronousError (status STORE_NOT_SYNCHRONOUS), so the
+        // caller buffers instead — see IfcApiProxyAP214.createFromStore.
+        return modelFormat === ModelFormatType.IFC ?
+          await IfcApiProxyIfc.createFromStore( modelID, store, wasmModule, settings ) :
+          await IfcApiProxyAP214.createFromStore( modelID, store, wasmModule, settings )
       } catch ( e ) {
 
         const message = e instanceof Error ? e.message : String( e )
 
         Logger.warning(
             `Store-backed open failed for model ${modelID}: ${message}` )
+
+        recordOpenFailure( modelID, e )
       }
     } else {
 
+      // No UNRECOGNIZED_FORMAT here, unlike from()/fromAsync(): this sniff
+      // sees only a 64 KiB prefix, so a long header reads as unrecognised
+      // here and opens fine through the buffered path the caller is told to
+      // use next (see detectFromStore).
+
       Logger.warning(
-          'Store-backed open is IFC-only; use OpenModelStreamed with a buffer ' +
-          `for format ${modelFormat}` )
+          'Store-backed open covers IFC and STEP (AP214/AP203/AP242); use ' +
+          `OpenModelStreamed with a buffer for format ${modelFormat}` )
+    }
+  }
+
+  /**
+   * Sniff a store's format from a bounded prefix, growing the prefix once
+   * if the first read was not enough.
+   *
+   * `ModelFormatDetector` needs `FILE_SCHEMA`, which sits *after*
+   * `FILE_DESCRIPTION` — so a long header pushes it past the 64 KiB the
+   * detection read covers and the sniff comes back `undefined`. Measured on
+   * `data/index.ifc` with an 80 KiB comment injected into its header: the
+   * 64 KiB prefix detects `undefined`, a 4 MiB prefix detects IFC. Without
+   * the retry `OpenModelFromIndex` returns −1 on a perfectly good model,
+   * *before* reaching the header retry inside `openIfcModelFromIndex` —
+   * so the engine function would handle the long header and the compat API
+   * that advertises it would not (conway#541 review round 2).
+   *
+   * The second read only happens on the failure path, and is bounded by the
+   * same constant the engine open grows to, imported rather than repeated
+   * so the two cannot drift.
+   *
+   * `fromStore` reads its own 64 KiB prefix and has the same limitation —
+   * and, separately, makes that read outside its own try, so a rejecting
+   * store makes `OpenModelStream` reject rather than return −1. Both are
+   * pre-existing on a shipped path rather than introduced here, so neither
+   * is changed in this pass; both are tracked in conway#628.
+   *
+   * @param store The store to sniff.
+   * @return {Promise<ModelFormatType | undefined>} The detected format.
+   */
+  private static async detectFromStore(
+      store: StepExternalByteStore ): Promise<ModelFormatType | undefined> {
+
+    const firstLength = Math.min( store.byteLength, STORE_DETECT_PREFIX_BYTES )
+    const first = await store.read( 0, firstLength )
+    const detected = ModelFormatDetector.detect( new ParsingBuffer( first ) )
+
+    if ( detected !== void 0 || firstLength >= store.byteLength ) {
+      return detected
+    }
+
+    const retryLength = Math.min( store.byteLength, HEADER_PREFIX_RETRY_BYTES )
+
+    if ( retryLength <= firstLength ) {
+      return detected
+    }
+
+    return ModelFormatDetector.detect(
+        new ParsingBuffer( await store.read( 0, retryLength ) ) )
+  }
+
+
+  /**
+   * Index-first open (conway#541): the caller already holds the entity
+   * index — a sidecar a coordinator built during its own parse, or one
+   * persisted from a previous visit — so there is nothing to parse. IFC
+   * and the AP214 family, as `fromStore`; the format is sniffed from the
+   * same bounded prefix `fromStore` reads, and the sidecar's schema stamp
+   * must match the engine it picks.
+   *
+   * **No internal fallback.** Anything wrong with the sidecar (wrong
+   * version, wrong source length, a header that will not parse) returns
+   * `undefined`, so `OpenModelFromIndex` reports `-1` and the caller
+   * chooses `OpenModelStream` explicitly. Falling back here would spend a
+   * full parse to hide the mismatch that made it necessary.
+   *
+   * @param modelID
+   * @param store External store holding the source bytes.
+   * @param sidecar The serialised index.
+   * @param wasmModule
+   * @param settings
+   * @return {Promise<IfcApiModelPassthrough | undefined>}
+   */
+  public static async fromIndex(
+      modelID: number,
+      store: StepExternalByteStore,
+      sidecar: Uint8Array,
+      wasmModule: any,
+      settings?: Loadersettings ): Promise<IfcApiModelPassthrough | undefined> {
+
+    // Detection is INSIDE the guard, and that placement is the contract
+    // rather than tidiness. `detectFromStore` reads the store — up to twice
+    // on the failure path — and a store read can reject: OPFS handle
+    // revoked, file truncated under us, network-backed range read failing.
+    // Outside the try that rejection escapes and `OpenModelFromIndex`
+    // rejects its promise instead of returning −1, breaking the contract
+    // stated above at exactly the moment a caller most needs the explicit
+    // `OpenModelStream` fallback (conway#541 review round 3).
+    //
+    // The attempt's own statistics come first, outside the try, for the same
+    // reason as in fromStore: so that neither the IFC-only refusal below nor
+    // the catch can leave an earlier IfcAPI's object under this id.
+    beginOpenStatistics( modelID )
+
+    try {
+
+      const modelFormat = await IfcApiModelPassthroughFactory.detectFromStore( store )
+
+      if ( storeOpenRequirement( modelFormat ) === void 0 ) {
+
+        // Classify against the sidecar BEFORE refusing the format (codex
+        // review of conway#760). A source truncated inside its header, or
+        // rewritten so it no longer sniffs as IFC, is stale with respect to
+        // a sidecar written for the original file — and `INDEX_STALE` is the
+        // status an embedder keys its parse fallback on. Without this, that
+        // open ends as a bare -1 with no status at all. A blob too broken to
+        // carry an identity falls through to the format refusal, as before.
+        let identity: SidecarSourceIdentity | undefined
+
+        try {
+          identity = readSidecarSourceIdentity( sidecar )
+        } catch {
+          identity = void 0
+        }
+
+        if ( identity !== void 0 ) {
+          await assertSidecarDescribesStore(
+              identity, store, settings?.VERIFY_INDEX_SOURCE_HASH ?? false )
+        }
+
+        // Deliberately a different message from the catch below: both end in
+        // −1, so the log line is the only thing that separates "this is not
+        // a STEP file" from "the store would not answer".
+        Logger.warning(
+            'Index-first open covers IFC and STEP (AP214/AP203/AP242); use ' +
+            `OpenModelStreamed with a buffer for format ${modelFormat}` )
+        return
+      }
+
+      // The sidecar's schema stamp is checked against the engine chosen
+      // here (conway#757): an AP214 sidecar handed to an IFC store, or the
+      // reverse, is refused as stale before any column is copied.
+      return modelFormat === ModelFormatType.IFC ?
+        await IfcApiProxyIfc.createFromIndex(
+            modelID, store, sidecar, wasmModule, settings ) :
+        await IfcApiProxyAP214.createFromIndex(
+            modelID, store, sidecar, wasmModule, settings )
+    } catch ( e ) {
+
+      const message = e instanceof Error ? e.message : String( e )
+
+      Logger.warning(
+          `Index-first open failed for model ${modelID}: ${message}` )
+
+      // A restore or schema-validation throw keeps the status the proxy set
+      // (INDEX_RESTORE_FAIL); a store read that rejected becomes OPEN_FAIL.
+      recordOpenFailure( modelID, e )
     }
   }
 
@@ -233,6 +499,8 @@ export class IfcApiModelPassthroughFactory {
       data: Uint8Array,
       wasmModule: any,
       settings?: Loadersettings ): Promise<IfcApiModelPassthrough | undefined> {
+
+    beginOpenStatistics( modelID )
 
     const modelFormat = ModelFormatDetector.detect( new ParsingBuffer( data ) )
 
@@ -263,7 +531,7 @@ export class IfcApiModelPassthroughFactory {
 
         default:
 
-          Logger.error( 'No type detected when constructing model')
+          recordUnrecognizedFormat( modelID, data )
           return void 0
       }
     } catch ( e ) {
@@ -277,6 +545,7 @@ export class IfcApiModelPassthroughFactory {
         Logger.error( `Unknown error loading model in passthrough factory ${modelID}` )
       }
 
+      recordOpenFailure( modelID, e )
     }
   }
 }

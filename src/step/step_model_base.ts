@@ -1,9 +1,14 @@
 import { StepIndexEntry } from './parsing/step_parser'
-import { StepIndexColumns } from './parsing/columnar_index'
-import { releaseScratchParsingBuffer } from './parsing/step_deserialization_functions'
+import { StepIndexColumns, cloneIndexEntry } from './parsing/columnar_index'
+import {
+  releaseScratchParsingBuffer,
+  stepExtractReference,
+} from './parsing/step_deserialization_functions'
 import { scanExpressRefs } from './parsing/express_ref_scan'
 import {
   ResidentStepBufferProvider,
+  StepBufferAcquisition,
+  StepBufferNotResidentError,
   StepBufferProvider,
   StepExternalByteStore,
   WindowedStepBufferProvider,
@@ -26,10 +31,33 @@ import { SceneNodeGeometry } from '../core/scene_node'
 import { CanonicalMesh } from '../core/canonical_mesh'
 import { ModelMaterials } from '../core/model_materials'
 
+/* Span reads for visitRecordBytesInFileOrder (conway#755). Over one
+ * 860 MB model's IfcRelDefinesByProperties records, a 4 KiB gap gives
+ * 1,711 reads for 9.8 MB, 64 KiB 1,075 for 19 MB, and 256 KiB 964 for
+ * 31 MB: past 64 KiB the reads barely drop while the bytes climb, and below it a store round
+ * trip costs more than the gap's bytes. A 1 MiB span cap keeps one read
+ * well under a 4 MiB window. Four in flight hides a store's per-read
+ * latency without holding more than ~4 MiB of span bytes. */
+// eslint-disable-next-line no-magic-numbers -- byte-size arithmetic (64KiB)
+const DEFAULT_SPAN_GAP_BYTES = 64 * 1024
+// eslint-disable-next-line no-magic-numbers -- byte-size arithmetic (1MiB)
+const DEFAULT_MAX_SPAN_BYTES = 1024 * 1024
+const SPAN_READS_IN_FLIGHT = 4
+
 
 /**
  * The base for models parsed from STEP.
  */
+/**
+ * Anything that holds a source-window view in `buffer` — a descriptor, or
+ * a multi-mapped class reference — as {@link StepModelBase}'s view release
+ * sees it.
+ */
+interface CapturedViewHolder {
+  buffer?: Uint8Array
+}
+
+
 export default abstract class StepModelBase<
   EntityTypeIDs extends number,
   BaseEntity extends StepEntityBase<EntityTypeIDs> = StepEntityBase<EntityTypeIDs> >
@@ -44,6 +72,17 @@ implements Iterable<BaseEntity>, Model {
   private static readonly LEAF_SPAN_COALESCE_GAP_ = 1024
 
   private readonly vtableBuilder_: StepVtableBuilder = new StepVtableBuilder()
+
+  // Scratch for forEachReferenceInFieldOfTypes: one record's field starts at
+  // a time, cleared per record. Kept apart from vtableBuilder_ because that
+  // one's buffer is shared by every descriptor's retained vtable, which is
+  // exactly the per-record retention that sweep exists to avoid.
+  private scratchVtable_?: StepVtableBuilder
+
+  // typeID -> 1 (is the type or a subtype) / 2 (is not), per queried
+  // constructor — see typeIDIsA.
+  private readonly typeIsACache_ = new Map< unknown, Uint8Array >()
+
   private readonly expressIDMap_: InterpolationSearchTable32
   private readonly inlineAddressMap_: InterpolationSearchTable32
 
@@ -62,6 +101,74 @@ implements Iterable<BaseEntity>, Model {
   private readonly expressID_: Uint32Array     // real (non-inline) entries only
   private readonly count_: number
   private readonly firstInlineElement_: number
+
+  // Whether the top-level express IDs arrived in non-decreasing order. The
+  // lookup table already knows, but the index sidecar's `flags` word carries
+  // it too, and `indexColumns()` must hand back the same verdict the parse
+  // produced or an exported sidecar differs from one serialised off the
+  // parse's own columns by that one bit (conway#756).
+  private readonly expressIdsSorted_: boolean
+
+  // True once `setFieldMasks` has run, whatever it was given. Every caller is
+  // the IFC4-compatible IFC4X3 route, whose index is TRANSLATED (4X3 records
+  // re-typed as IFC4 ones) and whose masks the v2 sidecar has no slot for —
+  // and an eligible file can have nothing to mask, so `fieldMasks_` being
+  // unset does not mean the index is untranslated. See `hasFieldMasks`.
+  private fieldMasksApplied_: boolean = false
+
+  // Parse-order copies of the complex entries' index fields, taken at
+  // construction. The retained descriptors in `complexEntries_` are not a
+  // safe source for the index once an entity has been read:
+  // `getElementByLocalID` / `getTypedElementByLocalID` sort a holder's
+  // `multiMapping` IN PLACE (deepest type first) before materialising it,
+  // so serialising the live map after a read writes a reordered mapping and
+  // the export stops being byte-identical to a fresh parse's (codex review
+  // of conway#760). Complex entries are rare (0 on every corpus model), so
+  // a copy costs nothing measurable. `cloneIndexEntry` keeps
+  // `inlineEntities` by reference; that is safe because nothing writes an
+  // entry's `inlineEntities` after the parse, and the sidecar writer never
+  // reads the field.
+  private readonly complexIndexEntries_?:
+    Map< number, StepIndexEntry< EntityTypeIDs > >
+
+  /**
+   * The FNV-1a (`hashSource`) of the exact bytes this model's index was
+   * built from, recorded by the open that built it: folded into the parse's
+   * own pass on the streaming opens, taken over the resident buffer on the
+   * classic ones, and adopted from the sidecar on an index-first open (the
+   * index there IS the sidecar's, so its recorded hash is the identity of
+   * the bytes the index describes). Recording is opt-in on the parsing
+   * opens (`RECORD_SOURCE_HASH` / `recordSourceHash`); undefined when it
+   * was off, or for a model built some other way.
+   *
+   * This, not a hash of the source at export time, is what an exported
+   * index sidecar records (conway#756, codex review of conway#760): the
+   * index describes the bytes that were PARSED, and a resident buffer
+   * mutated after open — or a same-length store swapped in by
+   * `spillSourceToExternalStore`, which checks only the length — would
+   * otherwise be written under the new bytes' hash and pass a verified
+   * reopen with the old offsets. Recorded this way, that reopen is refused
+   * as stale instead.
+   */
+  public indexedSourceHash?: number
+
+  /**
+   * The sampled digest (`index_sidecar.ts#sampledSourceSpans`) of the same
+   * bytes as {@link indexedSourceHash}, recorded beside it by the same opens
+   * and adopted the same way from a sidecar. A v3 sidecar carries it so a
+   * revisit can verify about 0.5 MB of the store instead of all of it
+   * (conway#758). Undefined whenever `indexedSourceHash` is.
+   */
+  public indexedSampledHash?: number
+
+  /**
+   * The sidecar `hashAlgorithm` id {@link indexedSourceHash} was taken with
+   * (`index_sidecar.ts`: 1 = FNV-1a, 2 = SHA-256 blocks), so an export
+   * labels the digest it carries. Undefined reads as FNV-1a, which every
+   * open recorded before bldrs-ai/Share#2092 and the synchronous opens still
+   * do.
+   */
+  public indexedSourceHashAlgorithm?: number
 
   /**
    * Is this model's index a mid-parse PREFIX? True only for a model built
@@ -86,6 +193,9 @@ implements Iterable<BaseEntity>, Model {
   // overhead would dominate — an array slot is 8 B.
   private descriptorCache_:
     ( StepEntityInternalReferencePrivate< EntityTypeIDs, BaseEntity > | undefined )[] = []
+
+  /** Decoded-field counts by local ID — see {@link setFieldMasks}. */
+  private fieldMasks_?: Map< number, number >
 
   // Rare STEP complex/external-mapping entities (multiMapping) keep their full
   // descriptor object — the multi-entity graph isn't column-encoded.
@@ -177,9 +287,11 @@ implements Iterable<BaseEntity>, Model {
       this.expressID_          = columns.expressID
       this.count_              = columns.count
       this.firstInlineElement_ = firstInline
+      this.expressIdsSorted_   = columns.expressIdsSorted
       this.indexIsPrefix       = columns.indexIsPrefix ?? false
       this.complexEntries_     = columns.complexEntries as unknown as
         Map< number, StepEntityInternalReferencePrivate< EntityTypeIDs, BaseEntity > > | undefined
+      this.complexIndexEntries_ = StepModelBase.snapshotComplexEntries( columns.complexEntries )
       return
     }
 
@@ -287,10 +399,38 @@ implements Iterable<BaseEntity>, Model {
     this.expressID_          = expressIDs
     this.count_              = count
     this.firstInlineElement_ = firstInlineElement
+    this.expressIdsSorted_   = expressIdsAlreadySorted
     this.complexEntries_     = complexEntries
+    this.complexIndexEntries_ = StepModelBase.snapshotComplexEntries(
+        complexEntries as unknown as Map< number, StepIndexEntry< EntityTypeIDs > > | undefined )
 
     // The object index is only ever produced by a completed parse.
     this.indexIsPrefix       = false
+  }
+
+
+  /**
+   * Copy complex entries down to their index fields, in parse order — see
+   * `complexIndexEntries_`.
+   *
+   * @param entries The complex entries as the index arrived.
+   * @return {Map | undefined} Independent copies, or undefined for none.
+   */
+  private static snapshotComplexEntries< TypeIDs extends number >(
+      entries: Map< number, StepIndexEntry< TypeIDs > > | undefined ):
+      Map< number, StepIndexEntry< TypeIDs > > | undefined {
+
+    if ( entries === void 0 ) {
+      return
+    }
+
+    const copies = new Map< number, StepIndexEntry< TypeIDs > >()
+
+    for ( const [ localID, entry ] of entries ) {
+      copies.set( localID, cloneIndexEntry( entry ) as StepIndexEntry< TypeIDs > )
+    }
+
+    return copies
   }
 
 
@@ -344,13 +484,130 @@ implements Iterable<BaseEntity>, Model {
 
     const typeID = this.typeID_[ localID ]
 
-    return {
+    const descriptor: StepEntityInternalReferencePrivate< EntityTypeIDs, BaseEntity > = {
       address:   this.address_[ localID ],
       length:    this.length_[ localID ],
       typeID:    typeID === -1 ? void 0 : ( typeID as EntityTypeIDs ),
       expressID: localID < this.firstInlineElement_ ?
         this.expressID_[ localID ] : void 0,
     }
+
+    const maskedFieldCount = this.fieldMasks_?.get( localID )
+
+    if ( maskedFieldCount !== void 0 ) {
+      descriptor.maskedFieldCount = maskedFieldCount
+    }
+
+    return descriptor
+  }
+
+
+  /**
+   * Mask the trailing fields of specific records: for each express ID, only
+   * the first `count` fields are ever decoded, and every field at or past
+   * `count` reads as `$` through the typed getters (and through any direct
+   * `extract*` call — e.g. spatial_imposter.ts's storey `Elevation` read).
+   *
+   * The mechanism is the vtable: `populateVtableEntryRaw` clamps
+   * `vtableCount` to `count` and ends the last kept field where field
+   * `count` starts, so no cursor into the masked bytes survives, and
+   * `StepEntityBase.getOffsetAndEndCursor` answers a masked record's
+   * out-of-range read with a one-byte `$` rather than its "too few fields"
+   * throw. Unmasked records keep that throw unchanged.
+   *
+   * Exists for IFC4X3 records translated to an IFC4 type whose tail
+   * attributes mean something else (ifc4x3_ifc4_translation.ts):
+   * IFCFACILITYPART's index 9 is a typed select, which would otherwise be
+   * decoded as IfcBuildingStorey's `Elevation`. Call before any entity of
+   * the model is read. Descriptors materialised earlier would carry no
+   * mask, so they are dropped here.
+   *
+   * @param masks Decoded-field count, keyed by express ID.
+   */
+  public setFieldMasks( masks: ReadonlyMap< number, number > ): void {
+
+    const byLocalID = new Map< number, number >()
+
+    for ( const [ expressID, count ] of masks ) {
+
+      const localID = this.expressIDMap_.get( expressID )
+
+      if ( localID !== void 0 ) {
+        byLocalID.set( localID, count )
+      }
+    }
+
+    this.fieldMasks_ = byLocalID.size > 0 ? byLocalID : void 0
+    this.fieldMasksApplied_ = true
+    this.descriptorCache_ = []
+  }
+
+
+  /**
+   * Has {@link setFieldMasks} been applied to this model — even with nothing
+   * to mask?
+   *
+   * The only caller is the IFC4-compatible IFC4X3 route
+   * (`ifc4x3_ifc4_compat.ts`), so this is also "is this index a translated
+   * one". The index sidecar uses it to refuse an export it cannot represent
+   * (conway#756): v2 has no slot for the masks, and an index-first open
+   * refuses every IFC4X3 header anyway.
+   *
+   * @return {boolean} True after any setFieldMasks call.
+   */
+  public get hasFieldMasks(): boolean {
+    return this.fieldMasksApplied_
+  }
+
+
+  /**
+   * The model's entity index, as the columns it reads from — the shape
+   * `serializeIndexSidecarFromColumns` takes, so an open model can write
+   * the sidecar an index-first open restores (conway#756).
+   *
+   * These are the model's OWN arrays, not copies: the index is fixed for a
+   * model's lifetime (nothing writes a column after construction), so a
+   * view is safe to read and a copy of a 9 M-row index (~150 MB) would be
+   * pure waste. **Do not mutate them.**
+   *
+   * Identity, not equivalence, is the point. Both constructor paths leave
+   * the same layout — the object path's breadth-first `inlineEntities`
+   * unfold is the order `ColumnarIndexSink` assigns — so the columns here
+   * are the columns the parse produced, and a sidecar written from them is
+   * byte-identical to one written from the parse's own columns. The parity
+   * suite (`ifc_index_sidecar_export.test.ts`) pins that for both a
+   * resident and a windowed open.
+   *
+   * `complexEntries` is NOT the live retained descriptor map but the
+   * parse-order copy taken at construction (`complexIndexEntries_`): reading
+   * a complex entity sorts its live `multiMapping` in place.
+   *
+   * @return {StepIndexColumns} The index columns.
+   */
+  public indexColumns(): StepIndexColumns< EntityTypeIDs > {
+
+    return {
+      address: this.address_,
+      length: this.length_,
+      typeID: this.typeID_,
+      expressID: this.expressID_,
+      count: this.count_,
+      firstInlineElement: this.firstInlineElement_,
+      complexEntries: this.complexIndexEntries_,
+      expressIdsSorted: this.expressIdsSorted_,
+      indexIsPrefix: this.indexIsPrefix ? true : void 0,
+    }
+  }
+
+
+  /**
+   * The decoded-field count set by {@link setFieldMasks} for a record.
+   *
+   * @param localID The record's local ID.
+   * @return {number | undefined} The count, or undefined if unmasked.
+   */
+  public fieldMaskOf( localID: number ): number | undefined {
+    return this.fieldMasks_?.get( localID )
   }
 
   /**
@@ -409,6 +666,7 @@ implements Iterable<BaseEntity>, Model {
       // the memory the old retained object array could never release. They
       // rematerialise from the columns on next access.
       this.descriptorCache_ = []
+      this.capturedViews_.clear()
 
       // Complex (multiMapping) entries are retained objects; clear their lazy
       // fields in place, matching the previous per-entry reset. The mapped
@@ -435,6 +693,18 @@ implements Iterable<BaseEntity>, Model {
               mapped.vtable      = void 0
               mapped.vtableCount = void 0
               mapped.vtableIndex = void 0
+
+              // Set by each generated constructor that consumes the class
+              // reference, and read by the multi-mapping materialisation
+              // to skip one already consumed. `multiEntity` was dropped
+              // just above, so the next read rebuilds every sub-entity: a
+              // flag left set made it skip them all and answer nothing.
+              // Seen as AP214 assembly placements (complex
+              // REPRESENTATION_RELATIONSHIP_WITH_TRANSFORMATION records)
+              // vanishing from a demand pump run after any read of them
+              // and an `invalidate(true)` — a property sweep then a spill,
+              // or ReleaseEntityCache (bldrs-ai/Share#2139).
+              mapped.visitedMulti = void 0
             }
           }
         }
@@ -596,6 +866,234 @@ implements Iterable<BaseEntity>, Model {
   }
 
 
+  /**
+   * Is a schema type ID the given entity class or one of its subclasses?
+   *
+   * The same predicate {@link getTypedElementByLocalID} applies before it
+   * constructs a single-class record (`type === constructor ||
+   * constructor.prototype instanceof type`), answered from the type ID
+   * alone so no entity has to be built to ask it. Deliberately the
+   * prototype chain and not `type.query`: AP214's generated `query`
+   * arrays are not full subtype closures (`representation_item.query`
+   * omits `geometric_representation_item`), so a `query` test would
+   * reject records the typed getter accepts.
+   *
+   * @param typeID A schema type ID (from {@link typeIDOf}).
+   * @param type The entity class to test against.
+   * @return {boolean} True if a record of `typeID` reads as `type`.
+   */
+  public typeIDIsA(
+      typeID: number,
+      type: StepEntityConstructorAbstract< EntityTypeIDs > ): boolean {
+
+    const constructors = this.schema.constructors as
+      ( StepEntityConstructor< EntityTypeIDs, BaseEntity > | undefined )[]
+
+    let cache = this.typeIsACache_.get( type )
+
+    if ( cache === void 0 ) {
+      cache = new Uint8Array( constructors.length )
+      this.typeIsACache_.set( type, cache )
+    }
+
+    let answer = cache[ typeID ]
+
+    if ( answer === 0 ) {
+
+      const constructorRead = constructors[ typeID ]
+      const isA = constructorRead !== void 0 &&
+        ( ( type as unknown ) === constructorRead ||
+          constructorRead.prototype instanceof ( type as unknown as typeof Object ) )
+
+      answer = isA ? 1 : 2
+
+      if ( typeID < cache.length ) {
+        cache[ typeID ] = answer
+      }
+    }
+
+    return answer === 1
+  }
+
+
+  /**
+   * Visit, for every record of `types`, the record that one of its
+   * single-reference fields names — read straight from the record's
+   * source bytes, without materialising a descriptor, an entity or a
+   * retained vtable for it.
+   *
+   * This is the walk `populateStyledItemsMap` does in both IFC and AP214
+   * (styled item → the representation item it styles). Through
+   * `model.types()` it cost one descriptor + entity + vtable per record,
+   * all retained: on a 231 MB IFC with 194k styled items, ~1.6–2.4 s and
+   * ~120–136 MB of heap in one synchronous stretch at the end of the open.
+   *
+   * Only the plain case is answered here, and everything else is handed
+   * back to the caller **in the same position in the walk**, so a caller
+   * that runs its existing entity-based code in `onOther` gets exactly the
+   * old results, in exactly the old order (a `Map` it fills keeps the same
+   * insertion order). A record is plain when it:
+   *
+   *  - is a single-class, top-level record (not complex/multi-mapped, not
+   *    an inline entity), with no field mask ({@link setFieldMasks});
+   *  - has the field, and the field is a `#<digits>` reference, parsed by
+   *    the same `stepExtractReference` the generated getters use;
+   *  - names a record this model indexes (a dangling reference goes to
+   *    `onOther`, where an AP214 getter throws and logs it); and
+   *  - when `targetType` is given, names a single-class record that
+   *    {@link typeIDIsA} that type — the check a typed getter
+   *    (`extractElement(..., type)`) makes. Anything it would reject goes
+   *    to `onOther`, where the getter throws the same error it always did.
+   *
+   * Field 0 is read at the record's stored address (the data-block start,
+   * the same identity {@link extractIntegerArrayByLocalIDInto} relies on);
+   * other fields are located with the schema tokenizer into a scratch
+   * vtable that is cleared per record.
+   *
+   * On a windowed source a record that is not resident goes to `onOther`
+   * too: `acquire` throws `StepBufferNotResidentError` for it, and the
+   * caller's entity path then throws the same error inside its own
+   * try/catch, as it did before this helper existed.
+   *
+   * @param types The entity classes whose `query` to walk — the same cursor
+   * {@link types} walks, so the visit order is identical.
+   * @param fieldIndex The field's position in a single-class record.
+   * @param onReference Called with (record local ID, target local ID) for a
+   * plain record.
+   * @param onOther Called with the record's local ID for every other record.
+   * @param targetType If given, the class the target must be (see above).
+   */
+  public forEachReferenceInFieldOfTypes(
+      types: StepEntityConstructorAbstract< EntityTypeIDs >[],
+      fieldIndex: number,
+      onReference: ( localID: number, targetLocalID: number ) => void,
+      onOther: ( localID: number ) => void,
+      targetType?: StepEntityConstructorAbstract< EntityTypeIDs > ): void {
+
+    const distinctTypes = types.length === 1 ? ( types[ 0 ].query ) :
+      ( new Set( types.flatMap( ( type ) => type.query ) ) )
+
+    const cursor = this.typeIndex.cursor( ...distinctTypes )
+
+    try {
+      while ( cursor.step() ) {
+
+        const high = cursor.high
+        let low = cursor.low
+
+        while ( low !== 0 ) {
+
+          const lowestOneHot = extractOneHotLow( low )
+
+          low ^= ( 1 << lowestOneHot )
+
+          const localID = ( high | lowestOneHot )
+          const target = this.plainFieldReference_( localID, fieldIndex, targetType )
+
+          if ( target === void 0 ) {
+            onOther( localID )
+          } else {
+            onReference( localID, target )
+          }
+        }
+      }
+    } finally {
+      cursor.free()
+    }
+  }
+
+
+  /**
+   * The plain-case read behind {@link forEachReferenceInFieldOfTypes}.
+   *
+   * @param localID The record.
+   * @param fieldIndex The field's position.
+   * @param targetType Optional class the target must be.
+   * @return {number | undefined} The target's local ID, or undefined when
+   * the record is not plain and the caller's entity path must decide.
+   */
+  private plainFieldReference_(
+      localID: number,
+      fieldIndex: number,
+      targetType: StepEntityConstructorAbstract< EntityTypeIDs > | undefined ):
+      number | undefined {
+
+    if ( localID >= this.firstInlineElement_ ||
+         this.complexEntries_?.has( localID ) ||
+         this.fieldMasks_?.has( localID ) ) {
+      return void 0
+    }
+
+    const address = this.address_[ localID ]
+    const length = this.length_[ localID ]
+
+    let acquisition: StepBufferAcquisition
+
+    try {
+      acquisition = this.bufferProvider_.acquire( address, length )
+    } catch ( error ) {
+      if ( error instanceof StepBufferNotResidentError ) {
+        return void 0
+      }
+
+      throw error
+    }
+
+    const buffer = acquisition.buffer
+    const start = address - acquisition.offset
+    const end = start + length
+
+    let fieldStart = start
+    let fieldEnd = end
+
+    if ( fieldIndex !== 0 ) {
+
+      const scratch = this.scratchVtable_ ??= new StepVtableBuilder()
+
+      scratch.clear()
+
+      const extracted = this.schema.parser.extractDataEntry( buffer, start, end, scratch )
+
+      if ( extracted === void 0 || fieldIndex >= extracted[ 1 ] ) {
+        return void 0
+      }
+
+      const vtable = scratch.buffer
+
+      fieldStart = vtable[ extracted[ 0 ] + fieldIndex ]
+      // Same end bound StepEntityBase.getOffsetAndEndCursor gives a field.
+      fieldEnd = fieldIndex + 1 !== extracted[ 1 ] ?
+        vtable[ extracted[ 0 ] + fieldIndex + 1 ] - 1 :
+        extracted[ 2 ]
+    }
+
+    const expressID = stepExtractReference( buffer, fieldStart, fieldEnd )
+
+    if ( expressID === void 0 ) {
+      return void 0
+    }
+
+    const targetLocalID = this.resolveExpressID( expressID )
+
+    if ( targetLocalID === void 0 ) {
+      return void 0
+    }
+
+    if ( targetType !== void 0 ) {
+
+      const targetTypeID = this.typeID_[ targetLocalID ]
+
+      if ( targetTypeID < 0 ||
+           this.complexEntries_?.has( targetLocalID ) ||
+           !this.typeIDIsA( targetTypeID, targetType ) ) {
+        return void 0
+      }
+    }
+
+    return targetLocalID
+  }
+
+
   public populateVtableEntryRaw(
     element: StepEntityInternalReference< EntityTypeIDs > ): boolean {
     if (element.vtableIndex !== void 0 || element.typeID === 0 ) {
@@ -624,6 +1122,18 @@ implements Iterable<BaseEntity>, Model {
     element.endCursor   = extratedEntry[ 2 ]
     element.buffer = acquisition.buffer
     element.vtable = this.vtableBuilder_.buffer
+
+    this.noteCapturedView_( element )
+
+    // setFieldMasks: drop the masked fields' cursors entirely, and end the
+    // last kept field exactly where a non-final field ends (the byte before
+    // the next field's start), so no read can reach the masked bytes.
+    const masked = element.maskedFieldCount
+
+    if ( masked !== void 0 && extratedEntry[ 1 ] > masked ) {
+      element.endCursor   = element.vtable[ extratedEntry[ 0 ] + masked ] - 1
+      element.vtableCount = masked
+    }
 
     return true
   }
@@ -658,18 +1168,132 @@ implements Iterable<BaseEntity>, Model {
       throw new Error(`Invalid localID ${localID}`)
     }
 
-    const element = this.entry(localID)
+    this.populateBufferEntryRaw( this.entry(localID) )
+  }
+
+
+  /**
+   * Force the population of the buffer entry for a particular descriptor —
+   * the {@link populateVtableEntryRaw} twin of {@link populateBufferEntry}.
+   *
+   * An entity reads through the descriptor it was built on, which after
+   * `invalidate(true)` (and so after `spillSourceToExternalStore`) is no
+   * longer the one `entry()` returns for its local ID: populating by local
+   * ID would fill the model's fresh descriptor and leave the entity's own
+   * still empty (bldrs-ai/Share#2139).
+   *
+   * @param element The descriptor to populate.
+   */
+  public populateBufferEntryRaw(
+      element: StepEntityInternalReference< EntityTypeIDs > ): void {
 
     element.buffer =
       this.bufferProvider_.acquire( element.address, element.length ).buffer
+
+    this.noteCapturedView_( element )
 
     if ( element.multiMapping !== void 0 ) {
 
       for ( const mapped of element.multiMapping ) {
         mapped.buffer =
           this.bufferProvider_.acquire( mapped.address, mapped.length ).buffer
+
+        this.noteCapturedView_( mapped )
       }
     }
+  }
+
+  /**
+   * Remember a reference that just captured a source-window view, so
+   * {@link releaseCapturedSourceViews} can drop it without knowing which
+   * records a walk read. Windowed sources only: a resident source's views
+   * are the source buffer itself, which nothing frees.
+   *
+   * @param reference The descriptor (or mapped class reference) whose
+   * `buffer` was just set.
+   */
+  private noteCapturedView_( reference: CapturedViewHolder ): void {
+
+    if ( this.trackCapturedSourceViews && this.buffer_ === void 0 ) {
+      this.capturedViews_.add( reference )
+    }
+  }
+
+  /**
+   * Opt in to {@link releaseCapturedSourceViews}: remember every reference
+   * that captures a window view, so a walk that cannot name the records it
+   * read can drop their views wholesale. Off by default, and only the AP214
+   * windowed opens turn it on (`IfcApiProxyAP214`, conway#757).
+   *
+   * Opt-in rather than always-on for IFC's sake (codex review of
+   * conway#769): IFC pages by named closures and drops their views with
+   * {@link releaseSourceViews}, which clears `buffer` without touching this
+   * set, so tracking on an IFC open would keep a reference to every
+   * descriptor it ever paged — memory nothing releases until close, for a
+   * mechanism IFC does not use. Off, IFC's windowed opens are exactly as
+   * they were.
+   */
+  public trackCapturedSourceViews: boolean = false
+
+  /**
+   * References holding a window view captured since the last
+   * {@link releaseCapturedSourceViews}, while
+   * {@link trackCapturedSourceViews} is on. A Set, so a reference whose view
+   * {@link releaseSourceViews} dropped and that is read again is held once,
+   * not once per capture: the size is bounded by the records read since the
+   * last release, whatever else clears views in between.
+   */
+  private capturedViews_ = new Set< CapturedViewHolder >()
+
+  /**
+   * How many references hold a tracked window view right now (tests and
+   * telemetry; always 0 unless {@link trackCapturedSourceViews} is on).
+   *
+   * @return {number} The count.
+   */
+  public get capturedSourceViewCount(): number {
+    return this.capturedViews_.size
+  }
+
+  /**
+   * Drop every source-window view captured since the last call — the
+   * whole-model form of {@link releaseSourceViews}, for a walk that cannot
+   * name the records it read. Needs {@link trackCapturedSourceViews}.
+   *
+   * A descriptor that read a record keeps a view of the 4 MiB window it
+   * came from, and a view keeps its window alive after the LRU evicts it.
+   * A walk that reads all over the model — AP214's assembly walk and its
+   * demand units, which read synchronously and fault their windows in
+   * (`StepExternalByteStore.readSync`) — would otherwise end up holding
+   * every window of the file, however small the LRU cap. Calling this at a
+   * quiescent point (between pump batches, after a property index build)
+   * returns those windows to the LRU's budget. Vtables stay, and the next
+   * read of a record re-acquires its view (see {@link releaseSourceViews}
+   * for why the base is stable).
+   *
+   * No-op while the source is fully resident.
+   *
+   * @return {number} How many views were dropped.
+   */
+  public releaseCapturedSourceViews(): number {
+
+    const captured = this.capturedViews_
+
+    if ( captured.size === 0 ) {
+      return 0
+    }
+
+    for ( const reference of captured ) {
+      reference.buffer = void 0
+    }
+
+    const released = captured.size
+
+    captured.clear()
+
+    releaseScratchParsingBuffer()
+
+    return released
   }
 
 
@@ -690,6 +1314,21 @@ implements Iterable<BaseEntity>, Model {
    */
   public get isSourceExternal(): boolean {
     return this.buffer_ === void 0
+  }
+
+  /**
+   * Can a synchronous read of this model's source page a missing window in
+   * itself — a windowed source over a store with `readSync`
+   * (`StepExternalByteStore.readSync`)? Always true while the source is
+   * resident, where nothing is ever missing.
+   *
+   * This is what decides whether a schema without an asynchronous closure
+   * pager (AP214) can be read windowed at all.
+   *
+   * @return {boolean} True when every synchronous read can succeed.
+   */
+  public get sourceReadsSynchronously(): boolean {
+    return !this.isSourceExternal || this.bufferProvider_.faultsInSynchronously === true
   }
 
   /**
@@ -860,6 +1499,45 @@ implements Iterable<BaseEntity>, Model {
   }
 
   /**
+   * {@link ensureResidentByLocalID} for a closure walk: when the record's
+   * range is already resident, do the provider's hit bookkeeping
+   * synchronously and return undefined; otherwise return the async ensure.
+   *
+   * Why: a windowed geometry pump walks every product's #ref closure, and
+   * nearly every record in it is a hit. On a 309 MB faceted-brep IFC2X3
+   * export that was 14.1 M ensures for 851 store reads, each an async frame
+   * plus a provider-level async frame and their promises; the walk and the
+   * garbage collection behind it were most of the ~32 s by which its
+   * windowed geometry phase trailed the buffered one in Node (41.9 against
+   * 10.3 s), and a window holding the whole file removed only ~5 s of that
+   * (bldrs-ai/Share#2139). Taking this path cut the phase to 34 s at the
+   * same 16-chunk window.
+   *
+   * A wave whose records are all resident no longer yields between waves;
+   * nothing depends on that yield, since every record is claimed and pinned
+   * before its residency is checked, exactly as before.
+   *
+   * Complex records with mapped class ranges take the async path whole, so
+   * their mapped ranges are ensured exactly as before.
+   *
+   * @param localID The local ID of the record (must be < count).
+   * @return {Promise< void > | undefined} The pending ensure, or undefined
+   * when the record was resident.
+   */
+  private ensureResidentOrTouch_( localID: number ): Promise< void > | undefined {
+
+    const provider = this.bufferProvider_
+
+    if ( provider.touchIfResident !== void 0 &&
+         this.complexEntries_?.get( localID )?.multiMapping === void 0 &&
+         provider.touchIfResident( this.address_[ localID ], this.length_[ localID ] ) ) {
+      return void 0
+    }
+
+    return this.ensureResidentByLocalID( localID )
+  }
+
+  /**
    * Page in the byte range(s) backing a record by express ID — see
    * `ensureResidentByLocalID`. Unknown express IDs resolve silently
    * (the following read will surface the miss the same way it does
@@ -917,6 +1595,11 @@ implements Iterable<BaseEntity>, Model {
    * the chunk once it lands, but its read is still in flight. Anything
    * that must synchronously read a record's bytes after this returns
    * has to iterate `claimed`, never `seen` (conway#526).
+   * @param skip If set, referenced records for which this returns true are
+   * left out entirely: not visited, pinned, paged or spanned, and their
+   * `#refs` not followed. For a reader that will not touch their bytes (a
+   * property flatten leaving representations as handles). Seeds are never
+   * skipped.
    * @return {Promise<Set<number>>} The local IDs that were visited.
    */
   public async ensureResidentClosureByLocalID(
@@ -926,7 +1609,8 @@ implements Iterable<BaseEntity>, Model {
       descend?: ( localID: number ) => boolean,
       leafSpans?: { address: number, length: number }[],
       spanLeaf?: ( localID: number ) => boolean,
-      claimed?: Set< number > ): Promise< Set< number > > {
+      claimed?: Set< number >,
+      skip?: ( localID: number ) => boolean ): Promise< Set< number > > {
 
     if ( !this.isSourceExternal ) {
       return seen
@@ -978,7 +1662,22 @@ implements Iterable<BaseEntity>, Model {
         break
       }
 
-      await Promise.all( wave.map( ( id ) => this.ensureResidentByLocalID( id ) ) )
+      // Only the misses cost a promise; a wave of hits does not await at
+      // all (see ensureResidentOrTouch_).
+      const pending: Promise< void >[] = []
+
+      for ( const id of wave ) {
+
+        const ensure = this.ensureResidentOrTouch_( id )
+
+        if ( ensure !== void 0 ) {
+          pending.push( ensure )
+        }
+      }
+
+      if ( pending.length > 0 ) {
+        await Promise.all( pending )
+      }
 
       const waveSpans: { address: number, length: number }[] = []
 
@@ -994,7 +1693,8 @@ implements Iterable<BaseEntity>, Model {
 
           const referenced = this.expressIDMap_.get( expressID )
 
-          if ( referenced === void 0 || seen.has( referenced ) ) {
+          if ( referenced === void 0 || seen.has( referenced ) ||
+               skip?.( referenced ) ) {
             continue
           }
 
@@ -1025,8 +1725,19 @@ implements Iterable<BaseEntity>, Model {
       }
 
       if ( waveSpans.length > 0 ) {
-        await Promise.all( waveSpans.map( ( span ) =>
-          this.ensureResidentRange( span.address, span.length ) ) )
+
+        const pendingSpans: Promise< void >[] = []
+
+        for ( const span of waveSpans ) {
+
+          if ( this.bufferProvider_.touchIfResident?.( span.address, span.length ) !== true ) {
+            pendingSpans.push( this.ensureResidentRange( span.address, span.length ) )
+          }
+        }
+
+        if ( pendingSpans.length > 0 ) {
+          await Promise.all( pendingSpans )
+        }
       }
     }
 
@@ -1109,6 +1820,101 @@ implements Iterable<BaseEntity>, Model {
 
 
   /**
+   * {@link releaseSourceViews} over every record the model has a
+   * descriptor for: drop every source-window view any reader left behind,
+   * named or not, so the LRU's evictions actually free their windows.
+   *
+   * For a reader that is about to stop naming what it reads. A record whose
+   * descriptor already holds a view is read through that view without being
+   * populated again, so {@link trackCapturedSourceViews} never sees it, and
+   * {@link releaseCapturedSourceViews} never drops it; a view held that way
+   * keeps an evicted 4 MiB window alive for as long as it stays. One sweep
+   * when the reader starts means everything it reads afterwards is captured
+   * fresh. O(descriptors), once per reader.
+   *
+   * No-op while the source is fully resident.
+   */
+  public releaseAllSourceViews(): void {
+
+    if ( !this.isSourceExternal ) {
+      return
+    }
+
+    const clear = ( item: { buffer?: Uint8Array, multiMapping?: CapturedViewHolder[] } ) => {
+
+      item.buffer = void 0
+
+      if ( item.multiMapping !== void 0 ) {
+
+        for ( const mapped of item.multiMapping ) {
+          mapped.buffer = void 0
+        }
+      }
+    }
+
+    for ( const item of this.descriptorCache_ ) {
+
+      if ( item !== void 0 ) {
+        clear( item )
+      }
+    }
+
+    if ( this.complexEntries_ !== void 0 ) {
+
+      for ( const item of this.complexEntries_.values() ) {
+        clear( item )
+      }
+    }
+
+    this.capturedViews_.clear()
+
+    releaseScratchParsingBuffer()
+  }
+
+
+  /**
+   * Run a synchronous reader with {@link trackCapturedSourceViews} on, then
+   * drop every view it captured ({@link releaseCapturedSourceViews}) and
+   * restore the flag. For a reader that pages nothing ahead and so cannot
+   * name what it read: a windowed extract over a store that faults windows
+   * in itself (`StepExternalByteStore.readSync`).
+   *
+   * `read` must not await anything. Because it runs to completion in one
+   * synchronous stretch, the views tracked are exactly the ones it captured,
+   * never another reader's, which is what lets IFC turn tracking on without
+   * the cost codex flagged on conway#769 (a set nothing drains): it is on for
+   * this call only and empty when it returns, thrown or not.
+   *
+   * @param read The synchronous reader.
+   * @return {T} What `read` returns.
+   */
+  public readTrackingSourceViews< T >( read: () => T ): T {
+
+    const wasTracking = this.trackCapturedSourceViews
+
+    this.trackCapturedSourceViews = true
+
+    try {
+      return read()
+    } finally {
+      this.releaseCapturedSourceViews()
+      this.trackCapturedSourceViews = wasTracking
+    }
+  }
+
+
+  /**
+   * Evict unpinned source windows until residency is back within the
+   * window cap. Eviction otherwise runs only inside an ensure, so a walk
+   * that pinned more windows than the cap and has just unpinned them
+   * stays over budget until the next ensure. No-op while resident.
+   */
+  public trimSourceResidency(): void {
+    this.bufferProvider_.trimToCap?.()
+  }
+
+
+  /**
    * Unpin every local ID in `localIDs` (best-effort; missing IDs are
    * ignored). Use after {@link ensureResidentClosureByLocalID}, which
    * pins as it walks.
@@ -1120,6 +1926,247 @@ implements Iterable<BaseEntity>, Model {
     for ( const localID of localIDs ) {
       this.unpinByLocalID( localID )
     }
+  }
+
+
+  /**
+   * Call `visit` once per record with that record's bytes resident,
+   * paging a windowed source in **file order**, so each source window
+   * is read about once however scattered the records are in the
+   * caller's order (conway#752).
+   *
+   * Callers that need results in their own order collect them here and
+   * reorder after. The visit order is by source address, which is not
+   * the iteration order of `expressIDs`.
+   *
+   * On a windowed source, each record is pinned across its await, so an
+   * interleaved paging (e.g. a concurrent geometry pump) cannot evict it
+   * before `visit` reads it. After `visit` returns, its captured window
+   * views are dropped ({@link releaseSourceViews}), so a walk over
+   * thousands of records does not keep every window it touched
+   * reachable past the LRU budget. `visit` must therefore copy out what
+   * it needs, not hold views.
+   *
+   * Fully resident sources visit in iteration order, with no awaits.
+   * Unknown express IDs are visited too (a read of one resolves to
+   * nothing, exactly as it would on a resident source), and a repeated
+   * express ID is visited once.
+   *
+   * @param expressIDs The records to visit.
+   * @param visit Called synchronously with each express ID while its
+   * record is resident.
+   * @return {Promise<void>} Resolves after every record is visited.
+   */
+  public async visitResidentInFileOrder(
+      expressIDs: Iterable< number >,
+      visit: ( expressID: number ) => void ): Promise< void > {
+
+    const seenExpressIDs = new Set< number >()
+
+    if ( !this.isSourceExternal ) {
+
+      for ( const expressID of expressIDs ) {
+
+        if ( !seenExpressIDs.has( expressID ) ) {
+
+          seenExpressIDs.add( expressID )
+          visit( expressID )
+        }
+      }
+
+      return
+    }
+
+    const localIDs: number[] = []
+    const localToExpress = new Map< number, number >()
+
+    for ( const expressID of expressIDs ) {
+
+      if ( seenExpressIDs.has( expressID ) ) {
+        continue
+      }
+
+      seenExpressIDs.add( expressID )
+
+      const localID = this.resolveExpressID( expressID )
+
+      if ( localID === void 0 || localID >= this.count_ ) {
+        // Nothing to page: the read resolves to nothing, as on a
+        // resident source.
+        visit( expressID )
+        continue
+      }
+
+      localIDs.push( localID )
+      localToExpress.set( localID, expressID )
+    }
+
+    const address = this.address_
+
+    localIDs.sort( ( a, b ) => address[ a ] - address[ b ] )
+
+    for ( const localID of localIDs ) {
+
+      this.pinByLocalID( localID )
+
+      try {
+
+        await this.ensureResidentByLocalID( localID )
+        visit( localToExpress.get( localID )! )
+
+      } finally {
+
+        this.unpinByLocalID( localID )
+        this.releaseSourceViews( [ localID ] )
+      }
+    }
+  }
+
+
+  /**
+   * Call `visit` with each record's own source bytes (its argument list,
+   * the `[address, address + length)` range that `extractLineArguments`
+   * reads) in **file order**, reading a windowed source as coalesced
+   * record spans straight from the store instead of paging whole windows.
+   *
+   * For sweeps over a sparse type: one 860 MB model's 23.5 k
+   * IfcRelDefinesByProperties records hold 1.2 MB between them but sit in
+   * every one of its 215 4 MiB windows, so {@link visitResidentInFileOrder}
+   * over them reads the whole file, where these spans read ~20 MB
+   * (conway#755).
+   *
+   * Records closer than `maxGapBytes` share one read, up to `maxSpanBytes`
+   * a span (a record longer than that is a span of its own), and up to
+   * {@link SPAN_READS_IN_FLIGHT} reads are in flight at once. Nothing is
+   * paged in or cached and no descriptor captures a view, so the sweep
+   * leaves the window as it found it (StepBufferProvider.readSpan).
+   *
+   * Complex (multi-mapped) records keep their fields in their mapped
+   * records' ranges, so they are not visited; their local IDs are returned
+   * for the caller to read through {@link visitResidentInFileOrder}. Local
+   * IDs out of range are skipped, and a repeated one is visited once. On a
+   * resident source every record is a view over the buffer, visited
+   * without an await.
+   *
+   * @param localIDs The records to visit.
+   * @param visit Called synchronously with each record's local ID and its
+   * bytes. The bytes are only valid during the call.
+   * @param maxGapBytes Largest gap between records read as one span.
+   * @param maxSpanBytes Longest span to read at once.
+   * @return {Promise<number[]>} The complex records, in file order, that
+   * were not visited.
+   */
+  public async visitRecordBytesInFileOrder(
+      localIDs: Iterable< number >,
+      visit: ( localID: number, bytes: Uint8Array ) => void,
+      maxGapBytes: number = DEFAULT_SPAN_GAP_BYTES,
+      maxSpanBytes: number = DEFAULT_MAX_SPAN_BYTES ): Promise< number[] > {
+
+    const address = this.address_
+    const length  = this.length_
+    const sorted: number[] = []
+    const complex: number[] = []
+    const seen = new Set< number >()
+
+    for ( const localID of localIDs ) {
+
+      if ( localID >= this.count_ || seen.has( localID ) ) {
+        continue
+      }
+
+      seen.add( localID )
+      sorted.push( localID )
+    }
+
+    sorted.sort( ( a, b ) => address[ a ] - address[ b ] )
+
+    // Coalesce into spans: [first, end) indices into `sorted`, and the
+    // byte range covering them.
+    const spans: { first: number, end: number, start: number, stop: number }[] = []
+
+    for ( let i = 0; i < sorted.length; ++i ) {
+
+      const localID = sorted[ i ]
+
+      if ( this.complexEntries_?.get( localID )?.multiMapping !== void 0 ) {
+        complex.push( localID )
+        continue
+      }
+
+      const start = address[ localID ]
+      const stop  = start + length[ localID ]
+      const last  = spans[ spans.length - 1 ]
+
+      if ( last !== void 0 && start - last.stop <= maxGapBytes &&
+           Math.max( stop, last.stop ) - last.start <= maxSpanBytes ) {
+
+        last.end  = i + 1
+        last.stop = Math.max( stop, last.stop )
+        continue
+      }
+
+      spans.push( { first: i, end: i + 1, start, stop } )
+    }
+
+    const buffer = this.buffer_
+
+    if ( buffer !== void 0 ) {
+
+      for ( const span of spans ) {
+        for ( let i = span.first; i < span.end; ++i ) {
+
+          const localID = sorted[ i ]
+
+          if ( this.complexEntries_?.get( localID )?.multiMapping === void 0 ) {
+            visit( localID, buffer.subarray( address[ localID ], address[ localID ] + length[ localID ] ) )
+          }
+        }
+      }
+
+      return complex
+    }
+
+    const provider = this.bufferProvider_
+    const read = ( span: typeof spans[ number ] ) => {
+      const bytes = provider.readSpan( span.start, span.stop - span.start )
+      // A failed read surfaces at its await below; this keeps the reads
+      // queued behind it from rejecting unobserved once that throws.
+      bytes.catch( () => void 0 )
+      return bytes
+    }
+    const inflight: Promise< Uint8Array >[] = []
+
+    for ( let next = 0; next < Math.min( SPAN_READS_IN_FLIGHT, spans.length ); ++next ) {
+      inflight.push( read( spans[ next ] ) )
+    }
+
+    for ( let s = 0; s < spans.length; ++s ) {
+
+      const span  = spans[ s ]
+      const bytes = await inflight[ s ]
+
+      if ( s + SPAN_READS_IN_FLIGHT < spans.length ) {
+        inflight.push( read( spans[ s + SPAN_READS_IN_FLIGHT ] ) )
+      }
+
+      // Drop our hold on the span's bytes once it is visited.
+      delete inflight[ s ]
+
+      for ( let i = span.first; i < span.end; ++i ) {
+
+        const localID = sorted[ i ]
+
+        if ( this.complexEntries_?.get( localID )?.multiMapping !== void 0 ) {
+          continue
+        }
+
+        const from = address[ localID ] - span.start
+
+        visit( localID, bytes.subarray( from, from + length[ localID ] ) )
+      }
+    }
+
+    return complex
   }
 
 
@@ -1503,9 +2550,64 @@ implements Iterable<BaseEntity>, Model {
       return multiElements?.find( where => where instanceof type ) as O | undefined
     }
 
-    let entity = element.entity as BaseEntity | undefined
+    const memoized = element.entity as BaseEntity | undefined
 
-    if (entity === void 0 && element.typeID !== void 0) {
+    if ( memoized !== void 0 ) {
+
+      // conway#606. The memo records the entity, never the type a caller
+      // asked for, and ANY earlier read populates it — including the
+      // untyped `getElementByLocalID`. So the type test below, which used
+      // to be the only one in this method, ran on a memo MISS only: a
+      // typed lookup of an already-materialised record returned the cached
+      // object through the `as O` cast without checking it at all, and
+      // callers of `extractElement` got an entity of the wrong class where
+      // their own declared field type says otherwise. Memoization defaults
+      // to on, so this was the ordinary path, not a corner.
+      //
+      // `instanceof` is the same predicate the construct below applies,
+      // not a second opinion on it. `element.entity` for a single-mapped
+      // record is only ever `new schema.constructors[ element.typeID ]`
+      // (here, or in `getElementByLocalID`), and for an instance of that
+      // constructor `entity instanceof type` holds exactly when
+      // `type === constructorRead || constructorRead.prototype instanceof
+      // type` does — the first disjunct is the instance's own prototype,
+      // the second its strict ancestors, and together they are its whole
+      // prototype chain. It is also what the multi-mapping branch above
+      // has always used to pick a variant.
+      //
+      // One record breaks that "only ever `schema.constructors`" rule and
+      // is worth naming, because it is the single place where a memo hit
+      // and a memo miss can still disagree. A type-0 external-mapping
+      // container reaching HERE (rather than the multi-mapping branch)
+      // holds an `externalMappingType` instance, since that is what
+      // `getElementByLocalID` builds for type 0, while the construct path
+      // below reads `schema.constructors[ 0 ]`, which is `undefined`. It
+      // is reachable: the parser mints type 0 for a complex instance and
+      // normally attaches a `multiMapping`, but a degenerate `#5=();`
+      // leaves that undefined and lands here — verified by parsing one.
+      // So a cold lookup answers `undefined` where a warm one answers the
+      // mapping object. The divergence is confined to a `type` argument of
+      // `StepEntityBase` / `StepExternalMapping` / `<Schema>StepExternalMapping`,
+      // none of which any generated getter passes; for every schema type a
+      // caller can actually name, both answers are `undefined`, because
+      // that class descends from `StepEntityBase` alone. Left as it is
+      // rather than special-cased: guarding it would add a branch for a
+      // query nothing issues, and the warm answer is the truthful one.
+      //
+      // A mismatch therefore returns `undefined` rather than falling
+      // through to reconstruct: the fall-through would call the same
+      // constructor and fail the same test, so it could only build the
+      // rejected class again. The eviction/churn trade the issue raises is
+      // not reachable — a record has one schema type, so "read as two
+      // different types" cannot produce two different memo tenants — and
+      // not evicting keeps referential equality for the holders that asked
+      // for a type this record actually is.
+      return ( memoized instanceof type ? memoized : void 0 ) as O | undefined
+    }
+
+    let entity: BaseEntity | undefined
+
+    if (element.typeID !== void 0) {
 
       const elementTypeID = element.typeID
 
@@ -1520,7 +2622,7 @@ implements Iterable<BaseEntity>, Model {
         entity = new constructorRead(localID, element, this )
 
         if ( this.elementMemoization ) {
-          element.entity = entity!
+          element.entity = entity
         }
       }
     }

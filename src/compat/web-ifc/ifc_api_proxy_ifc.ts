@@ -28,23 +28,58 @@ import { NodeValueHandle } from './properties_passthrough'
 import * as glmatrix from 'gl-matrix'
 import { IDENTITY_MAT4, LARGE_COORDINATE_BUDGET_M, TRANSLATION_X, TRANSLATION_Y,
   TRANSLATION_Z, composeTransformF64, deriveCoordinationF64 } from './coordination_f64'
+import {
+  exceedsLargeCoordinateBudget,
+  normalizeWithCentreF64,
+  placementMagnitudeM,
+} from './geometry_recentre'
 import { IfcProperties } from './ifc_properties'
 import Logger from '../../logging/logger'
-import { ProgressTracker } from '../../core/progress'
-import { formatModelLine } from '../../core/progress_log'
+import { ProgressTracker, yieldToEventLoop } from '../../core/progress'
+import { DemandPrepYieldLike, formatModelLine } from '../../core/progress_log'
 import {
   WasmHeapArrayConstructor, wasmHeapView,
 } from '../../core/wasm_heap'
 import { extractModelInfo } from '../../loaders/loading_utilities'
+import {
+  assertNativeSchemaSupported,
+  Ifc4x3CompatRouteRequired,
+  selectIfcSchemaKindForHeader,
+} from '../../ifc/ifc_schema_selection'
+import {
+  buildIfc4x3CompatIndexAsync,
+  Ifc4x3CompatIndex,
+  Ifc4x3IneligibleError,
+  maskRawArguments,
+} from '../../ifc/ifc4x3_ifc4_compat'
 import IfcStepParser from '../../ifc/ifc_step_parser'
+import { openIfcModelFromIndex } from '../../ifc/ifc_stream_open'
+import {
+  exportIfcIndexSidecar,
+  IfcIndexSidecarExport,
+} from '../../ifc/ifc_index_sidecar_export'
+import {
+  hashSampledBuffer,
+  hashSource,
+  IndexSidecarUnsupportedError,
+  SIDECAR_HASH_FNV1A_32,
+} from '../../step/parsing/index_sidecar'
 import ParsingBuffer from '../../parsing/parsing_buffer'
 import { BufferByteSource, StoreByteSource } from '../../step/parsing/byte_source'
+import {
+  HashingByteSource,
+  hashSourceAsync,
+  sidecarHashAlgorithmId,
+  sourceHashOptionsFor,
+} from '../../step/parsing/source_hash'
 import {
   buildIndexStreamingAsync,
   buildColumnarIndexStreamingAsync,
 } from '../../step/parsing/streaming_index_builder'
 import { ColumnarIndexSink } from '../../step/parsing/columnar_index'
-import { StorePreviewChannel } from './store_preview_channel'
+import {
+  windowedIfcPreviewChannel,
+} from './ifc_windowed_preview_adapter'
 import {
   ifcPreviewAdapter,
   StreamedPreviewChannel,
@@ -60,8 +95,11 @@ import Memory from '../../memory/memory'
 import { FromRawLineData } from './ifc2x4_helper'
 import { shimIfcEntityMap, shimIfcEntityReverseMap } from './shim_schema_mapping'
 import { EntityTypesIfcCount } from '../../ifc/ifc4_gen/entity_types_ifc.gen'
-import { IfcProduct, IfcRelAggregates, IfcRoot } from '../../ifc/ifc4_gen'
+import {
+  IfcProduct, IfcProductRepresentation, IfcRelAggregates, IfcRepresentationMap, IfcRoot,
+} from '../../ifc/ifc4_gen'
 import { CanonicalMeshType } from '../../index'
+import { isNativeDeleted } from './native_geometry_liveness'
 
 // Batch size used when a whole-model consumer (streamAllMeshes) drains
 // a deferred model's remaining products synchronously.
@@ -89,6 +127,131 @@ const STREAMED_PARSE_POOL_BYTES = 1024 * 1024
 const STORE_PARSE_POOL_BYTES = 16 * 1024 * 1024
 // eslint-disable-next-line no-magic-numbers
 const BYTES_PER_MIB = 1024 * 1024
+
+/* Set to an integer seed to reorder the demand worklists after they are
+ * built. Off by default and free when unset — see permuteDemandWorklists
+ * for what it is for (conway#640). */
+const WORKLIST_PERMUTATION_ENV = 'CONWAY_PERMUTE_WORKLIST'
+
+/* xorshift32's shift triple. Named rather than inlined because they ARE
+ * the generator: change one and every seed names a different permutation,
+ * which would silently invalidate any run record that cites a seed. */
+// eslint-disable-next-line no-magic-numbers
+const XORSHIFT_SHIFT_A = 13
+// eslint-disable-next-line no-magic-numbers
+const XORSHIFT_SHIFT_B = 17
+const XORSHIFT_SHIFT_C = 5
+
+/* 2^32 — the divisor that turns the generator's uint32 into the [0, 1)
+ * fraction Fisher-Yates indexes with. */
+// eslint-disable-next-line no-magic-numbers
+const UINT32_RANGE = 4294967296
+
+/**
+ * The permutation seed this process asks for, if any.
+ *
+ * Reads the environment defensively: this module runs in the browser as
+ * well, where `process` is not defined, and an unset lever must cost
+ * nothing rather than throw.
+ *
+ * @return {number | undefined} The seed, or undefined when the lever is
+ * off or its value is not a finite number.
+ */
+function worklistPermutationSeed(): number | undefined {
+
+  const raw = typeof process === 'undefined' ?
+    void 0 : process.env[WORKLIST_PERMUTATION_ENV]
+
+  if (raw === void 0 || raw === '') {
+    return void 0
+  }
+
+  const seed = Number(raw)
+
+  return Number.isFinite(seed) ? seed : void 0
+}
+
+/**
+ * Fisher-Yates over `items`, in place, driven by a seeded xorshift32.
+ *
+ * Seeded rather than `Math.random` because the experiment this serves
+ * compares two whole model loads: an order nobody can name again is not a
+ * result, it is an anecdote.
+ *
+ * @param items The list to reorder.
+ * @param seed The permutation seed.
+ */
+function permuteInPlace<Element>(items: Element[], seed: number): void {
+
+  // xorshift32 has a fixed point at zero — seeded there it emits zero
+  // forever and the "shuffle" is the identity, which would read as a clean
+  // null result rather than as a misconfigured run.
+  let state = (seed | 0) === 0 ? 1 : seed | 0
+
+  for (let where = items.length - 1; where > 0; --where) {
+
+    state ^= state << XORSHIFT_SHIFT_A
+    state ^= state >>> XORSHIFT_SHIFT_B
+    state ^= state << XORSHIFT_SHIFT_C
+
+    const pick = Math.floor(((state >>> 0) / UINT32_RANGE) * (where + 1))
+    const held = items[where]
+
+    items[where] = items[pick]
+    items[pick] = held
+  }
+}
+
+/**
+ * Reorder worklists that are about to be adopted, under
+ * `CONWAY_PERMUTE_WORKLIST`. A no-op — not even a copy — when unset.
+ *
+ * **Why this exists (conway#640).** A sharded load builds a small
+ * population of one model's geometries differently from an unsharded one.
+ * The diagnosis localises that to extraction ORDER rather than to
+ * sharding: the geometry cache is keyed by representation-item local ID
+ * and is last-writer-wins (`ifc_model_geometry.ts` `add`), while the
+ * rel-void path writes into it a solid cut in the absolute frame of
+ * whichever product is being walked — so which product touches a shared
+ * key last decides that key's content. Sharding changes that order, but so
+ * would anything else, and the claim can only be settled by an experiment
+ * that changes ONLY the order.
+ *
+ * That is what this is, and why it runs here: after the worklists are
+ * built and after any shard has narrowed them, before anything reads them.
+ * Membership is untouched — the same products and the same relationships,
+ * walked in a different sequence — so a divergence between two seeds on
+ * one unsharded load is order-dependence with no sharding in the picture.
+ *
+ * Kept as a permanent lever rather than a throwaway patch: order
+ * dependence is not the kind of defect that stays fixed by itself, and
+ * this is the cheapest check that it has not come back.
+ *
+ * @param products The product worklist, reordered in place.
+ * @param aggregates The rel-aggregates worklist, reordered in place.
+ */
+function permuteDemandWorklists(
+    products: number[],
+    aggregates: number[]): void {
+
+  const seed = worklistPermutationSeed()
+
+  if (seed === void 0) {
+    return
+  }
+
+  // Two streams rather than one: the passes run one after the other, so a
+  // single generator would give the aggregates whatever state the products
+  // happened to leave it in — correlated with the product count, which is
+  // exactly what a second seeded run is supposed to hold fixed.
+  permuteInPlace(products, seed)
+  permuteInPlace(aggregates, seed + 1)
+
+  Logger.warning(
+      `[worklist] ${WORKLIST_PERMUTATION_ENV}=${seed}: demand worklists ` +
+      `permuted (${products.length} products, ${aggregates.length} ` +
+      'rel-aggregates). Output is not comparable to an unpermuted load.')
+}
 
 /**
  * The coordination frame spatial-structure imposters compose under.
@@ -145,10 +308,11 @@ interface IfcProxyLoadState {
 /**
  * The placements of a FlatMesh whose native geometry is still alive.
  *
- * There is no "is this deleted" predicate on the binding, so liveness is
- * probed by the cheapest call that touches the native and throws when it is
- * gone. Only used on the degraded StreamAllMeshes path, where the
- * alternative is handing a consumer a handle that aborts on read.
+ * Liveness is `isNativeDeleted` first — embind's own predicate, which costs
+ * a property read — with the cheapest call that touches the native kept as
+ * the backstop for a handle that is unusable for some other reason. Only
+ * used on the degraded StreamAllMeshes path, where the alternative is
+ * handing a consumer a handle that aborts on read.
  *
  * @param mesh The accumulated per-entity mesh.
  * @param geometryMap Express ID to [geometry, material, transform].
@@ -166,7 +330,7 @@ function livePlacements(
     const placed = mesh.geometries.get(where)
     const entry = geometryMap.get(placed.geometryExpressID)
 
-    if (entry === void 0) {
+    if (entry === void 0 || isNativeDeleted(entry[0])) {
       continue
     }
 
@@ -201,6 +365,28 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
   /** Was this model opened without extraction (DEFER_GEOMETRY)? */
   private deferredMode_: boolean = false
 
+  /**
+   * Did the open declare the caller the owner of the pumped mesh stream
+   * (STREAMING_CONSUMER)? When true the delta capture hands each FlatMesh to
+   * the callback and keeps nothing: meshMap and vectorFlatMesh stay empty
+   * for the model's whole pumped life, and a late whole-model ask is served
+   * by re-walking the scene (see recaptureWholeModel_).
+   *
+   * Deliberately ANDed with deferredMode_ at the one place it is set: on a
+   * classic open there is no pump, so there is no accumulation the flag
+   * could suppress, and letting it be true there would only give
+   * streamAllMeshes a branch it can never need.
+   */
+  private streamingConsumer_: boolean = false
+
+  /**
+   * The array behind model[4]'s hand-rolled Vector<FlatMesh>. Held so
+   * recaptureWholeModel_ can truncate the spine — Vector has push but no
+   * clear, and a re-walk that appends to whatever a previous one left would
+   * make LoadAllGeometry return each entity once per call.
+   */
+  private readonly flatMeshArray_: FlatMesh[]
+
   /** Parse/load tracker — deferred opens resume it for the Geometry phase. */
   private progressTracker_?: ProgressTracker
 
@@ -209,6 +395,14 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
   /** Deferred-mode product worklist (file order), lazily enumerated. */
   private demandProducts_?: number[]
+
+  /**
+   * What the worklist build cost, recorded by whichever builder installed
+   * the worklists. Undefined until then — a model that never pumps has no
+   * prep to report, and reporting zeros would be indistinguishable from a
+   * build that was instantaneous.
+   */
+  private demandPrepYield_?: DemandPrepYieldLike
 
   /**
    * Deferred capture watermarks: entity localID -> how many of its
@@ -259,6 +453,54 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
   private demandCursor_ = 0
 
+  /**
+   * Tail of the async pump's serialisation chain — resolved when no pump
+   * call holds the lock, otherwise pending until the current one releases.
+   *
+   * The pump body reads `demandCursor_`, awaits a prefetch, and only then
+   * writes the cursor back, so two overlapping calls would select the same
+   * batch and could write the cursor backward. Every entry into that body
+   * queues behind this. See extractGeometryBatchAsync for the full account
+   * and for why conway#660 is what made it reachable.
+   */
+  private pumpChain_: Promise<void> = Promise.resolve()
+
+  /**
+   * Tail of the whole-model ask's serialisation chain — the same shape as
+   * pumpChain_, one level up.
+   *
+   * An ask suspends the geometry budget for its whole duration and captures
+   * a `degraded` snapshot alongside it, so exactly one ask may own that
+   * suspension at a time. Two overlapping asks would each snapshot the
+   * other's suspended (infinite) budget as the value to restore, and the
+   * first to finish would re-enable eviction underneath the second — whose
+   * snapshot then says "nothing was ever evicted" while its geometry is
+   * being freed. See streamAllMeshesAsync.
+   */
+  private askChain_: Promise<void> = Promise.resolve()
+
+  /**
+   * True while a whole-model ask holds the geometry budget suspended, which
+   * is what makes {@link setGeometryBudget} defer instead of applying.
+   */
+  private budgetSuspendedForAsk_ = false
+
+  /**
+   * The budget a caller asked for while an ask held the suspension, already
+   * normalised the way GeometryResidency.setBudgetBytes normalises it.
+   * Undefined when nothing was requested; applied by the ask on its way out
+   * in place of the value it suspended.
+   */
+  private pendingBudgetBytes_?: number
+
+  /**
+   * Whether the store-backed pump has dropped the source views earlier
+   * readers left behind (StepModelBase.releaseAllSourceViews), which it does
+   * once, on its first batch over a store that faults windows in. See the
+   * note in pumpGeometryBatchAsync_.
+   */
+  private sourceViewsSwept_ = false
+
   /** Wall-clock split of the store-backed batch pump (profile script). */
   private readonly extractProfile_ = {
     prefetchMs: 0,
@@ -280,8 +522,20 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
    * are captured, and no placement is ever appended over an
    * already-delivered one (the ILNA missing-facades / 388_4
    * duplicate-placement class).
+   *
+   * Local IDs, like demandProducts_, and resolved to an entity only when
+   * the pass reaches one (relAggregateAt_). Holding the entities instead
+   * pinned the whole source after a spill (bldrs-ai/Share#2139): an
+   * entity memoises every entity it has read through, each keeps its own
+   * descriptor, and a descriptor's `buffer` is a view of the source.
+   * `spillSourceToExternalStore` -> `invalidate(true)` drops the model's
+   * descriptor cache but cannot reach descriptors held from outside it,
+   * so on a buffered open the IfcRelAggregates in this list -> their
+   * RelatingObject -> units, placements, ... kept the whole buffer alive
+   * for the life of the model. A local ID resolved after the spill gets a
+   * fresh descriptor that pages through the store.
    */
-  private demandAggregates_?: IfcRelAggregates[]
+  private demandAggregates_?: number[]
 
   /** Cursor into demandAggregates_ — items before it are extracted. */
   private demandAggregatesCursor_ = 0
@@ -366,6 +620,18 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
   private demandCoordinationFromPreview_: boolean = false
 
   /**
+   * Latch for the "recentre did not recentre" report, so a georeferenced
+   * model logs one line and not one per placement.
+   *
+   * COORDINATE_TO_ORIGIN exists to bring a model inside
+   * LARGE_COORDINATE_BUDGET_M; a composed placement still beyond it means
+   * the frame failed, and there is no other symptom until a user notices
+   * the render jittering. Ecobau.ifc emitted 3,691 placements at 2.9e6 m
+   * for months with nothing in the log (Share#1634).
+   */
+  private largeCoordinateReported_ = false
+
+  /**
    * True when the coordination frame was HANDED to this instance rather than
    * derived from its own first geometry (see setCoordinationFrame).
    *
@@ -377,6 +643,13 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
    * checkShardPreconditions_ were ever protecting.
    */
   private coordinationSupplied_: boolean = false
+
+  /**
+   * Did this model open from an IFC4X3 header? Retained from the load state
+   * (the proxy keeps no header) so the sidecar export can refuse it even
+   * when the compat route had nothing to mask — see `exportIndexSidecar`.
+   */
+  private readonly openedFromIfc4x3Header_: boolean
 
   _isCoordinated: boolean = false
   linearScalingFactor: number = 1
@@ -416,7 +689,15 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
     this.conwaywasm = loadState.conwaywasm
     this.conwayGeometry_ = loadState.conwayGeometry
+    this.openedFromIfc4x3Header_ =
+      IfcApiProxyIfc.isIfc4x3Header( loadState.stepHeader )
     this.deferredMode_ = loadState.deferred === true
+
+    // Only a deferred open has a pump, and only a pump accumulates — see
+    // streamingConsumer_ for why the AND lives here rather than at each use.
+    this.streamingConsumer_ =
+      this.deferredMode_ && settings?.STREAMING_CONSUMER === true
+
     this.progressTracker_ = loadState.tracker
 
     const statistics = Logger.getStatistics(modelID)
@@ -518,6 +799,8 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
     const coordinationMatrix: glmatrix.mat4 = glmatrix.mat4.create()
 
+    this.flatMeshArray_ = flatMeshArray
+
     this.model = [
       model,
       scene,
@@ -584,6 +867,21 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     statistics?.setGeometryTime(executionTimeInMs)
     // eslint-disable-next-line no-magic-numbers
     statistics?.setGeometryMemory(scene.model.geometry.calculateGeometrySize() / (1024 * 1024))
+
+    // conway#740: numerator of the partial-load fraction against the
+    // IfcProduct count the parse already recorded. On a deferred open it is
+    // 0 until the pump runs, and IfcAPI refreshes it as it does.
+    statistics?.setProductsWithGeometryCount(scene.geometryOwnerCount)
+  }
+
+  /**
+   * Distinct products with at least one built, placed geometry so far
+   * (conway#740) — see IfcSceneBuilder.geometryOwnerCount.
+   *
+   * @return {number} The count.
+   */
+  getProductsWithGeometryCount(): number {
+    return this.model[1].geometryOwnerCount
   }
 
   /**
@@ -691,6 +989,34 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
   }
 
   /**
+   * Index-first open (conway#541): take the entity index the caller
+   * already has — a sidecar built by a coordinator's parse, or persisted
+   * from a previous visit — and skip the parse entirely. Everything after
+   * the index is the store-backed open, unchanged.
+   *
+   * @param modelID The model ID being opened.
+   * @param store External store holding the source bytes.
+   * @param sidecar The serialised index.
+   * @param wasmModule The wasm module.
+   * @param settings Loader settings (ON_PROGRESS is honored).
+   * @return {Promise<IfcApiProxyIfc>} The constructed proxy.
+   */
+  public static async createFromIndex(
+      modelID: number,
+      store: StepExternalByteStore,
+      sidecar: Uint8Array,
+      wasmModule: any,
+      settings?: Loadersettings ): Promise<IfcApiProxyIfc> {
+
+    const loadState = await IfcApiProxyIfc.parseColumnarFromIndex(
+        modelID, store, sidecar, new ConwayGeometry(wasmModule), settings,
+        settings?.DEFER_GEOMETRY === true )
+
+    return new IfcApiProxyIfc(modelID, new Uint8Array( 0 ), wasmModule, settings, loadState)
+  }
+
+
+  /**
    * Log + record the header parse result on the model statistics.
    *
    * @param result0 The header parse result.
@@ -734,6 +1060,88 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
         break
 
       default:
+    }
+  }
+
+  /**
+   * Refuse an IFC4X3 file on the sidecar (index-first) open. That path
+   * restores its index from a sidecar instead of parsing, so it has neither
+   * the keyword set eligibility needs nor the translated-record masks the
+   * IFC4-compatible route applies (ifc4x3_ifc4_compat.ts). A 4X3 file must
+   * be opened through a parsing entry point. In practice
+   * `openIfcModelFromIndex` already refuses first, via
+   * `assertNativeSchemaSupported`; this keeps the compat surface's
+   * statistics bookkeeping for it.
+   *
+   * @param modelID The model ID being opened (for statistics).
+   * @param stepHeader The parsed STEP header.
+   * @throws {Error} If the file is IFC4X3-family: recognised, or
+   * unrecognised (`UnrecognizedIfc4x3SchemaError`, thrown by
+   * `selectIfcSchemaKindForHeader` itself).
+   */
+  private static assertSchemaSupported(
+      modelID: number,
+      stepHeader: StepHeader ): void {
+
+    if ( selectIfcSchemaKindForHeader( stepHeader ) === 'ifc4x3' ) {
+
+      const statistics = Logger.getStatistics(modelID)
+
+      statistics?.setLoadStatus('UNSUPPORTED_SCHEMA')
+
+      throw new Error(
+          'IFC4X3 schema detected: the index-first open has no parse to ' +
+          'decide IFC4-compatible eligibility from — open the file through ' +
+          'a parsing entry point.' )
+    }
+  }
+
+  /**
+   * Run an IFC4-compatible IFC4X3 build (ifc4x3_ifc4_compat.ts), recording
+   * a refusal on the model statistics the way the pre-route schema gate did
+   * (bldrs-ai/conway#713), so `OpenModel*` reports `UNSUPPORTED_SCHEMA` and
+   * returns -1 through the factory's normal failure path.
+   *
+   * @param modelID The model ID being opened (for statistics).
+   * @param build The build to run.
+   * @return {Promise<T>} The build's result.
+   * @throws {Ifc4x3IneligibleError} For an ineligible file.
+   */
+  private static async ifc4x3CompatOrRefuse< T >(
+      modelID: number,
+      build: () => T | Promise< T > ): Promise< T > {
+
+    try {
+      return await build()
+    } catch ( error ) {
+
+      if ( error instanceof Ifc4x3IneligibleError ) {
+        Logger.getStatistics(modelID)?.setLoadStatus('UNSUPPORTED_SCHEMA')
+      }
+
+      throw error
+    }
+  }
+
+  /**
+   * Synchronous twin of {@link ifc4x3CompatOrRefuse}.
+   *
+   * @param modelID The model ID being opened (for statistics).
+   * @param build The build to run.
+   * @return {T} The build's result.
+   * @throws {Ifc4x3IneligibleError} For an ineligible file.
+   */
+  private static ifc4x3CompatOrRefuseSync< T >( modelID: number, build: () => T ): T {
+
+    try {
+      return build()
+    } catch ( error ) {
+
+      if ( error instanceof Ifc4x3IneligibleError ) {
+        Logger.getStatistics(modelID)?.setLoadStatus('UNSUPPORTED_SCHEMA')
+      }
+
+      throw error
     }
   }
 
@@ -792,14 +1200,39 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     Logger.info(formatModelLine(modelInfo))
     settings?.ON_MODEL_INFO?.(modelInfo)
 
+    // No builder here: the data parse reads the whole resident `data`
+    // buffer, and `stepHeader` came from that same buffer, so routing on it
+    // has no sniff-vs-parse-window gap (codex review of #713, P1). An
+    // IFC4X3 header takes the IFC4-compatible route inside
+    // parseDataToModelForHeader (ifc4x3_ifc4_compat.ts); an ineligible file
+    // throws there, before anything is extracted.
     tracker?.beginPhase('dataParse', 'bytes', data.length)
 
     const parseTick = tracker !== void 0 ?
       (cursorBytes: number) => tracker.update(cursorBytes) : void 0
 
     const parseStartTime = Date.now()
-    const model = parser.parseDataToModel(bufferInput, parseTick)[1]
+    const model = IfcApiProxyIfc.ifc4x3CompatOrRefuseSync( modelID, () =>
+      parser.parseDataToModelForHeader(stepHeader, bufferInput, parseTick)[1] )
+
     const parseEndTime = Date.now()
+
+    // RECORD_SOURCE_HASH: the digest of the bytes this index was built
+    // from, for the index sidecar export (conway#756). The object parse
+    // reads one resident buffer with no windowed source to fold into, so it
+    // is a pass of its own — taken now, while `data` is still the bytes that
+    // were parsed, and after `parseEndTime` so the reported parse time is
+    // the parse's. Skipped for an IFC4X3 header, which never exports (the
+    // header, not `hasFieldMasks`: an eligible 4X3 file can have nothing to
+    // mask).
+    if ( model !== void 0 && settings?.RECORD_SOURCE_HASH === true &&
+      !IfcApiProxyIfc.isIfc4x3Header( stepHeader ) ) {
+      model.indexedSourceHash = hashSource( data )
+      // The synchronous open cannot await a native digest: FNV-1a, whatever
+      // SOURCE_HASH_ALGORITHM asks for, and labelled as such.
+      model.indexedSourceHashAlgorithm = SIDECAR_HASH_FNV1A_32
+      model.indexedSampledHash = hashSampledBuffer( data )
+    }
 
     tracker?.endPhase(data.length)
 
@@ -888,14 +1321,34 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     Logger.info(formatModelLine(modelInfo))
     settings?.ON_MODEL_INFO?.(modelInfo)
 
+    // No builder here: the data parse reads the whole resident `data`
+    // buffer, and `stepHeader` came from that same buffer, so routing on it
+    // has no sniff-vs-parse-window gap (codex review of #713, P1). An
+    // IFC4X3 header takes the IFC4-compatible route inside
+    // parseDataToModelForHeader (ifc4x3_ifc4_compat.ts); an ineligible file
+    // throws there, before anything is extracted.
     tracker?.beginPhase('dataParse', 'bytes', data.length)
 
     const parseTick = tracker !== void 0 ?
       (cursorBytes: number) => tracker.update(cursorBytes) : void 0
 
     const parseStartTime = Date.now()
-    const model = (await parser.parseDataToModelAsync(bufferInput, parseTick))[1]
+    const model = await IfcApiProxyIfc.ifc4x3CompatOrRefuse( modelID, async () =>
+      ( await parser.parseDataToModelForHeaderAsync(stepHeader, bufferInput, parseTick) )[1] )
+
     const parseEndTime = Date.now()
+
+    // See parseAndExtract: the parse-time digest for the sidecar export,
+    // here cooperative so the open keeps yielding (conway#756).
+    if ( model !== void 0 && settings?.RECORD_SOURCE_HASH === true &&
+      !IfcApiProxyIfc.isIfc4x3Header( stepHeader ) ) {
+      const hashOptions = sourceHashOptionsFor( settings.SOURCE_HASH_ALGORITHM )
+
+      model.indexedSourceHash =
+        await hashSourceAsync( new BufferByteSource( data ), void 0, hashOptions )
+      model.indexedSourceHashAlgorithm = sidecarHashAlgorithmId( hashOptions.algorithm! )
+      model.indexedSampledHash = hashSampledBuffer( data )
+    }
 
     tracker?.endPhase(data.length)
 
@@ -1011,7 +1464,7 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     // and snapshot prefix models between the parse's cooperative yields.
     const sink = new ColumnarIndexSink<EntityTypesIfc>()
 
-    const previewChannel =
+    let previewChannel =
       deferGeometry && settings?.ON_PREVIEW_MESH !== void 0 ?
         new StreamedPreviewChannel(
             data, conwaywasm, sink, ifcPreviewAdapter(),
@@ -1022,24 +1475,60 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
     // Channel ticks ride the parse's own progress callback (see
     // maybeTickInline) — timer ticks alone starve under the parse's
-    // scheduler-priority yields in browsers.
-    const parseProgress = previewChannel !== void 0 ?
+    // scheduler-priority yields in browsers. Progress ticks only fire from
+    // inside parseDataBlockStreamedAsync, strictly after `onHeaderParsed`
+    // below runs and would have thrown, so `previewChannel.start()` above
+    // cannot leak a tick ahead of the gate.
+    const parsePreviewChannel = previewChannel
+    const parseProgress = parsePreviewChannel !== void 0 ?
       (cursorBytes: number) => {
         parseTick?.(cursorBytes)
-        previewChannel.maybeTickInline()
+        parsePreviewChannel.maybeTickInline()
       } : parseTick
 
     let result: ParseResult
+    let compatIndex: Ifc4x3CompatIndex | undefined
+
+    // RECORD_SOURCE_HASH folds the source digest into the parse's own pass,
+    // for the index sidecar export (conway#756; StepModelBase.indexedSourceHash).
+    const hashingSource = settings?.RECORD_SOURCE_HASH === true ?
+      new HashingByteSource(
+          new BufferByteSource(data),
+          sourceHashOptionsFor( settings.SOURCE_HASH_ALGORITHM ) ) : void 0
 
     try {
-      ( { result } = await buildIndexStreamingAsync(
-          new BufferByteSource(data), parser, STREAMED_PARSE_POOL_BYTES,
-          void 0, sink, parseProgress) )
-    } finally {
-      previewChannel?.stop()
+      try {
+        ( { result } = await buildIndexStreamingAsync(
+            hashingSource ?? new BufferByteSource(data), parser, STREAMED_PARSE_POOL_BYTES,
+            void 0, sink, parseProgress, void 0,
+            // codex review of #713 (P1/round 4): gate through the builder's
+            // own seam — see streaming_index_builder.ts's doc-comment —
+            // rather than a standalone pre-parse check. It throws before
+            // the first record reaches `sink`, so the preview channel has
+            // nothing to emit.
+            assertNativeSchemaSupported ) )
+      } finally {
+        previewChannel?.stop()
+      }
+    } catch ( error ) {
+
+      if ( !( error instanceof Ifc4x3CompatRouteRequired ) ) {
+        throw error
+      }
+
+      // IFC4-compatible IFC4X3 route (ifc4x3_ifc4_compat.ts): index the
+      // whole file privately, and decide eligibility, before anything is
+      // emitted. The preview channel is already stopped and stays out of
+      // this open (IFC4X3 files load without progressive preview). Only
+      // byte progress is reported during the build.
+      previewChannel = void 0
+      compatIndex = await IfcApiProxyIfc.ifc4x3CompatOrRefuse( modelID, () =>
+        buildIfc4x3CompatIndexAsync(
+            new BufferByteSource(data), STREAMED_PARSE_POOL_BYTES, parseTick ) )
+      result = compatIndex.result
     }
 
-    const columns = sink.finalize()
+    const columns = compatIndex?.columns ?? sink.finalize()
 
     const parseEndTime = Date.now()
 
@@ -1053,6 +1542,15 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
     const model = new IfcStepModel(data, columns)
 
+    if ( compatIndex !== void 0 ) {
+      model.setFieldMasks( compatIndex.fieldMasks )
+    } else {
+      model.indexedSourceHash = await hashingSource?.finishAsync()
+      model.indexedSourceHashAlgorithm = hashingSource !== void 0 ?
+        sidecarHashAlgorithmId( hashingSource.algorithm ) : void 0
+      model.indexedSampledHash = hashingSource?.sampledHash
+    }
+
     statistics?.setParseTime(parseEndTime - parseStartTime)
 
     const conwayGeometry = new IfcGeometryExtraction(conwaywasm, model)
@@ -1063,17 +1561,23 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     // walks, so meshes appear to consumers as batches extract.
     if (deferGeometry) {
 
-      conwayGeometry.prepareDemandExtraction()
+      // Units only (conway#748). The rest of the prep — every relationship
+      // sweep and the styled-item map, 0.3–0.4 s on sp-231MB — waits for the
+      // first geometry batch, so an open that never asks for geometry (the
+      // spatial tree, properties: a CLI/MCP-style read) never pays for it.
+      // The units cannot wait: the proxy constructor reads
+      // getLinearScalingFactor() at open, and so do the imposters below.
+      conwayGeometry.prepareUnits()
 
       if ( settings?.ON_PREVIEW_MESH !== void 0 ) {
 
         try {
-          // After prepareDemandExtraction, not before: the plates are
-          // composed under the coordination frame, whose scaling comes
-          // from getLinearScalingFactor() — which reads 1 until the
-          // extraction maps (and with them the unit assignment) are
-          // prepared. Both calls run in the same synchronous stretch
-          // after the parse, so nothing reaches the screen any later.
+          // After prepareUnits, not before: the plates are composed under
+          // the coordination frame, whose scaling comes from
+          // getLinearScalingFactor() — which reads 1 until the unit
+          // assignment has been read. Both calls run in the same
+          // synchronous stretch after the parse, so nothing reaches the
+          // screen any later.
           await emitSpatialStructureImposters(
               model,
               settings.ON_PREVIEW_MESH,
@@ -1142,117 +1646,65 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
 
   /**
-   * Windowed-from-birth twin of parseColumnarAndExtractAsync: the
-   * source stays in `store`, parse windows are filled through it, and
-   * the model never holds a resident copy. During parse a bounded
-   * prefix extract pages product closures from the store and emits
-   * placed meshes (same COORDINATE_TO_ORIGIN frame as durable). After
-   * the index exists, spatial-structure AABB plates go out too.
-   * Deferred opens page prep closures before prepareDemandExtraction;
-   * non-deferred opens drain the demand pump with per-product residency.
+   * The half of a store-backed open that is **index-agnostic**: everything
+   * from a constructed model onward — demand prep, the spatial-structure
+   * imposters, and either the deferred hand-off or the full
+   * product/aggregate extraction.
+   *
+   * Shared verbatim by {@link parseColumnarFromStore} (index built by
+   * parsing) and {@link parseColumnarFromIndex} (index restored from a
+   * sidecar), because the only thing that differs between them is where the
+   * columns came from — the seam this issue turned out to need is exactly
+   * the one `sink.finalize()` already marked. Keeping one body is the
+   * point: an index-first open that diverged here would be a second
+   * extraction path with no CI coverage (conway#541).
    *
    * @param modelID The model ID being opened.
-   * @param store External store holding the source bytes.
    * @param conwaywasm The conway geometry wasm wrapper.
-   * @param settings Loader settings (ON_PROGRESS is honored).
+   * @param model The model over the windowed store.
+   * @param stepHeader The STEP header (statistics / the load report).
+   * @param allTimeStart Open start timestamp.
+   * @param tracker The progress tracker, if any.
+   * @param settings Loader settings.
    * @param deferGeometry Skip extraction (Share demand pump).
-   * @return {Promise<IfcProxyLoadState>} Everything the constructor tail needs.
+   * @param previewCoordinationMatrix The frame a parse-time preview channel
+   * latched, when one ran. An index-first open has no parse and therefore
+   * never has one — `imposterCoordination` then lets the imposter walk
+   * derive an equivalent frame itself.
+   * @return {Promise<IfcProxyLoadState>} Everything the constructor tail
+   * needs.
    */
-  private static async parseColumnarFromStore(
+  private static async finishWindowedOpen(
       modelID: number,
-      store: StepExternalByteStore,
       conwaywasm: ConwayGeometry,
-      settings?: Loadersettings,
-      deferGeometry: boolean = false ): Promise<IfcProxyLoadState> {
-
-    const tracker = IfcApiProxyIfc.makeTracker(settings)
-    const allTimeStart = Date.now()
-    const parser = IfcStepParser.Instance
-    const fileSize = store.byteLength
-
-    Logger.createStatistics(modelID)
+      model: IfcStepModel,
+      stepHeader: StepHeader,
+      allTimeStart: number,
+      tracker: ProgressTracker | undefined,
+      settings: Loadersettings | undefined,
+      deferGeometry: boolean,
+      previewCoordinationMatrix: number[] | undefined ):
+      Promise<IfcProxyLoadState> {
 
     const statistics = Logger.getStatistics(modelID)
 
-    tracker?.beginPhase('dataParse', 'bytes', fileSize)
-
-    const parseTick = tracker !== void 0 ?
-      (cursorBytes: number) => tracker.update(cursorBytes) : void 0
-
-    const parseStartTime = Date.now()
-
-    // Live sink so the store preview channel can snapshot a prefix
-    // mid-parse without a resident source buffer.
-    const sink = new ColumnarIndexSink< EntityTypesIfc >()
-    const storePreview = settings?.ON_PREVIEW_MESH !== void 0 ?
-      new StorePreviewChannel(
-          store,
-          sink,
-          conwaywasm,
-          settings.COORDINATE_TO_ORIGIN === true,
-          settings.ON_PREVIEW_MESH ) : void 0
-
-    const parseProgress = async ( cursorBytes: number ): Promise< void > => {
-      parseTick?.( cursorBytes )
-      await storePreview?.maybeTickAsync()
-    }
-
-    // One windowed pass: header comes out of the same slide as the
-    // data block so we do not hold a second 16 MiB prefix copy.
-    let result
-    let stepHeader
-
-    try {
-      ( { result, header: stepHeader } = await buildIndexStreamingAsync(
-          new StoreByteSource( store ),
-          parser,
-          STORE_PARSE_POOL_BYTES,
-          void 0,
-          sink,
-          parseProgress ) )
-
-      if ( storePreview !== void 0 ) {
-        await storePreview.flushAsync()
-      }
-    } finally {
-      storePreview?.stop()
-    }
-
-    const columns = sink.finalize()
-
-    // Parse window is out of scope; drop the module scratch in case a
-    // numeric read during the slide left it pointed at that 16 MiB view.
-    releaseScratchParsingBuffer()
-
-    IfcApiProxyIfc.reportHeaderParseResult(
-        result, new ParsingBuffer( new Uint8Array( 0 ) ), modelID )
-
-    const modelInfo = extractModelInfo(stepHeader, fileSize)
-
-    Logger.info(formatModelLine(modelInfo))
-    settings?.ON_MODEL_INFO?.(modelInfo)
-
-    const parseEndTime = Date.now()
-
-    tracker?.endPhase(fileSize)
-
-    if (result !== ParseResult.COMPLETE) {
-      Logger.warning(`[OpenModelStream]: streamed parse result ${result}`)
-      statistics?.setLoadStatus('PARSE_FAIL')
-      throw new Error( 'Streamed parse did not complete' )
-    }
-
-    const provider = new WindowedStepBufferProvider( store )
-    const model = new IfcStepModel( void 0, columns, provider )
-
-    statistics?.setParseTime(parseEndTime - parseStartTime)
-
     const conwayGeometry = new IfcGeometryExtraction(conwaywasm, model)
 
-    const prepPins = await conwayGeometry.ensureResidentForDemandPrep()
+    // A deferred open reads only the units here, paging just the project's
+    // closure; the full prep — and the much larger residency it needs —
+    // waits for the first ExtractGeometryBatchAsync (conway#748; see the
+    // resident path's note). A non-deferred open extracts everything next,
+    // so it still prepares everything now.
+    const prepPins = deferGeometry ?
+      await conwayGeometry.ensureResidentForUnits() :
+      await conwayGeometry.ensureResidentForDemandPrep()
 
     try {
-      conwayGeometry.prepareDemandExtraction()
+      if ( deferGeometry ) {
+        conwayGeometry.prepareUnits()
+      } else {
+        conwayGeometry.prepareDemandExtraction()
+      }
     } finally {
       model.releaseSourceViews( prepPins )
       model.unpinLocalIDs( prepPins )
@@ -1261,12 +1713,12 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     if ( settings?.ON_PREVIEW_MESH !== void 0 ) {
 
       try {
-        // Emitted after demand prep so getLinearScalingFactor() reports
-        // the model's real units — see the resident path's note.
+        // Emitted after the units are read so getLinearScalingFactor()
+        // reports the model's real units — see the resident path's note.
         await emitSpatialStructureImposters(
             model,
             settings.ON_PREVIEW_MESH,
-            imposterCoordination( settings, storePreview?.coordinationMatrix ),
+            imposterCoordination( settings, previewCoordinationMatrix ),
             conwayGeometry.getLinearScalingFactor() )
       } catch {
         // Spatial imposters must never break a store-backed open.
@@ -1280,7 +1732,7 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
       return {
         conwaywasm,
         deferred: true,
-        previewCoordinationMatrix: storePreview?.coordinationMatrix,
+        previewCoordinationMatrix: previewCoordinationMatrix,
         allTimeStart,
         stepHeader,
         model,
@@ -1304,6 +1756,17 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     const EXTRACT_BATCH = 8
     const pending: number[] = []
 
+    // The same rule as the deferred pump (see pumpGeometryBatchAsync_,
+    // conway#786): over a store that faults windows in, extract without the
+    // per-product closure walk, tracking and dropping what each batch's
+    // synchronous extract captured, after one sweep of the views earlier
+    // readers left behind; over an async-only store, walk and pin as before.
+    const faultsIn = model.sourceReadsSynchronously
+
+    if ( faultsIn ) {
+      model.releaseAllSourceViews()
+    }
+
     const flushProductBatch = async () => {
 
       if ( pending.length === 0 ) {
@@ -1315,22 +1778,34 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
       try {
 
-        await Promise.all( pending.map( ( localID ) =>
-          conwayGeometry.ensureResidentForProductExtract(
-              localID, pins, leafSpans ) ) )
+        if ( !faultsIn ) {
+          await Promise.all( pending.map( ( localID ) =>
+            conwayGeometry.ensureResidentForProductExtract(
+                localID, pins, leafSpans ) ) )
+        }
 
-        for ( const localID of pending ) {
+        // Synchronous, and views released once per batch, for the reasons
+        // given in pumpGeometryBatchAsync_.
+        const extractBatch = () => {
 
-          try {
-            conwayGeometry.extractProductGeometryByLocalID( localID )
-          } catch ( error ) {
-            Logger.error(
-                `Error extracting product localID ${localID}: ` +
-                `${error instanceof Error ? error.message : String( error )}` )
+          for ( const localID of pending ) {
+
+            try {
+              conwayGeometry.extractProductGeometryByLocalID( localID )
+            } catch ( error ) {
+              Logger.error(
+                  `Error extracting product localID ${localID}: ` +
+                  `${error instanceof Error ? error.message : String( error )}` )
+            }
+
+            ++completed
           }
+        }
 
-          model.releaseSourceViews( pins )
-          ++completed
+        if ( faultsIn ) {
+          model.readTrackingSourceViews( extractBatch )
+        } else {
+          extractBatch()
         }
       } finally {
         model.releaseSourceViews( pins )
@@ -1361,15 +1836,35 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
     await flushProductBatch()
 
+    // The aggregate pass follows the same rule as the product loop above
+    // (see the note in pumpGeometryBatchAsync_'s aggregate loop): over a
+    // store that faults windows in, no relationship prefetch, and each
+    // related product's step runs with its captured views tracked and
+    // dropped; over an async-only store, prefetch and pin as before.
+    //
+    // Per step, not per relationship: a view keeps its window alive after
+    // the LRU evicts it, so tracking across a whole relationship would hold
+    // every window that relationship read until its last part, and a
+    // relationship can span most of a file.
     for ( const relAggregate of model.types( IfcRelAggregates ) ) {
 
       const leafSpans: { address: number, length: number }[] = []
-      const pins =
+      const pins = faultsIn ? new Set< number >() :
         await conwayGeometry.ensureResidentForAggregateExtract(
             relAggregate, leafSpans )
 
       try {
-        conwayGeometry.extractRelAggregateGeometry( relAggregate )
+        if ( faultsIn ) {
+
+          const stepper =
+            conwayGeometry.extractRelAggregateGeometryIncremental( relAggregate )
+
+          while ( model.readTrackingSourceViews( () => stepper.next() ).done !== true ) {
+            // Each step is one related product; see above.
+          }
+        } else {
+          conwayGeometry.extractRelAggregateGeometry( relAggregate )
+        }
       } catch ( error ) {
         Logger.error(
             `Error extracting aggregate ${relAggregate.expressID}: ` +
@@ -1404,6 +1899,284 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
       conwayGeometry,
       geometryTimeInMs: endTime - startTime,
     }
+  }
+
+
+  /**
+   * The index-first twin of {@link parseColumnarFromStore}: restore the
+   * columns from a sidecar instead of building them, then hand off to the
+   * shared {@link finishWindowedOpen}.
+   *
+   * Three things this path does NOT have, each deliberate:
+   *
+   *  - **no cold-parse fallback.** A bad sidecar throws out to
+   *    `IfcApiModelPassthroughFactory.fromIndex`, which returns `undefined`
+   *    so `OpenModelFromIndex` reports `-1`; the caller then chooses
+   *    `OpenModelStream`. Re-parsing silently here would spend exactly the
+   *    cost the caller asked to avoid, and hide a stale index behind a slow
+   *    success.
+   *  - **no preview channel.** The preview channel snapshots a *live*
+   *    parse; there is none, so there is no preview and no derived
+   *    coordination frame. Fine for a worker (it takes the coordinator's
+   *    via `SetCoordinationFrame`), which is also why index-first must not
+   *    silently become the coordinator's own path.
+   *  - **no whole-file hash by default.** See `index_sidecar.ts`
+   *    §"The trust gate": the length check is the distribution gate, and
+   *    `VERIFY_INDEX_SOURCE_HASH` opts into the full one for a persisted
+   *    sidecar.
+   *
+   * @param modelID The model ID being opened.
+   * @param store External store holding the source bytes.
+   * @param sidecar The serialised index.
+   * @param conwaywasm The conway geometry wasm wrapper.
+   * @param settings Loader settings (ON_PROGRESS is honored).
+   * @param deferGeometry Skip extraction (Share demand pump).
+   * @return {Promise<IfcProxyLoadState>} Everything the constructor tail
+   * needs.
+   */
+  private static async parseColumnarFromIndex(
+      modelID: number,
+      store: StepExternalByteStore,
+      sidecar: Uint8Array,
+      conwaywasm: ConwayGeometry,
+      settings?: Loadersettings,
+      deferGeometry: boolean = false ): Promise<IfcProxyLoadState> {
+
+    const tracker = IfcApiProxyIfc.makeTracker(settings)
+    const allTimeStart = Date.now()
+    const fileSize = store.byteLength
+
+    Logger.createStatistics(modelID)
+
+    const statistics = Logger.getStatistics(modelID)
+
+    // Reported as the dataParse phase because that is the phase it
+    // replaces — a consumer's progress UI should see the index arriving
+    // where it used to see the parse, not a gap. It is one step, so it
+    // opens and closes around the restore rather than ticking.
+    tracker?.beginPhase('dataParse', 'bytes', fileSize)
+
+    const restoreStartTime = Date.now()
+
+    const opened = await openIfcModelFromIndex( store, sidecar, {
+      verifySourceHash: settings?.VERIFY_INDEX_SOURCE_HASH ?? false,
+    } )
+
+    const restoreEndTime = Date.now()
+
+    const model = opened.model
+
+    if ( model === void 0 ) {
+      statistics?.setLoadStatus('INDEX_RESTORE_FAIL')
+      throw new Error( 'Index-first open produced no model' )
+    }
+
+    const stepHeader = opened.header
+
+    // The header comes off a bounded prefix read rather than the parse, so
+    // the Model line is real on this path too — a blank one would only ever
+    // show up here, the path with no CI coverage.
+    const modelInfo = extractModelInfo(stepHeader, fileSize)
+
+    Logger.info(formatModelLine(modelInfo))
+    settings?.ON_MODEL_INFO?.(modelInfo)
+
+    // This path has no builder to attach `onHeaderParsed` to — the sidecar
+    // supplies the index, `openIfcModelFromIndex` runs no data parse at all
+    // — so unlike every builder-backed entry point above, it keeps its own
+    // explicit gate (codex review of #713, P1) rather than the seam. See
+    // `openIfcModelFromIndex`'s own gate comment (ifc_stream_open.ts) for
+    // why this is the one path that must.
+    IfcApiProxyIfc.assertSchemaSupported(modelID, stepHeader)
+
+    tracker?.endPhase(fileSize)
+
+    statistics?.setParseTime(restoreEndTime - restoreStartTime)
+
+    return await IfcApiProxyIfc.finishWindowedOpen(
+        modelID,
+        conwaywasm,
+        model,
+        stepHeader,
+        allTimeStart,
+        tracker,
+        settings,
+        deferGeometry,
+        void 0 )
+  }
+
+
+  /**
+   * Windowed-from-birth twin of parseColumnarAndExtractAsync: the
+   * source stays in `store`, parse windows are filled through it, and
+   * the model never holds a resident copy. During parse a bounded
+   * prefix extract pages product closures from the store and emits
+   * placed meshes (same COORDINATE_TO_ORIGIN frame as durable). After
+   * the index exists, spatial-structure AABB plates go out too.
+   * Deferred opens page only the project's units at open and prepare the
+   * extraction maps on the first ExtractGeometryBatchAsync (conway#748);
+   * non-deferred opens drain the demand pump with per-product residency.
+   *
+   * @param modelID The model ID being opened.
+   * @param store External store holding the source bytes.
+   * @param conwaywasm The conway geometry wasm wrapper.
+   * @param settings Loader settings (ON_PROGRESS is honored).
+   * @param deferGeometry Skip extraction (Share demand pump).
+   * @return {Promise<IfcProxyLoadState>} Everything the constructor tail needs.
+   */
+  private static async parseColumnarFromStore(
+      modelID: number,
+      store: StepExternalByteStore,
+      conwaywasm: ConwayGeometry,
+      settings?: Loadersettings,
+      deferGeometry: boolean = false ): Promise<IfcProxyLoadState> {
+
+    const tracker = IfcApiProxyIfc.makeTracker(settings)
+    const allTimeStart = Date.now()
+    const parser = IfcStepParser.Instance
+    const fileSize = store.byteLength
+
+    Logger.createStatistics(modelID)
+
+    const statistics = Logger.getStatistics(modelID)
+
+    tracker?.beginPhase('dataParse', 'bytes', fileSize)
+
+    const parseTick = tracker !== void 0 ?
+      (cursorBytes: number) => tracker.update(cursorBytes) : void 0
+
+    const parseStartTime = Date.now()
+
+    // Live sink so the preview channel can snapshot a prefix mid-parse
+    // without a resident source buffer. The same channel as the buffered
+    // open's, with the windowed adapter: its prefix models page the store
+    // and its ticks await that paging, which is why this parse's progress
+    // callback is async (conway#775, which retired StorePreviewChannel).
+    const sink = new ColumnarIndexSink< EntityTypesIfc >()
+    let storePreview = settings?.ON_PREVIEW_MESH !== void 0 ?
+      windowedIfcPreviewChannel(
+          store,
+          conwaywasm,
+          sink,
+          settings.COORDINATE_TO_ORIGIN === true,
+          settings.ON_PREVIEW_MESH ) : void 0
+
+    const parseProgress = async ( cursorBytes: number ): Promise< void > => {
+      parseTick?.( cursorBytes )
+      await storePreview?.maybeTickAsync()
+    }
+
+    // One windowed pass: header comes out of the same slide as the
+    // data block so we do not hold a second 16 MiB prefix copy. The schema
+    // gate rides `onHeaderParsed`, the builder's own seam (codex review of
+    // bldrs-ai/conway#713, P1/P2/round 4 — see streaming_index_builder.ts):
+    // it fires from the real parse's own header, after COMPLETE and
+    // strictly before any record reaches `sink` or the preview channel
+    // above gets to tick, so a throw here still means zero IFC4-typed
+    // preview meshes or index rows ever reach the caller. This replaces the
+    // old two-gate arrangement (an up-front bounded sniff of `store`, plus a
+    // post-parse fallback for when that sniff's smaller window disagreed
+    // with the real parse's) — the seam collapses both into one gate that
+    // cannot disagree with itself.
+    let result
+    let stepHeader
+    let compatIndex: Ifc4x3CompatIndex | undefined
+
+    // RECORD_SOURCE_HASH folds the source digest into the parse's own pass,
+    // for the index sidecar export (conway#756; StepModelBase.indexedSourceHash)
+    // — zero extra I/O on the path whose source is never materialised.
+    const hashingSource = settings?.RECORD_SOURCE_HASH === true ?
+      new HashingByteSource(
+          new StoreByteSource( store ),
+          sourceHashOptionsFor( settings.SOURCE_HASH_ALGORITHM ) ) : void 0
+
+    try {
+      try {
+        ( { result, header: stepHeader } = await buildIndexStreamingAsync(
+            hashingSource ?? new StoreByteSource( store ),
+            parser,
+            STORE_PARSE_POOL_BYTES,
+            void 0,
+            sink,
+            parseProgress,
+            void 0,
+            assertNativeSchemaSupported ) )
+
+        if ( storePreview !== void 0 ) {
+          await storePreview.flushAsync()
+        }
+      } finally {
+        storePreview?.stop()
+      }
+    } catch ( error ) {
+
+      if ( !( error instanceof Ifc4x3CompatRouteRequired ) ) {
+        throw error
+      }
+
+      // IFC4-compatible IFC4X3 route — see parseColumnarAndExtractAsync's
+      // identical branch. The store preview channel never ticked (the seam
+      // threw before the first record) and stays out of this open.
+      storePreview = void 0
+      compatIndex = await IfcApiProxyIfc.ifc4x3CompatOrRefuse( modelID, () =>
+        buildIfc4x3CompatIndexAsync(
+            new StoreByteSource( store ), STORE_PARSE_POOL_BYTES, parseTick ) )
+      result = compatIndex.result
+      stepHeader = compatIndex.header
+    }
+
+    const columns = compatIndex?.columns ?? sink.finalize()
+
+    // Parse window is out of scope; drop the module scratch in case a
+    // numeric read during the slide left it pointed at that 16 MiB view.
+    releaseScratchParsingBuffer()
+
+    IfcApiProxyIfc.reportHeaderParseResult(
+        result, new ParsingBuffer( new Uint8Array( 0 ) ), modelID )
+
+    const modelInfo = extractModelInfo(stepHeader, fileSize)
+
+    Logger.info(formatModelLine(modelInfo))
+    settings?.ON_MODEL_INFO?.(modelInfo)
+
+    // No second gate needed here: the `onHeaderParsed` call passed into
+    // `buildIndexStreamingAsync` above already ran (and would have thrown,
+    // unwinding out of the `try` before any of this) — see that call's
+    // comment.
+    const parseEndTime = Date.now()
+
+    tracker?.endPhase(fileSize)
+
+    if (result !== ParseResult.COMPLETE) {
+      Logger.warning(`[OpenModelStream]: streamed parse result ${result}`)
+      statistics?.setLoadStatus('PARSE_FAIL')
+      throw new Error( 'Streamed parse did not complete' )
+    }
+
+    const provider = new WindowedStepBufferProvider( store )
+    const model = new IfcStepModel( void 0, columns, provider )
+
+    if ( compatIndex !== void 0 ) {
+      model.setFieldMasks( compatIndex.fieldMasks )
+    } else {
+      model.indexedSourceHash = await hashingSource?.finishAsync()
+      model.indexedSourceHashAlgorithm = hashingSource !== void 0 ?
+        sidecarHashAlgorithmId( hashingSource.algorithm ) : void 0
+      model.indexedSampledHash = hashingSource?.sampledHash
+    }
+
+    statistics?.setParseTime(parseEndTime - parseStartTime)
+
+    return await IfcApiProxyIfc.finishWindowedOpen(
+        modelID,
+        conwaywasm,
+        model,
+        stepHeader,
+        allTimeStart,
+        tracker,
+        settings,
+        deferGeometry,
+        storePreview?.coordinationMatrix )
   }
 
 
@@ -1484,9 +2257,31 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
         // eslint-disable-next-line no-unused-vars
         const [geometryObject, _] = mapResult
         if (geometryObject !== void 0) {
-          const clone = geometryObject.clone()
 
-          return clone
+          // A map entry is not proof the native is still alive — eviction
+          // under GEOMETRY_BUDGET_MB frees it without purging this map, and
+          // cloning a freed handle aborts inside embind rather than
+          // returning. See isNativeDeleted for the full account; the catch
+          // is the backstop for any other way the handle can be unusable.
+          // Either way this degrades to the dummy below, which is the
+          // documented behaviour for an evicted asset.
+          if (!isNativeDeleted(geometryObject)) {
+
+            try {
+              const clone = geometryObject.clone()
+
+              return clone
+            } catch (error) {
+              Logger.error(
+                  `[GetGeometry]: clone failed for expressID ` +
+                  `${geometryExpressID}: ` +
+                  `${error instanceof Error ? error.message : String(error)}`)
+            }
+          } else {
+            Logger.error(
+                `[GetGeometry]: geometry for expressID ${geometryExpressID} ` +
+                `was freed (evicted under the geometry budget, or released)`)
+          }
         } else {
           Logger.error(`[GetGeometry]: Geometry Object not found for expressID: \n          ${geometryExpressID}`)
         }
@@ -1505,9 +2300,12 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
    * @param modelID
    * @param expressID
    * @param flatten
+   * @param skipRepresentations With `flatten`, leave references to
+   * geometry representations (see isRepresentationRoot) as handles rather
+   * than inlining them. The web-ifc-parity default is false.
    * @return {any} line data
    */
-  getLine(expressID: number, flatten: boolean = false) {
+  getLine(expressID: number, flatten: boolean = false, skipRepresentations: boolean = false) {
 
 
     const rawLineData = this.getRawLineData(expressID)
@@ -1527,7 +2325,7 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     const lineData = typeConverter(rawLineData)
     if (flatten) {
 
-      this.flattenLine(lineData)
+      this.flattenLine(lineData, skipRepresentations)
     }
 
     return lineData
@@ -1629,6 +2427,12 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
    * the original file already sitting in OPFS). See
    * StepModelBase.spillSourceToExternalStore.
    *
+   * Supported between `ExtractGeometryBatchAsync` calls, or while a batch
+   * is still in its prep phase. Those are the only places a spill can land:
+   * on a resident source the only macrotask yields inside an async batch
+   * are in prep, before the worklists and the aggregate stepper exist, and
+   * the aggregate pager is dropped below only if a stepper already exists.
+   *
    * @param store The external byte store.
    * @param chunkBytes Optional window size in bytes.
    * @param maxResidentChunks Optional residency cap in windows.
@@ -1638,6 +2442,62 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
       chunkBytes?: number,
       maxResidentChunks?: number ): void {
     this.model[0].spillSourceToExternalStore(store, chunkBytes, maxResidentChunks)
+
+    // A relationship the async pump is part-way through was paged for a
+    // resident source, which is to say not at all: its pager's `begin`
+    // returned before listing the related products, so every later
+    // `ensureForStep` would page nothing and the rest of the relationship
+    // would read unpaged windows and be lost (bldrs-ai/Share#2139). Drop
+    // it; the pump begins a fresh one, over the store, before its next
+    // step. The stepper itself carries on from where it was.
+    if (this.demandAggregateStepper_ !== void 0) {
+      this.demandAggregatePager_?.release()
+      this.demandAggregatePager_ = void 0
+    }
+  }
+
+  /**
+   * Does this header name the IFC4X3 family? Never throws: an unverified
+   * 4X3 spelling makes `selectIfcSchemaKindForHeader` throw, and every open
+   * path refuses one long before the constructor runs — but this is read in
+   * the constructor, where a throw would turn a sidecar-export detail into a
+   * failed open. An unreadable answer reads as 4X3, which only ever refuses
+   * an export.
+   *
+   * @param stepHeader The model's STEP header.
+   * @return {boolean} True for an IFC4X3 (or unclassifiable) header.
+   */
+  private static isIfc4x3Header( stepHeader: StepHeader ): boolean {
+
+    try {
+      return selectIfcSchemaKindForHeader( stepHeader ) === 'ifc4x3'
+    } catch {
+      return true
+    }
+  }
+
+  /**
+   * Serialise this model's entity index to a v2 index sidecar
+   * (conway#756) — see `exportIfcIndexSidecar` for what it reads and what
+   * it guarantees, and `IfcAPI.ExportIndexSidecar` for the embedder's view.
+   *
+   * Refuses an IFC4X3 model with {@link IndexSidecarUnsupportedError}. The
+   * engine function already refuses the compat route's masked index; the
+   * header check here covers an eligible file the route had nothing to mask,
+   * whose sidecar would be representable but useless — the index-first open
+   * refuses every IFC4X3 header, so it could never be opened.
+   *
+   * @return {Promise<IfcIndexSidecarExport>} The sidecar and its cost.
+   */
+  async exportIndexSidecar(): Promise<IfcIndexSidecarExport> {
+
+    if ( this.openedFromIfc4x3Header_ ) {
+      throw new IndexSidecarUnsupportedError(
+          'IFC4X3 models cannot be reopened from an index sidecar (the ' +
+          'index-first open refuses IFC4X3 headers); reopen with a parse' )
+    }
+
+    return await exportIfcIndexSidecar( this.model[0] )
   }
 
   /**
@@ -1654,6 +2514,185 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
    */
   async ensureLineResident(expressID: number): Promise<void> {
     await this.model[0].ensureResidentByExpressID(expressID)
+  }
+
+  /**
+   * `getLine(expressID, flatten)` that is safe on a spilled source, and
+   * that by default leaves geometry representations out of a flatten.
+   *
+   * Flattening follows `#ref`s synchronously, so on a windowed source
+   * every record it reaches has to be resident first, not just the seed:
+   * ensuring only the seed threw `StepBufferNotResidentError` whenever
+   * a referenced record (an IfcProperty, a unit) sat in a window the LRU
+   * had dropped (conway#761). This pins the seed's `#ref` closure
+   * (StepModelBase.ensureResidentClosureByLocalID — the same walk
+   * geometry extraction uses), reads, then unpins, drops the captured
+   * window views and trims the window back to its cap.
+   *
+   * Representations: unless `includeRepresentations`, a reference to a
+   * representation root (an IfcProductRepresentation such as a product's
+   * IfcProductDefinitionShape, or a type's IfcRepresentationMap) stays a
+   * `{type: 5, value}` handle, and the closure walk leaves the root out:
+   * its handle is read from the parent's bytes, so neither the root nor
+   * anything under it is paged in. These are property reads, and a product's representation is its
+   * whole shape graph down to every face and point: one 860 MB model's
+   * largest sampled product reached 9,659 records, which pinned at once
+   * holds the window far over its cap. web-ifc's flatten inlines them;
+   * pass `includeRepresentations` for that (head-to-heads). The seed itself
+   * is always flattened, even when it is a representation.
+   *
+   * Unflattened, or on a fully resident source, it is a getLine after
+   * paging in just the record.
+   *
+   * @param expressID The record's express ID.
+   * @param flatten Inline every referenced record, recursively.
+   * @param includeRepresentations Inline geometry representations too
+   * (web-ifc parity).
+   * @return {Promise<any>} The line data, as getLine returns it.
+   */
+  async getLineResident(
+      expressID: number,
+      flatten: boolean = false,
+      includeRepresentations: boolean = false): Promise<any> {
+
+    const skip = !includeRepresentations
+
+    if (!this.sourceIsExternal) {
+      return this.getLine(expressID, flatten, skip)
+    }
+
+    const model = this.model[0]
+
+    const seed = model.resolveExpressID(expressID)
+
+    if (!flatten) {
+      if (seed === void 0) {
+        return this.getLine(expressID, false)
+      }
+
+      // Pinned across the await, as the closure walk pins: another read's
+      // eviction (a concurrent ensure, or a recursive read's trim back to
+      // the cap) can otherwise drop the window between the ensure and the
+      // synchronous read below.
+      model.pinByLocalID(seed)
+
+      try {
+        await model.ensureResidentByLocalID(seed)
+
+        return this.getLine(expressID, false)
+      } finally {
+        model.unpinByLocalID(seed)
+        model.releaseSourceViews([seed])
+      }
+    }
+
+    // The flatten reads a representation root's handle from its parent's
+    // bytes, never the root's own, so the walk leaves roots out entirely.
+    const skipRoot = skip ? (localID: number) => this.isRepresentationRootLocal(localID) : void 0
+    // Our own `seen`, so a throw part-way through the closure walk still
+    // leaves every pin it took reachable for the unpin below.
+    const pinned = new Set<number>()
+
+    try {
+      if (seed !== void 0) {
+        await model.ensureResidentClosureByLocalID(
+            seed, void 0, pinned, void 0, void 0, void 0, void 0, skipRoot)
+      }
+
+      return this.getLine(expressID, true, skip)
+    } finally {
+      model.unpinLocalIDs(pinned)
+      model.releaseSourceViews(pinned)
+      model.trimSourceResidency()
+    }
+  }
+
+  /**
+   * Call `visit` once per record with that record resident, paging a
+   * spilled source in file order rather than the caller's order (see
+   * StepModelBase.visitResidentInFileOrder, conway#752). Use this for
+   * walks that read many scattered records, where an `ensureLineResident`
+   * per record in walk order re-reads the same windows over and over.
+   *
+   * @param expressIDs The records to visit.
+   * @param visit Synchronous reader; copy out what you need, as views are
+   * released after it returns.
+   * @return {Promise<void>} Resolves after every record is visited.
+   */
+  async visitLinesInFileOrder(
+      expressIDs: Iterable<number>,
+      visit: (expressID: number) => void): Promise<void> {
+    await this.model[0].visitResidentInFileOrder(expressIDs, visit)
+  }
+
+  /**
+   * Call `visit` once per record with its unflattened line data, exactly
+   * as `getLine(expressID)` returns it, reading a spilled source as
+   * coalesced record spans in file order rather than paging whole windows
+   * (StepModelBase.visitRecordBytesInFileOrder, conway#755). For sweeps
+   * over a sparse type, where the windows holding its records add up to
+   * most of the file. No window is paged in and no entity is materialised,
+   * so nothing is left cached.
+   *
+   * Records the span path cannot parse (complex or untyped records, an
+   * unknown ID) are read through {@link visitLinesInFileOrder} after the
+   * rest, so the visit order is file order only within each of the two
+   * passes. A fully resident source reads through getLine.
+   *
+   * @param expressIDs The records to visit.
+   * @param visit Synchronous receiver of each record's line data.
+   * @return {Promise<void>} Resolves after every record is visited.
+   */
+  async visitLineDataInFileOrder(
+      expressIDs: Iterable<number>,
+      visit: (expressID: number, line: any) => void): Promise<void> {
+
+    const model = this.model[0]
+
+    if (!this.sourceIsExternal) {
+      await model.visitResidentInFileOrder(expressIDs, (expressID) => {
+        visit(expressID, this.getLine(expressID, false))
+      })
+      return
+    }
+
+    const localToExpress = new Map<number, number>()
+    const fallback: number[] = []
+
+    for (const expressID of expressIDs) {
+      const localID = model.resolveExpressID(expressID)
+
+      if (localID === void 0 || model.typeIDOf(localID) === void 0) {
+        fallback.push(expressID)
+      } else {
+        localToExpress.set(localID, expressID)
+      }
+    }
+
+    const complex = await model.visitRecordBytesInFileOrder(
+        localToExpress.keys(), (localID, bytes) => {
+          const expressID = localToExpress.get(localID)!
+          const typeID = model.typeIDOf(localID)!
+          const raw = this.rawLineDataFromArguments(expressID, localID, typeID, bytes)
+          const converter = raw === void 0 ? void 0 : FromRawLineData[raw.type]
+
+          if (typeof converter !== 'function') {
+            fallback.push(expressID)
+            return
+          }
+
+          visit(expressID, converter(raw))
+        })
+
+    for (const localID of complex) {
+      fallback.push(localToExpress.get(localID)!)
+    }
+
+    if (fallback.length > 0) {
+      await this.visitLinesInFileOrder(fallback, (expressID) => {
+        visit(expressID, this.getLine(expressID, false))
+      })
+    }
   }
 
   /**
@@ -1711,22 +2750,96 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
    * @param modelID
    * @param line
    */
-  flattenLine(line: any): void {
+  flattenLine(line: any, skipRepresentations: boolean = false): void {
     Logger.warning('[FlattenLine]: Shim - implemented')
+    const inline = (handle: any) =>
+      skipRepresentations && this.isRepresentationRoot(handle.value) ?
+        handle : this.getLine(handle.value, true, skipRepresentations)
     Object.keys(line).forEach((propertyName) => {
       const property = line[propertyName]
       // eslint-disable-next-line no-magic-numbers
       if (property && property.type === 5) {
 
-        line[propertyName] = this.getLine(property.value, true)
+        line[propertyName] = inline(property)
         // eslint-disable-next-line no-magic-numbers
       } else if (Array.isArray(property) && property.length > 0 && property[0].type === 5) {
         for (let i = 0; i < property.length; i++) {
 
-          line[propertyName][i] = this.getLine(property[i].value, true)
+          line[propertyName][i] = inline(property[i])
         }
       }
     })
+  }
+
+  /**
+   * Is this record the root of a geometry representation, which a
+   * property read's flatten leaves as a handle: an IfcProductRepresentation
+   * (a product's `Representation`, e.g. IfcProductDefinitionShape) or an
+   * IfcRepresentationMap (a type's `RepresentationMaps`)? Everything below
+   * one is shape — representations, items, faces, points — and a
+   * product's can run to thousands of records.
+   *
+   * @param expressID The record.
+   * @return {boolean} True for a representation root.
+   */
+  private isRepresentationRoot(expressID: number): boolean {
+    const model = this.model[0]
+    const localID = model.resolveExpressID(expressID)
+
+    return localID !== void 0 && this.isRepresentationRootLocal(localID)
+  }
+
+  /**
+   * Local-ID twin of {@link isRepresentationRoot}.
+   *
+   * @param localID The record.
+   * @return {boolean} True for a representation root.
+   */
+  private isRepresentationRootLocal(localID: number): boolean {
+    const model = this.model[0]
+    const typeID = model.typeIDOf(localID)
+
+    return typeID !== void 0 &&
+      (model.typeIDIsA(typeID, IfcProductRepresentation) ||
+        model.typeIDIsA(typeID, IfcRepresentationMap))
+  }
+
+  /**
+   * Parse a record's argument bytes into raw line data — the step of
+   * getRawLineData after it has the bytes, shared with
+   * visitLineDataInFileOrder, which reads them without materialising the
+   * entity.
+   *
+   * @param expressID The record's express ID.
+   * @param localID The record's local ID.
+   * @param typeID The record's schema type.
+   * @param lineArguments The record's argument list bytes.
+   * @return {RawLineData | undefined} The raw line, or undefined when the
+   * arguments do not parse completely.
+   */
+  private rawLineDataFromArguments(
+      expressID: number,
+      localID: number,
+      typeID: EntityTypesIfc,
+      lineArguments: Uint8Array): RawLineData | undefined {
+
+    const parsingBuffer = new ParsingBuffer(lineArguments)
+    const result_ = IfcStepParser.Instance.extractArguments(parsingBuffer, expressID)
+
+    if (result_[1] !== ParseResult.COMPLETE) {
+      return
+    }
+
+    // A record translated from IFC4X3 (ifc4x3_ifc4_compat.ts) must not
+    // expose its masked tail through the raw path either.
+    const decodedFieldCount = this.model[0].fieldMaskOf(localID)
+
+    return {
+      ID: expressID,
+      type: shimIfcEntityReverseMap[typeID],
+      arguments: decodedFieldCount === void 0 ? result_[0] :
+        maskRawArguments(result_[0], typeID, decodedFieldCount),
+    }
   }
 
   /**
@@ -1747,16 +2860,10 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     if (element !== void 0) {
       const lineArguments = element.extractLineArguments()
 
-      const parsingBuffer = new ParsingBuffer(lineArguments)
       if (element.expressID !== void 0) {
-        const result_ = IfcStepParser.Instance.extractArguments(parsingBuffer, element.expressID)
-        if (result_[1] === ParseResult.COMPLETE) {
-          const rawLineData: RawLineData = {
-            ID: expressID,
-            type: shimIfcEntityReverseMap[element.type],
-            arguments: result_[0],
-          }
-
+        const rawLineData = this.rawLineDataFromArguments(
+            expressID, element.localID, element.type, lineArguments)
+        if (rawLineData !== void 0) {
           return rawLineData
         }
       } else {
@@ -1906,6 +3013,11 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
   }
 
   /**
+   * The classic web-ifc coordination matrix, held at identity on purpose
+   * — consumers stamp it onto the assembled model, so returning the real
+   * recentre here would apply it twice. For the frame this instance
+   * actually composed into its placements, see
+   * {@link getAppliedCoordination}.
    *
    * @param modelID
    * @return {Array<number>}
@@ -1926,14 +3038,69 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
 
   /**
-   * The coordination frame actually applied to emitted placements —
-   * the derived (or validated adopted) recenter, identity when no
-   * recenter ran. See ifc_api_model_passthrough.getAppliedCoordination.
+   * The coordination frame this instance actually composed into the
+   * placements it emitted — derived, supplied, or an adopted preview
+   * frame the durable walk has since validated; identity while nothing
+   * has been composed and nothing handed in.
    *
-   * @return {Array<number>} column-major mat4
+   * "Handed in" is the exception to the emitted-placements reading, and
+   * it is deliberate: {@link setCoordinationFrame} stores its matrix at
+   * call time, so a supplied frame reports from that moment rather than
+   * from the first placement composed under it. M3's pool needs exactly
+   * that — a worker is asked which frame it will apply, not which one it
+   * has finished applying — and a supplied frame is final, so the early
+   * answer is never revised.
+   *
+   * Every emit site (classic `streamAllMeshes` /
+   * `streamAllMeshesWithTypes` / `loadAllGeometry`, and the deferred
+   * `streamNewMeshes_`) writes `demandCoordination_` at the moment it
+   * derives, which is what makes the classic and deferred opens report
+   * the same frame for the same model.
+   *
+   * The contract this satisfies — composition order, the
+   * `world = inverse(A) * rendered` inverse, and when identity is owed —
+   * is stated on `IfcAPI.GetAppliedCoordinationMatrix`.
+   *
+   * @return {Array<number>} column-major mat4, a fresh array; `identity`
+   * is a mutable field, so the copy is what keeps a caller from editing
+   * this instance's own zero frame.
    */
   getAppliedCoordination(): Array<number> {
     return [...(this.demandCoordination_ ?? this.identity)]
+  }
+
+
+  /**
+   * The frame a classic walk composes under: whatever this model has
+   * already derived, and only failing that the model tuple's identity
+   * seed.
+   *
+   * The classic walks derive a frame only while `_isCoordinated` is
+   * false, which is right — a model must not re-anchor halfway through
+   * its life — but they used to seed their local from `model[5]`'s
+   * identity regardless. So a SECOND walk of one live model
+   * (`streamAllMeshes` and then `loadAllGeometry`, both legal on a
+   * classic open) skipped the derivation AND started from identity,
+   * composing every placement without the recentre while
+   * {@link getAppliedCoordination} went on reporting the real frame:
+   * emitted geometry and accessor answer disagreeing precisely on the
+   * georeferenced models where the difference is 2.6e6 m (#703). Before
+   * the accessor existed the two were accidentally consistent, both
+   * identity, which is why this surfaced only now.
+   *
+   * Skipping the re-derivation was never the bug; seeding identity was.
+   * Reading the persisted frame here is what keeps
+   * `world = inverse(A) * rendered` true for every walk rather than only
+   * the first.
+   *
+   * `demandCoordination_` is undefined until something derives, so a
+   * first walk still starts from the identity seed and emits exactly
+   * what it did before this existed.
+   *
+   * @return {ArrayLike<number>} The frame to seed a classic walk with.
+   */
+  private classicCoordinationSeed_(): ArrayLike<number> {
+    return this.demandCoordination_ ?? this.model[5]
   }
 
   /**
@@ -2049,7 +3216,11 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
    * meshes through `meshCallback` — the incremental twin of
    * streamAllMeshes. Placed-geometry math (coordination, scaling,
    * centering) is identical; the shared meshMap is updated so
-   * getFlatMesh keeps working. Call repeatedly until `remaining` is 0.
+   * getFlatMesh keeps working. Call repeatedly until
+   * `remaining === 0 && extracted === 0` — one call past `remaining` alone
+   * first reaching 0, needed only to run the geometry budget's head
+   * eviction against the final real batch (see the trailing-batch
+   * paragraph on `pumpGeometryBatch_` below).
    *
    * Requires a model opened with deferred geometry
    * (`OpenModelStreamed(data, {..., DEFER_GEOMETRY: true})`); on a
@@ -2079,6 +3250,17 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     this.checkShardPreconditions_()
     this.ensureDemandWorklists_()
 
+    // The prep a deferred open used to run at open (conway#748). Here
+    // rather than left to the first extractProductGeometryByLocalID, which
+    // would also prepare: the product worklist can be empty while
+    // rel-aggregates entries remain — every product an aggregate target, or
+    // a shard's empty slice — and that pass extracts through
+    // extractProductGeometry directly, reading the styled-item, material and
+    // rel-voids maps without going through the per-product seam.
+    // Idempotent; one synchronous block, the same one the open used to
+    // carry — the async pump below is the one that yields through it.
+    this.conwayGeometry_.prepareDemandExtraction()
+
     return this.pumpGeometryBatch_(batchSize, meshCallback)
   }
 
@@ -2097,6 +3279,66 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
       meshCallback?: (mesh: FlatMesh) => void ):
       Promise<{extracted: number, remaining: number}> {
 
+    // Serialised, because the pump body below is NOT re-entrant across its
+    // awaits and this is the only place that can enforce it.
+    //
+    // The body selects its batch — `productEnd` and `batchIDs` off
+    // `demandCursor_` — synchronously, then awaits the prefetch, and only
+    // assigns `this.demandCursor_ = productEnd` after extracting. Two calls
+    // in flight therefore both read the SAME un-advanced cursor and extract
+    // the same products, duplicating scene nodes so that a later whole-model
+    // re-walk serves each of them twice; and each then writes its own saved
+    // `productEnd`, so the later finisher can move the cursor BACKWARD over
+    // ground a call that started after it already covered, leaving those
+    // products to be extracted a second time as well. Measured unlocked on
+    // data/mapped_shared_representation.ifc with two overlapping calls: both
+    // returned `{extracted: 4, remaining: 12}` for the SAME four products,
+    // and the whole-model ask afterwards served 20 placements against the
+    // model's true 16.
+    //
+    // That was latent while `ExtractGeometryBatchAsync` was the only door
+    // into this body and a consumer awaited each call before the next.
+    // conway#660 adds a second door — `streamAllMeshesAsync` drains through
+    // this same pump — and a consumer reaching for a whole-model ask while
+    // its own batch pump is still in flight is an ordinary thing to do
+    // (Share's degraded end-of-load fires from an error handler, not from
+    // inside the pump loop). So overlapping calls QUEUE here rather than
+    // interleave: each waits for the previous to finish before it reads the
+    // cursor, which is what makes the cursor monotonic.
+    //
+    // `previous` only ever resolves — the release is in a `finally` — so one
+    // call's rejection cannot wedge the chain for every later call.
+    const previous = this.pumpChain_
+
+    let release: () => void = () => { /* replaced below, before any await */ }
+
+    this.pumpChain_ = new Promise<void>((resolve) => {
+      release = resolve
+    })
+
+    await previous
+
+    try {
+      return await this.pumpGeometryBatchAsync_(batchSize, meshCallback)
+    } finally {
+      release()
+    }
+  }
+
+  /**
+   * The body behind {@link extractGeometryBatchAsync}, which holds the pump
+   * lock across this whole call. Never call it directly: it reads and writes
+   * `demandCursor_` across an await and is not safe to re-enter.
+   *
+   * @param batchSize Max products to extract this call (min 1).
+   * @param meshCallback Receives each newly-extracted product's mesh.
+   * @return {Promise<object>} `{extracted, remaining}`.
+   */
+  private async pumpGeometryBatchAsync_(
+      batchSize: number,
+      meshCallback?: (mesh: FlatMesh) => void ):
+      Promise<{extracted: number, remaining: number}> {
+
     if (!this.deferredMode_) {
       return {extracted: 0, remaining: 0}
     }
@@ -2104,9 +3346,23 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     this.checkShardPreconditions_()
     await this.ensureDemandWorklistsAsync_()
 
+    // The extraction maps, on the first call (conway#748): paged and pinned
+    // on a windowed source, and swept with a yield between sweeps on
+    // either, so the prep a deferred open used to carry is neither paid by
+    // opens that never extract nor one long task when it is paid. Under
+    // the pump lock, so no batch can run against half-built maps. See
+    // extractGeometryBatch's note for why it is not left to the first
+    // per-product extract.
+    await this.conwayGeometry_.prepareDemandExtractionAsync()
+
     if (!this.model[0].isSourceExternal) {
       return this.pumpGeometryBatch_(batchSize, meshCallback)
     }
+
+    // Evict at the START of the call, never at its end — see the identical
+    // note in pumpGeometryBatch_ for why. This is the pump Share drives, and
+    // the one the SHARE-1NK crash came from.
+    this.model[0].geometryResidency.evictToBudget()
 
     const products = this.demandProducts_ ?? []
     const aggregates = this.demandAggregates_ ?? []
@@ -2124,6 +3380,50 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
     if (batchIDs.length > 0) {
 
+      const model = this.model[0]
+
+      // A store that reads synchronously faults every missing window in at
+      // the read itself (WindowedStepBufferProvider.acquire), so the
+      // per-product #ref closure walk below buys this batch nothing it would
+      // not get anyway: the walk only makes records resident and pins them,
+      // and the extract reads exactly those records (conway#786). It costs a
+      // lot on faceted-brep models. A 309 MB ARCHICAD 22 IFC2X3 model walks
+      // 14.0 M records (963 per product, 96% IfcPolyLoop / IfcFace /
+      // IfcFaceOuterBound / IfcCartesianPoint). In headless Chromium its
+      // geometry took 22.3 s windowed against 9.7 s buffered, and a worker
+      // CPU profile put 7.5 s in the walk and 2.5 s in releasing its
+      // views after every product. Skipping both, the
+      // phase takes about 12.5 s, and the 860 MB Revit model (26 records
+      // per product) does not get slower. Geometry is byte-identical on all
+      // four models measured.
+      //
+      // What the walk guaranteed, and why each holds without it here:
+      //  - Residency for the synchronous extract. With `readSync` a miss
+      //    faults in; without it a miss throws, so an async-only store
+      //    keeps the walk.
+      //  - Pins against eviction mid-batch. A view of an evicted window
+      //    stays valid (eviction only drops the provider's reference; see
+      //    WindowedStepBufferProvider.faultInSync_), and a record without a
+      //    view faults its window in again, so eviction mid-product costs a
+      //    re-read, never a wrong or failed one.
+      //  - Containment of a failed read to its product (conway#526). A
+      //    readSync that throws surfaces in the extract, inside the
+      //    per-product catch below.
+      //  - Dropping the views so the LRU's evictions free memory. The walk
+      //    named the records to release; here the extract is synchronous, so
+      //    tracking captured views for its duration catches exactly what it
+      //    read (StepModelBase.readTrackingSourceViews), and the views that
+      //    readers before the pump left behind are swept once, on the first
+      //    batch. Without that sweep those views kept 260-330 MB of evicted
+      //    windows alive through the whole phase (GC'd worker backing store,
+      //    Chromium): the walk had been releasing them as it reached them.
+      const faultsIn = model.sourceReadsSynchronously
+
+      if (faultsIn && !this.sourceViewsSwept_) {
+        model.releaseAllSourceViews()
+        this.sourceViewsSwept_ = true
+      }
+
       // One pin set for the batch so mapped geometry stays resident
       // across the instances that share it.
       const pins = new Set<number>()
@@ -2133,9 +3433,11 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
       try {
 
         const prefetchStart = Date.now()
-        await Promise.all(batchIDs.map((localID) =>
-          this.conwayGeometry_.ensureResidentForProductExtract(
-              localID, pins, leafSpans)))
+        if (!faultsIn) {
+          await Promise.all(batchIDs.map((localID) =>
+            this.conwayGeometry_.ensureResidentForProductExtract(
+                localID, pins, leafSpans)))
+        }
         profile.prefetchMs += Date.now() - prefetchStart
         if ( pins.size > profile.pinMax ) {
           profile.pinMax = pins.size
@@ -2143,21 +3445,34 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
         profile.lastPins = pins.size
 
         const extractStart = Date.now()
-        for (const localID of batchIDs) {
 
-          try {
-            if (this.conwayGeometry_.extractProductGeometryByLocalID(localID)) {
-              ++extracted
+        // Synchronous by construction: no await between the first product
+        // and the last, which is what readTrackingSourceViews requires.
+        // Views are released once per batch, not after every product as
+        // they were: on a store without readSync nothing can be evicted
+        // during this loop (only an ensure evicts, and none runs until the
+        // loop ends), so releasing views of pinned windows freed nothing
+        // and cost 2.5 s on the model above.
+        const extractBatch = () => {
+
+          for (const localID of batchIDs) {
+
+            try {
+              if (this.conwayGeometry_.extractProductGeometryByLocalID(localID)) {
+                ++extracted
+              }
+            } catch (error) {
+              Logger.error(
+                  `Error extracting product localID ${localID}: ` +
+                  `${error instanceof Error ? error.message : String(error)}`)
             }
-          } catch (error) {
-            Logger.error(
-                `Error extracting product localID ${localID}: ` +
-                `${error instanceof Error ? error.message : String(error)}`)
           }
+        }
 
-          // Drop JS views after each product; chunks stay pinned for
-          // the rest of the batch so rematerialise is a cache hit.
-          this.model[0].releaseSourceViews(pins)
+        if (faultsIn) {
+          model.readTrackingSourceViews(extractBatch)
+        } else {
+          extractBatch()
         }
         profile.extractMs += Date.now() - extractStart
 
@@ -2179,23 +3494,61 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     // demandAggregateStepper_ and conway#549 §7. The prefetch and its pins
     // stay attached to the relationship, not to the batch, so a relationship
     // that spans batches is paged in once.
+    //
+    // Over a store that reads synchronously the aggregate pass gets the
+    // product pass's treatment (conway#786, above): no AggregateExtractPager,
+    // whose `begin` pages the relationship and its relating product's closure
+    // and whose `ensureForStep` pages and pins each wave of related products'
+    // closures ahead of the stepper. Each step is synchronous between its
+    // yields, so it runs inside readTrackingSourceViews and drops what it
+    // captured, and a miss faults its window in. The pager's waves pinned
+    // windows the LRU then could not evict, so the window grew and evicted
+    // other windows that were read again. On D3D (headless Chromium, OPFS
+    // sync access handle, medians of 5) store reads went 684 -> 586, the
+    // final window 158 -> 126 MB, peak worker backing store 1,389 -> 989 MB
+    // and geometry 52.1 -> 46.7 s; geometry is byte-identical on all four
+    // models measured, and none got slower.
+    // An async-only store keeps the pager, since a miss there throws. A read
+    // that fails fails its related product, not the relationship
+    // (IfcGeometryExtraction.extractRelatedProductGeometry_).
+    const aggregateModel = this.model[0]
+    const aggregateFaultsIn = aggregateModel.sourceReadsSynchronously
+
+    // The product pass sweeps on its first batch; a model whose products
+    // are all aggregate targets reaches here without one.
+    if (this.demandCursor_ >= products.length && aggregateFaultsIn &&
+        !this.sourceViewsSwept_) {
+      aggregateModel.releaseAllSourceViews()
+      this.sourceViewsSwept_ = true
+    }
+
     if (this.demandCursor_ >= products.length) {
 
       while (extracted < budget &&
           (this.demandAggregateStepper_ !== void 0 ||
             this.demandAggregatesCursor_ < aggregates.length)) {
 
-        const relAggregate = aggregates[this.demandAggregatesCursor_]
-
         if (this.demandAggregateStepper_ === void 0) {
 
-          this.demandAggregatePager_ =
-            await this.conwayGeometry_.beginAggregateExtract(
-                relAggregate, budget)
+          const relAggregate = this.relAggregateAt_(this.demandAggregatesCursor_)
+
+          if (!aggregateFaultsIn) {
+            this.demandAggregatePager_ =
+              await this.conwayGeometry_.beginAggregateExtract(
+                  relAggregate, budget)
+          }
           this.demandAggregateSteps_ = 0
           this.demandAggregateStepper_ =
             this.conwayGeometry_.extractRelAggregateGeometryIncremental(
                 relAggregate)
+        } else if (this.demandAggregatePager_ === void 0 && !aggregateFaultsIn) {
+
+          // Dropped by a spill mid-relationship (spillSourceToExternalStore):
+          // page what is left of it through the store, from the step the
+          // stepper is on.
+          this.demandAggregatePager_ =
+            await this.conwayGeometry_.beginAggregateExtract(
+                this.relAggregateAt_(this.demandAggregatesCursor_), budget)
         }
 
         // Per step, not per relationship: this is the await that spends the
@@ -2209,10 +3562,14 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
         let done = false
 
         try {
-          done = this.demandAggregateStepper_.next().done === true
+          const stepper = this.demandAggregateStepper_
+          done = (aggregateFaultsIn ?
+            aggregateModel.readTrackingSourceViews(() => stepper.next()) :
+            stepper.next()).done === true
         } catch (error) {
           Logger.error(
-              `Error extracting aggregate ${relAggregate.expressID}: ` +
+              'Error extracting aggregate ' +
+              `${this.relAggregateAt_(this.demandAggregatesCursor_).expressID}: ` +
               `${error instanceof Error ? error.message : String(error)}`)
           done = true
         }
@@ -2228,25 +3585,32 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
       }
     }
 
-    // Capture before eviction — and capture even when nobody asked for
-    // meshes. The deferred StreamAllMeshes drain pumps with `noCallback` for
-    // every batch and captures once at the end (see streamAllMeshes), which
-    // works only while geometry survives to be captured. With a budget it
-    // does not: anything evicted before that final capture can no longer be
-    // resolved, so those instances vanish from the model with no error. On
-    // the shared-representation fixture at a 2 KiB budget that path
-    // delivered 3 placements against classic's 16.
+    // Capture even when nobody asked for meshes. The deferred
+    // StreamAllMeshes drain pumps with `noCallback` for every batch and
+    // captures once at the end (see streamAllMeshes), which works only while
+    // geometry survives to be captured. With a budget it does not: anything
+    // evicted before that final capture can no longer be resolved, so those
+    // instances vanish from the model with no error. On the
+    // shared-representation fixture at a 2 KiB budget that path delivered 3
+    // placements against classic's 16.
+    //
+    // STREAMING_CONSUMER makes that capture a no-op — there is no meshMap to
+    // save anything into — so it is skipped rather than run for its side
+    // effect of advancing the scene cursor, which the only whole-model path
+    // on such a model rewinds to zero anyway (recaptureWholeModel_).
+    //
+    // Note what is NOT being claimed: that nothing is lost. Under a budget,
+    // geometry evicted before a no-callback drain finishes is unrecoverable
+    // on this contract exactly as it is here, and the re-walk does not get
+    // it back — it reports it, and throws when that accounts for the whole
+    // model. Skipping the capture is not what loses it; having no cache to
+    // capture INTO is, and that is the contract the caller opted into.
     if (meshCallback !== void 0) {
       this.streamNewMeshes_(meshCallback)
-    } else if (this.model[0].geometryResidency.enabled) {
-      this.streamNewMeshes_(() => { /* capture into meshMap before eviction */ })
+    } else if (this.model[0].geometryResidency.enabled &&
+        !this.streamingConsumer_) {
+      this.streamNewMeshes_(() => { /* capture into meshMap */ })
     }
-
-    // Evict AFTER the capture, never before: the delta capture resolves each
-    // new node's geometry to emit it, so evicting first would drop assets
-    // this batch is about to deliver and re-extract them immediately. A
-    // no-op unless a budget is configured.
-    this.model[0].geometryResidency.evictToBudget()
 
     const {totalWork, remaining} = this.demandProgress_()
 
@@ -2275,10 +3639,21 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
       return
     }
 
+    // Three timestamps for a build that runs once per model and costs
+    // 0.02-1.7 s — the instrument is far below its own resolution, which is
+    // what lets it stay unconditional. See recordDemandPrep_ for why it is
+    // not gated behind a flag.
+    const startedMs = Date.now()
+
     const {products, aggregates} = this.collectDemandCandidates_()
+
+    const candidatesEndedMs = Date.now()
 
     if (this.shard_ === void 0) {
       this.adoptDemandWorklists_(products, aggregates)
+      this.recordDemandPrep_(
+          startedMs, candidatesEndedMs, void 0,
+          products.length, aggregates.length)
       return
     }
 
@@ -2308,11 +3683,17 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     for (let where = 0; where < aggregates.length; ++where) {
       aggregateKeys[where] = geometryDispatchKey(
           this.model[0],
-          relatingLocalIDOf(this.model[0], aggregates[where].localID))
+          relatingLocalIDOf(this.model[0], aggregates[where]))
     }
+
+    const keysEndedMs = Date.now()
 
     this.adoptShardedWorklists_(
         products, aggregates, productKeys, aggregateKeys)
+
+    this.recordDemandPrep_(
+        startedMs, candidatesEndedMs, keysEndedMs,
+        products.length, aggregates.length)
   }
 
 
@@ -2338,6 +3719,11 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
       return
     }
 
+    // Started before the aggregate-target paging below, which is part of
+    // what a windowed build costs — the yield's `windowed` flag is what
+    // says this number contains I/O rather than only compute.
+    const startedMs = Date.now()
+
     // BEFORE collecting: the aggregate-target set is read from the
     // IfcRelAggregates records themselves, and on a windowed source those
     // pages are long gone by the first pump. The sync walk swallows the
@@ -2354,8 +3740,13 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
     const {products, aggregates} = this.collectDemandCandidates_()
 
+    const candidatesEndedMs = Date.now()
+
     if (this.shard_ === void 0) {
       this.adoptDemandWorklists_(products, aggregates)
+      this.recordDemandPrep_(
+          startedMs, candidatesEndedMs, void 0,
+          products.length, aggregates.length)
       return
     }
 
@@ -2364,17 +3755,27 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     const aggregateKeys = await computeDispatchKeys(
         this.model[0],
         await computeRelatingLocalIDs(
-            this.model[0], aggregates.map((aggregate) => aggregate.localID)))
+            this.model[0], aggregates))
+
+    const keysEndedMs = Date.now()
 
     // Re-checked after the awaits: a concurrent pump could have built the
     // worklists while this one was paging, and adopting a second set would
     // reset the cursors under it, re-extracting everything already pumped.
+    //
+    // Nothing is recorded on this branch either: the yield describes the
+    // build that WON, and overwriting it with a discarded one's timings
+    // would report kept counts against worklists this call never installed.
     if (this.demandProducts_ !== void 0) {
       return
     }
 
     this.adoptShardedWorklists_(
         products, aggregates, productKeys, aggregateKeys)
+
+    this.recordDemandPrep_(
+        startedMs, candidatesEndedMs, keysEndedMs,
+        products.length, aggregates.length)
   }
 
 
@@ -2394,7 +3795,7 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
    * @return {object} The unsharded product and rel-aggregates worklists.
    */
   private collectDemandCandidates_():
-      {products: number[], aggregates: IfcRelAggregates[]} {
+      {products: number[], aggregates: number[]} {
 
     // Aggregate-target products are extracted ONLY by the
     // rel-aggregates pass below (with the relating object's master
@@ -2416,10 +3817,10 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
       products.push(product.localID)
     }
 
-    const aggregates: IfcRelAggregates[] = []
+    const aggregates: number[] = []
 
     for (const relAggregate of this.model[0].types(IfcRelAggregates)) {
-      aggregates.push(relAggregate)
+      aggregates.push(relAggregate.localID)
     }
 
     return {products, aggregates}
@@ -2434,9 +3835,11 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
    */
   private adoptDemandWorklists_(
       products: number[],
-      aggregates: IfcRelAggregates[]): void {
+      aggregates: number[]): void {
 
     this.releaseDemandAggregate_()
+
+    permuteDemandWorklists(products, aggregates)
 
     this.demandProducts_ = products
     this.demandAggregates_ = aggregates
@@ -2464,7 +3867,7 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
    */
   private adoptShardedWorklists_(
       products: number[],
-      aggregates: IfcRelAggregates[],
+      aggregates: number[],
       productKeys: Uint32Array,
       aggregateKeys: Uint32Array): void {
 
@@ -2473,7 +3876,7 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     let placed = 0
     let positional = 0
 
-    this.demandProducts_ = products.filter((localID, where) => {
+    const keptProducts = products.filter((localID, where) => {
 
       const key = productKeys[where]
 
@@ -2507,8 +3910,15 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     // geometry, so getting it wrong leaves placement with almost nothing
     // to control (measured on D3D, where that mistake made every strategy
     // look identical).
-    this.demandAggregates_ = aggregates.filter((relAggregate, where) =>
+    const keptAggregates = aggregates.filter((_relAggregate, where) =>
       shardOfDispatchKey(aggregateKeys[where], shard.count) === shard.index)
+
+    // After the narrowing, so the lever reorders what this shard will
+    // actually walk without touching which products that is.
+    permuteDemandWorklists(keptProducts, keptAggregates)
+
+    this.demandProducts_ = keptProducts
+    this.demandAggregates_ = keptAggregates
 
     this.releaseDemandAggregate_()
 
@@ -2516,6 +3926,102 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     this.demandAggregatesCursor_ = 0
 
     this.adoptAggregateStepPrefix_()
+  }
+
+
+  /**
+   * Record what the worklist build just cost — the direct measurement of
+   * the window conway#682 is about.
+   *
+   * **Why this lives in the engine.** The build runs lazily inside the
+   * FIRST `ExtractGeometryBatch` call, so from outside it can only be
+   * timed by differencing two pump calls — and `pumpGeometryBatch_` floors
+   * a batch at one product, so every window an external probe can time
+   * carries a product of real geometry inside it. On two of the four
+   * models `scripts/m3_worker_pool.mjs --prep-probe` measured, that
+   * geometry was larger than the term being measured and the split was
+   * reported `NOT RESOLVED` rather than as a number
+   * (`design/new/load-performance-ledger.md` §11.4). This timer has no
+   * geometry inside it at all, so those models resolve by construction
+   * rather than by subtraction.
+   *
+   * **Why it is unconditional rather than flag-gated.** It is three
+   * `Date.now()` calls and four array lengths, once per model, against a
+   * build measured at 21 ms on Schependomlaan and 1.7 s on D3D — the
+   * instrument sits several orders of magnitude below its own subject, so
+   * a flag would buy nothing and add a configuration in which the number
+   * silently does not exist. Nothing is emitted: the value is held for a
+   * caller that asks (`IfcAPI.GetDemandPrepYield`, rendered by
+   * `formatDemandPrepLine`), and a load that never asks logs nothing and
+   * formats nothing. That is the same shape as the preview channels'
+   * `previewYield`, one report per run rather than a stream.
+   *
+   * **`candidatesMs` is the replicated term.** Every worker in a pool runs
+   * `collectDemandCandidates_` over the WHOLE model — a shard narrows what
+   * is built, not what is walked — so this is what N workers duplicate N
+   * times. `keysMs` is its opposite: work that exists only because
+   * sharding exists, which an unsharded reference never performs and so
+   * cannot be divided by.
+   *
+   * **The clock is `Date.now`, so the floor is one millisecond**, matching
+   * the rest of this load-log channel (the preview channels' `firstMeshMs`
+   * is the same clock rendered through the same formatter). That is three
+   * orders of magnitude under the terms it has to separate — the ledger's
+   * smallest per-worker prep is Schependomlaan's ~21 ms, against the
+   * ±0.628 s the external probe could not beat on Snowdon — but it is NOT
+   * under a small fixture's. A few dozen products build their worklists in
+   * well under a millisecond and will report `0.000s` here; that is the
+   * clock, not a measurement, and the counts are the fields to read on a
+   * model that size.
+   *
+   * @param startedMs When the build began.
+   * @param candidatesEndedMs When the whole-model candidate walk finished.
+   * @param keysEndedMs When the dispatch-key pass finished; undefined on an
+   * unsharded build, which runs none.
+   * @param candidateProducts Products the walk produced, before filtering.
+   * @param candidateAggregates Rel-aggregates the walk produced, before
+   * filtering.
+   */
+  private recordDemandPrep_(
+      startedMs: number,
+      candidatesEndedMs: number,
+      keysEndedMs: number | undefined,
+      candidateProducts: number,
+      candidateAggregates: number): void {
+
+    this.demandPrepYield_ = {
+      totalMs: Date.now() - startedMs,
+      candidatesMs: candidatesEndedMs - startedMs,
+      keysMs: keysEndedMs !== void 0 ?
+        keysEndedMs - candidatesEndedMs : void 0,
+      candidateProducts,
+      candidateAggregates,
+      // The ADOPTED lists, not the arguments: on a sharded build these are
+      // the filtered ones, and the gap between the two pairs is the whole
+      // replication claim.
+      keptProducts: (this.demandProducts_ ?? []).length,
+      keptAggregates: (this.demandAggregates_ ?? []).length,
+      shardIndex: this.shard_?.index,
+      shardCount: this.shard_?.count,
+      windowed: this.model[0].isSourceExternal,
+    }
+  }
+
+
+  /**
+   * What building this model's demand worklists cost, once they exist.
+   *
+   * Undefined before the first pump, and on a model opened without
+   * `DEFER_GEOMETRY` (which builds no worklists at all). See
+   * {@link recordDemandPrep_} for what the fields mean and
+   * `core/progress_log.ts`'s `formatDemandPrepLine` for the canonical
+   * rendering.
+   *
+   * @return {DemandPrepYieldLike | undefined} The build's cost, or
+   * undefined if no build has run.
+   */
+  public get demandPrepYield(): DemandPrepYieldLike | undefined {
+    return this.demandPrepYield_
   }
 
 
@@ -2825,6 +4331,42 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
   }
 
 
+  /**
+   * Report — once for the whole model — that a composed placement escaped
+   * LARGE_COORDINATE_BUDGET_M while COORDINATE_TO_ORIGIN was asking for
+   * exactly the opposite.
+   *
+   * Every emitted placement on a georeferenced model is over budget when
+   * this goes wrong, so the latch is not tidiness: unlatched, Ecobau.ifc
+   * logs 3,691 identical lines. One is enough to turn a silent
+   * render-quality defect into something greppable in a load report.
+   *
+   * @param transform The composed placement about to be emitted.
+   * @param geometry The geometry it draws — empty geometry is exempt (see
+   * exceedsLargeCoordinateBudget).
+   */
+  private reportLargeCoordinate_(
+      transform: ArrayLike<number>,
+      geometry: { getVertexCount(): number }): void {
+
+    if (this.largeCoordinateReported_ ||
+        this.settings?.COORDINATE_TO_ORIGIN !== true ||
+        !exceedsLargeCoordinateBudget(transform, geometry)) {
+      return
+    }
+
+    this.largeCoordinateReported_ = true
+
+    Logger.warning(
+        `COORDINATE_TO_ORIGIN did not recentre this model: a placement is ` +
+        `${Math.round(placementMagnitudeM(transform))}m from the origin, past ` +
+        `the ${LARGE_COORDINATE_BUDGET_M}m float32 budget. Expect visible ` +
+        `jitter; geometry at this magnitude quantizes to ` +
+        `~${(2 ** (Math.floor(Math.log2(placementMagnitudeM(transform))) - 23) * 1000)
+            .toFixed(1)}mm.`)
+  }
+
+
   private checkShardPreconditions_(): void {
 
     if (this.shard_ === void 0) {
@@ -2869,6 +4411,26 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
           'for the pool with SetCoordinationFrame.')
     }
 
+  }
+
+
+  /**
+   * The IfcRelAggregates at a position in demandAggregates_, resolved
+   * through the model on every call rather than held (see
+   * demandAggregates_ for why holding it pinned a spilled source). With
+   * element memoization on this is the same object until the model's
+   * cache is invalidated, so a resident load reads exactly the entity it
+   * used to.
+   *
+   * @param where Index into demandAggregates_.
+   * @return {IfcRelAggregates} The relationship.
+   */
+  private relAggregateAt_(where: number): IfcRelAggregates {
+
+    // Every entry came from `types(IfcRelAggregates)` over this model's
+    // fixed index, so the lookup cannot miss or change type.
+    return this.model[0].getElementByLocalID(
+        this.demandAggregates_![where]) as IfcRelAggregates
   }
 
 
@@ -2920,7 +4482,7 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
     for ( let where = 0; where < aggregates.length; ++where ) {
 
-      const relAggregate = aggregates[where]
+      const localID = aggregates[where]
 
       // One definition of the count, whichever source it comes from: the
       // windowed walk fills `paged` by calling aggregateRelatedProductCount
@@ -2929,8 +4491,9 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
       // call, not a second way of computing it (conway#569 review), which
       // is what keeps a windowed load and a resident load of the same model
       // reporting the same denominator.
-      const related = paged?.get(relAggregate.localID) ??
-        this.conwayGeometry_.aggregateRelatedProductCount(relAggregate)
+      const related = paged?.get(localID) ??
+        this.conwayGeometry_.aggregateRelatedProductCount(
+            this.relAggregateAt_(where))
 
       // +1 for the terminating next(): see demandAggregateStepPrefix_.
       running += related + 1
@@ -3008,6 +4571,53 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
       batchSize: number,
       meshCallback?: (mesh: FlatMesh) => void ): {extracted: number, remaining: number} {
 
+    // Evict at the START of the call, not at its end. The contract this buys:
+    // every asset a pump call delivers stays resident at least until the NEXT
+    // pump call begins, so an embedder that copies payloads out between calls
+    // can never be handed a geometry ID whose native has already been freed.
+    //
+    // This used to run at the tail, after the delta capture, on the reasoning
+    // that the capture had to resolve each new node's geometry first. True,
+    // but incomplete: the capture is not the last read of that geometry. The
+    // embedder's is, and it happens AFTER the call returns — Share's
+    // onMeshBatch calls GetGeometry/GetVertexArray on the delta it just
+    // received, then yields and pumps again (the "copy at delivery"
+    // invariant of Share#1640). Tail eviction could therefore free geometry
+    // the very same call had just delivered — trivially so whenever one
+    // batch's assets exceed the whole budget, as they do on 1.9 GB Revit
+    // exports at GEOMETRY_BUDGET_MB=64 — and the embedder's copy then hit a
+    // freed embind handle: "Cannot pass deleted object as a pointer of type
+    // IfcGeometry" (Sentry SHARE-1NK).
+    //
+    // The cost is a transient overshoot of up to one batch's bytes, which is
+    // the deliberate trade: a budget that is momentarily exceeded by a batch
+    // beats a budget that hands out dangling handles. A no-op unless a
+    // budget is configured. Both pumps need this — the async twin is what
+    // Share drives, this one is what a synchronous embedder and the test
+    // suite drive, and a budget honoured on only one of them is a budget
+    // that silently does not apply.
+    //
+    // That "transient" word only holds while pumping continues. Nothing
+    // forces a caller to make another call: a consumer that stops the
+    // instant `remaining` reaches 0 never triggers another head eviction,
+    // so if the FINAL batch pushed liveBytes over budget, that overshoot is
+    // permanent for the model's lifetime rather than transient. Tail-evicting
+    // that last call instead is not on the table — it would reintroduce the
+    // exact SHARE-1NK crash above for that one batch, because the embedder's
+    // copy still happens after the call returns and there is no in-engine
+    // signal for "the embedder has finished copying the last batch." The
+    // trim is therefore the consumer's one remaining obligation: make one
+    // more pump call after `remaining` reaches 0 (it extracts nothing, but
+    // still runs this head eviction) or call `SetGeometryBudget` directly.
+    // Share's production loop already does the former — its stop condition
+    // is `remaining === 0 && extracted === 0`, which guarantees exactly one
+    // such zero-work call — and geometry_budget_copy_window.test.ts's drain
+    // helper stops the same way, mirroring the real consumer rather than
+    // masking the issue. See
+    // GEOMETRY_BUDGET_MB's and ExtractGeometryBatch's doc comments in
+    // ifc_api.ts for the same contract stated from the embedder side.
+    this.model[0].geometryResidency.evictToBudget()
+
     const products = this.demandProducts_ ?? []
     const aggregates = this.demandAggregates_ ?? []
 
@@ -3028,8 +4638,22 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
       const localID = products[this.demandCursor_]
 
-      if (this.conwayGeometry_.extractProductGeometryByLocalID(localID)) {
-        ++extracted
+      // Same per-product guard as the async twin (pumpGeometryBatchAsync_)
+      // and the classic whole-model walk: one product that throws is logged
+      // and skipped. Without it the throw escaped ExtractGeometryBatch and
+      // stranded the cursor on that product, so a synchronous embedder could
+      // not get past it — data/grid_placement_tail_axes.ifc (an
+      // IfcVirtualGridIntersection with a mistyped axis reference) renders 3
+      // meshes classically and through the async pump, and threw here on the
+      // first batch (conway#741).
+      try {
+        if (this.conwayGeometry_.extractProductGeometryByLocalID(localID)) {
+          ++extracted
+        }
+      } catch (error) {
+        Logger.error(
+            `Error extracting product localID ${localID}: ` +
+            `${error instanceof Error ? error.message : String(error)}`)
       }
     }
 
@@ -3051,7 +4675,7 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
         if (this.demandAggregateStepper_ === void 0) {
           this.demandAggregateStepper_ =
             this.conwayGeometry_.extractRelAggregateGeometryIncremental(
-                aggregates[this.demandAggregatesCursor_])
+                this.relAggregateAt_(this.demandAggregatesCursor_))
           this.demandAggregateSteps_ = 0
         }
 
@@ -3086,28 +4710,32 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
       }
     }
 
-    // Capture before eviction — and capture even when nobody asked for
-    // meshes. The deferred StreamAllMeshes drain pumps with `noCallback` for
-    // every batch and captures once at the end (see streamAllMeshes), which
-    // works only while geometry survives to be captured. With a budget it
-    // does not: anything evicted before that final capture can no longer be
-    // resolved, so those instances vanish from the model with no error. On
-    // the shared-representation fixture at a 2 KiB budget that path
-    // delivered 3 placements against classic's 16.
+    // Capture even when nobody asked for meshes. The deferred
+    // StreamAllMeshes drain pumps with `noCallback` for every batch and
+    // captures once at the end (see streamAllMeshes), which works only while
+    // geometry survives to be captured. With a budget it does not: anything
+    // evicted before that final capture can no longer be resolved, so those
+    // instances vanish from the model with no error. On the
+    // shared-representation fixture at a 2 KiB budget that path delivered 3
+    // placements against classic's 16.
+    //
+    // STREAMING_CONSUMER makes that capture a no-op — there is no meshMap to
+    // save anything into — so it is skipped rather than run for its side
+    // effect of advancing the scene cursor, which the only whole-model path
+    // on such a model rewinds to zero anyway (recaptureWholeModel_).
+    //
+    // Note what is NOT being claimed: that nothing is lost. Under a budget,
+    // geometry evicted before a no-callback drain finishes is unrecoverable
+    // on this contract exactly as it is here, and the re-walk does not get
+    // it back — it reports it, and throws when that accounts for the whole
+    // model. Skipping the capture is not what loses it; having no cache to
+    // capture INTO is, and that is the contract the caller opted into.
     if (meshCallback !== void 0) {
       this.streamNewMeshes_(meshCallback)
-    } else if (this.model[0].geometryResidency.enabled) {
-      this.streamNewMeshes_(() => { /* capture into meshMap before eviction */ })
+    } else if (this.model[0].geometryResidency.enabled &&
+        !this.streamingConsumer_) {
+      this.streamNewMeshes_(() => { /* capture into meshMap */ })
     }
-
-    // Evict AFTER the capture, never before: the delta capture resolves
-    // each new node's geometry to emit it, so evicting first would drop
-    // assets this batch is about to deliver and re-extract them at once.
-    // A no-op unless a budget is configured. Both pumps need this — the
-    // async twin is what Share drives, this one is what a synchronous
-    // embedder and the test suite drive, and a budget honoured on only
-    // one of them is a budget that silently does not apply.
-    this.model[0].geometryResidency.evictToBudget()
 
     const {totalWork, remaining} = this.demandProgress_()
 
@@ -3126,26 +4754,6 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
   }
 
   /**
-   * Walk the scene and emit every not-yet-captured placed instance as
-   * per-entity DELTA FlatMeshes — the incremental core of
-   * streamAllMeshes with identical placed-geometry math, processed in
-   * walk order exactly once per instance (per-entity watermarks). An
-   * entity re-emits with only its NEW instances when shared/mapped
-   * geometry attributes more to it in later batches; consumers render
-   * deltas additively (the shared meshMap still accumulates each
-   * entity's FULL vector, so getFlatMesh stays whole-model correct).
-   *
-   * Also fixes a latent multi-call bug: the derived coordination
-   * matrix is remembered (demandCoordination_), so later batches place
-   * with the SAME coordination the first batch established
-   * (streamAllMeshes never needed this — it runs once). It is NOT
-   * exposed through getCoordinationMatrix, which keeps the classic
-   * identity contract consumers stamp onto assembled models.
-   *
-   * @param meshCallback Receives one delta FlatMesh per entity that
-   * gained instances this call.
-   */
-  /**
    * Set the resident-geometry budget, in bytes, after the open.
    *
    * The setting form (GEOMETRY_BUDGET_MB) fixes the budget for a model's
@@ -3157,21 +4765,109 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
    * Takes effect at the next pump batch, so lowering it mid-load does not
    * stall the current one freeing memory.
    *
+   * **Where "the next pump batch" is, precisely.** Each pump call evicts
+   * exactly once, and that eviction precedes all of the call's extraction
+   * and delivery — on the resident path it is the first thing the call does,
+   * and on the async path it follows the pump lock and the worklist build
+   * but still runs before any product is extracted or any mesh handed over.
+   * So a budget landing while a pump call is suspended on either of those
+   * awaits is honoured by that same call's eviction, and a consumer never
+   * receives geometry from a batch that was evicted after it was delivered:
+   * #654's copy window — everything call N delivers stays resident until
+   * call N+1 begins — holds on both source types.
+   *
+   * **Deferred while a whole-model ask is running** (`StreamAllMeshesAsync`).
+   * That ask suspends the budget for its whole duration — asking for every
+   * mesh at once means accepting the unbudgeted peak — and decides, from a
+   * snapshot taken before the drain, whether it must filter freed placements
+   * out of what it serves. A budget arriving mid-drain would break both
+   * halves at once: eviction would resume at the next pump batch's head and
+   * free geometry EARLIER batches already captured, while the snapshot still
+   * said nothing had ever been evicted, so the filter would be skipped and
+   * FlatMeshes pointing at freed natives would reach the callback — the
+   * embind abort SHARE-1NK was (`isNativeDeleted`'s doc comment has the
+   * mechanism). Reproduced before this coordination existed: a mid-drain
+   * `SetGeometryBudget( 1 byte )` on a partially pumped retaining model
+   * delivered 16 placements of which 1 carried a freed handle.
+   *
+   * So the request is remembered and applied when the ask finishes, in place
+   * of the value it suspended — the caller's latest request wins, and it
+   * takes effect a moment later than usual rather than being dropped. The
+   * returned `budgetBytes` is therefore what WILL be in force, not what is
+   * in force this instant.
+   *
+   * **And `liveBytes` reads 0 for the duration of an ask**, which is not a
+   * measurement of anything. Suspending the budget goes through
+   * `setBudgetBytes( 0 )`, and that clears the residency's bookkeeping
+   * outright — with no budget the accounting can only go stale, and a stale
+   * eviction order would free the wrong things if a budget were set later.
+   * The real resident figure comes back after the ask, when restoring a
+   * finite budget reseeds from the stores.
+   *
+   * The synchronous entry points need no such coordination: they cannot
+   * yield, so nothing can call this between their drain and their serving.
+   *
    * @param bytes The ceiling; non-finite or non-positive disables eviction.
    * @return {{budgetBytes: number, liveBytes: number}} The budget now in
-   * force and what is currently accounted resident.
+   * force — or, during a whole-model ask, the one that will be — and what is
+   * currently accounted resident, which is 0 during an ask (see above).
    */
   public setGeometryBudget( bytes: number ): { budgetBytes: number, liveBytes: number } {
 
     const residency = this.model[0].geometryResidency
+
+    if ( this.budgetSuspendedForAsk_ ) {
+
+      // Normalised here rather than at application, so the value reported
+      // back is the one that will actually be in force and the ask's own
+      // `Number.isFinite` resume test reads the caller's intent. Mirrors
+      // GeometryResidency.setBudgetBytes' own rule: non-finite or
+      // non-positive means "no budget".
+      this.pendingBudgetBytes_ =
+        Number.isFinite( bytes ) && bytes > 0 ?
+          bytes : Number.POSITIVE_INFINITY
+
+      return {
+        budgetBytes: this.pendingBudgetBytes_,
+        liveBytes: residency.liveBytes,
+      }
+    }
 
     residency.setBudgetBytes( bytes )
 
     return { budgetBytes: residency.budgetBytes, liveBytes: residency.liveBytes }
   }
 
+  /**
+   * Walk the scene and emit every not-yet-captured placed instance as
+   * per-entity DELTA FlatMeshes — the incremental core of
+   * streamAllMeshes with identical placed-geometry math, processed in
+   * walk order exactly once per instance (per-entity watermarks). An
+   * entity re-emits with only its NEW instances when shared/mapped
+   * geometry attributes more to it in later batches; consumers render
+   * deltas additively (the shared meshMap accumulates each entity's FULL
+   * vector so getFlatMesh stays whole-model correct — unless `retain` is
+   * off, which is the STREAMING_CONSUMER contract; see that parameter).
+   *
+   * Also fixes a latent multi-call bug: the derived coordination
+   * matrix is remembered (demandCoordination_), so later batches place
+   * with the SAME coordination the first batch established
+   * (streamAllMeshes never needed this — it runs once). It is NOT
+   * exposed through getCoordinationMatrix, which keeps the classic
+   * identity contract consumers stamp onto assembled models.
+   *
+   * @param meshCallback Receives one delta FlatMesh per entity that
+   * gained instances this call.
+   * @param retain Whether to file each placement into the cumulative
+   * meshMap/vectorFlatMesh as well as delivering it. Defaults to the
+   * inverse of streamingConsumer_, which is the whole of the
+   * STREAMING_CONSUMER contract; recaptureWholeModel_ is the one caller
+   * that forces it true on such a model, to rebuild the cache for a late
+   * whole-model ask.
+   */
   private streamNewMeshes_(
-      meshCallback: (mesh: FlatMesh) => void ): void {
+      meshCallback: (mesh: FlatMesh) => void,
+      retain: boolean = !this.streamingConsumer_ ): void {
 
     // Released models: the scene's natives are freed — nothing new can
     // exist to capture, and walking would touch freed objects.
@@ -3261,9 +4957,12 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
         nativePt = geometry.geometry.getPoint(0)
       }
 
-      // normalize() recenters the shared geometry buffer (side effect)
-      // and returns the local centre used to place it.
-      const center = geometry.geometry.normalize()
+      // Recenters the shared geometry buffer (side effect) and MEASURES
+      // the local centre used to place it — normalize()'s own return
+      // value is (0,0,0) on the pinned wasm, and its stale float32
+      // reification is what put LV95 coordinates on the GPU
+      // (see geometry_recentre).
+      const center = normalizeWithCentreF64(geometry.geometry)
 
       const expressID = model.getElementByLocalID(geometry.localID)?.expressID as number
 
@@ -3314,6 +5013,8 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
       const newTransformArr =
           composeTransformF64(coordinationMatrix, geometryTransform, center)
 
+      this.reportLargeCoordinate_(newTransformArr, geometry.geometry)
+
       geometryMaterialTransformMap.set(expressID,
           [geometry.geometry, material_, newTransformArr])
 
@@ -3330,29 +5031,38 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
         flatTransformation: newTransformArr,
       }
 
-      let mesh = meshMap.get(entity.expressID)
+      // The cumulative per-entity cache, and the bulk of what
+      // STREAMING_CONSUMER exists to not build: every placement ever
+      // pumped, kept for the lifetime of the model against the chance
+      // that someone later asks for the whole thing. The delta below is
+      // a separate array, so skipping this costs the callback nothing —
+      // the consumer receives exactly the same stream either way.
+      if (retain) {
 
-      if (mesh === void 0) {
+        let mesh = meshMap.get(entity.expressID)
 
-        const placedArray = new Array<PlacedGeometry>()
-        const placedVector: Vector<PlacedGeometry> = {
-          get: (index: number) => placedArray[index] ?? placed,
-          size: () => placedArray.length,
-          push: (parameter: PlacedGeometry) => {
-            placedArray.push(parameter)
-          },
+        if (mesh === void 0) {
+
+          const placedArray = new Array<PlacedGeometry>()
+          const placedVector: Vector<PlacedGeometry> = {
+            get: (index: number) => placedArray[index] ?? placed,
+            size: () => placedArray.length,
+            push: (parameter: PlacedGeometry) => {
+              placedArray.push(parameter)
+            },
+          }
+          const flatMesh: FlatMesh = {
+            geometries: placedVector,
+            expressID: entity.expressID,
+          }
+
+          mesh = [placedVector, flatMesh]
+          meshMap.set(entity.expressID, mesh)
         }
-        const flatMesh: FlatMesh = {
-          geometries: placedVector,
-          expressID: entity.expressID,
-        }
 
-        mesh = [placedVector, flatMesh]
-        meshMap.set(entity.expressID, mesh)
+        mesh[0].push(placed)
+        mesh[1].geometries = mesh[0]
       }
-
-      mesh[0].push(placed)
-      mesh[1].geometries = mesh[0]
 
       let delta = deltas.get(entity.expressID)
       if (delta === void 0) {
@@ -3375,8 +5085,427 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
       }
       const deltaMesh: FlatMesh = {geometries: placedVector, expressID}
 
-      vectorFlatMesh.push(deltaMesh)
+      // The second spine over the same graph (conway#638): one entry per
+      // delta mesh, never dropped. Read only by loadAllGeometry's return
+      // value, which a streaming consumer is not using — it took delivery
+      // through the callback below instead.
+      if (retain) {
+        vectorFlatMesh.push(deltaMesh)
+      }
+
       meshCallback(deltaMesh)
+    }
+  }
+
+  /**
+   * Re-materialise the whole-model per-entity meshes on a
+   * STREAMING_CONSUMER model, which by contract has kept none.
+   *
+   * Re-walks with the DELTA capture from instance zero rather than with the
+   * classic walk at the bottom of streamAllMeshes, and the difference is
+   * load-bearing: the classic walk seeds its coordination from `model[5]`,
+   * which a deferred open never writes, so it would place every instance in
+   * an identity frame while the placements the consumer already received are
+   * in the frame `demandCoordination_` holds. streamNewMeshes_ seeds from
+   * that field, so what this rebuilds is what was streamed.
+   *
+   * Clearing first is what makes the ask idempotent. On the retaining path a
+   * second StreamAllMeshes re-pushes every instance into the still-populated
+   * cache and doubles every triangle count (documented from the consumer
+   * side in Share's IfcItemsMap.js:274-283); here each call starts from an
+   * empty map and instance zero, so the second returns exactly what the
+   * first did.
+   *
+   * The cost is honest and worth stating: a model that is asked for the
+   * whole stream ends up holding the cache the contract was avoiding. That
+   * is the price of the ask, paid at the moment of the ask rather than on
+   * every load against the chance of one.
+   *
+   * **A re-walk does not recover evicted geometry, and this is how the
+   * caller finds that out.** `GEOMETRY_BUDGET_MB` eviction deletes the mesh
+   * from the model's geometry store (`IfcModelGeometry.delete`), so the walk
+   * resolves nothing for that scene node, parks it, and the placement never
+   * enters the rebuilt map at all — it is missing rather than present-and-
+   * dead. That makes the retaining path's `livePlacements` filter blind here
+   * (it can only see placements that made it into the map, and all of those
+   * are live), which is why the count this returns, not that filter, is what
+   * streamAllMeshes reports and throws on.
+   *
+   * @param entryPoint The public method being served, for the error message.
+   * @return {number} Scene nodes the re-walk could not resolve — placed
+   * instances whose geometry is gone, and so missing from what the rebuilt
+   * map can serve. Zero on a healthy model.
+   */
+  private recaptureWholeModel_( entryPoint: string ): number {
+
+    // The natives a re-walk would read are freed. There is no cache to fall
+    // back on — that is the contract — so say so instead of walking an empty
+    // scene and returning a model with no geometry in it.
+    if (this.released_) {
+
+      throw new Error(
+          `${entryPoint}: this model was opened with STREAMING_CONSUMER, so ` +
+          `conway kept no reference to the meshes the pump delivered — the ` +
+          `caller owns them — and ReleaseModelGeometry has since freed the ` +
+          `natives a re-walk would need. Nothing can be served. Copy at ` +
+          `delivery, or open without STREAMING_CONSUMER if a whole-model ` +
+          `ask after release is required.` )
+    }
+
+    this.model[2].clear()
+
+    // Rewind the delta cursor so the walk starts at instance zero. The
+    // parked-node map goes with it: those nodes are below the cursor now
+    // and the walk yields them again on its own, so leaving their retry
+    // counts behind would only expire nodes early on a second ask.
+    this.demandSceneCursor_ = 0
+    this.demandPendingNodes_.clear()
+
+    this.streamNewMeshes_(() => { /* rebuilding the cache, not delivering */ },
+        true)
+
+    // Truncated AFTER the walk, not before: retaining also pushes each delta
+    // into the spine, and the caller (streamAllMeshes / loadAllGeometry) then
+    // pushes one entry per whole-model entity on top. Emptying it here leaves
+    // the caller's own pass as the only writer, so LoadAllGeometry returns
+    // each entity exactly once however many times it is asked.
+    this.flatMeshArray_.length = 0
+
+    // The parked map was emptied above and this walk is the only thing that
+    // has written to it since, so its size IS the number of instances this
+    // re-walk could not resolve. The drain has already run to completion by
+    // the time anything calls this, so a node still unresolved here is not
+    // waiting on extraction — its geometry is gone.
+    return this.demandPendingNodes_.size
+  }
+
+  /**
+   * Serve a whole-model ask on a deferred model whose pump has just been
+   * drained to completion: rebuild the per-entity cache (or absorb the
+   * stragglers into it), hand every entity to the callback, and account
+   * for whatever a `GEOMETRY_BUDGET_MB` eviction took out from under the
+   * walk.
+   *
+   * Shared verbatim by the synchronous {@link streamAllMeshes} and the
+   * async {@link streamAllMeshesAsync}. Those two differ in exactly one
+   * thing — which pump they drain through, and so whether they can page a
+   * windowed source — and single-sourcing everything after the drain is
+   * deliberate: the throw/warn accounting here is the part of #638's
+   * contract a second copy would drift from silently, and a consumer that
+   * feature-detects its way onto the async entry point must get the same
+   * semantics for the same model, not a second implementation of them.
+   *
+   * The caller owns the budget suspension around the drain and this call;
+   * see the reasoning at each call site.
+   *
+   * @param meshCallback Receives one whole-model FlatMesh per entity.
+   * @param degraded Whether this model has ever evicted under a budget,
+   * sampled by the caller BEFORE it suspended that budget.
+   * @param entryPoint The public method being served, for the messages.
+   */
+  private serveDeferredWholeModel_(
+      meshCallback: (mesh: FlatMesh) => void,
+      degraded: boolean,
+      entryPoint: string ): void {
+
+    // Placed instances the re-walk could not resolve, which on this path
+    // is the ONLY signal that anything was lost: evicted geometry is
+    // deleted from the store, so those placements never reach the
+    // rebuilt map and the livePlacements filter below cannot see them.
+    // Zero on the retaining path, where that filter is the signal.
+    let unresolvedInstances = 0
+
+    if (this.streamingConsumer_) {
+      // Nothing was accumulated to absorb stragglers into: this open
+      // declared the caller the owner of the stream. Rebuild the whole
+      // model from the live scene instead — same placements, one walk,
+      // and it throws rather than serving an empty model when the
+      // natives are gone.
+      unresolvedInstances = this.recaptureWholeModel_(entryPoint)
+    } else {
+      this.streamNewMeshes_(() => { /* absorb stragglers into meshMap */ })
+    }
+
+    const [, , meshMap, geometryMaterialTransformMap, vectorFlatMesh] =
+      this.model
+
+    let droppedInstances = 0
+    let droppedEntities = 0
+    let servedEntities = 0
+
+    meshMap.forEach((mesh) => {
+
+      if (degraded) {
+
+        const live = livePlacements(mesh[1], geometryMaterialTransformMap)
+
+        droppedInstances += mesh[1].geometries.size() - live.length
+
+        if (live.length === 0) {
+          ++droppedEntities
+          return
+        }
+      }
+
+      ++servedEntities
+      vectorFlatMesh.push(mesh[1])
+      meshCallback(mesh[1])
+    })
+
+    if (this.streamingConsumer_) {
+
+      // Served nothing, and the re-walk found instances it could not
+      // resolve: the geometry behind them is gone. What must NOT throw is
+      // a model that genuinely has no geometry — nothing parked, nothing
+      // to serve — where empty is the right answer and classic returns it
+      // too.
+      //
+      // `unresolvedInstances` is the whole signal today; `degraded` is a
+      // failsafe that is NOT independently reachable, and saying so is
+      // the point of this paragraph. Eviction removes geometry from the
+      // store and never touches the scene, which is append-only
+      // (IfcSceneBuilder.nodeCount's contract) — so every instance an
+      // eviction costs us is an instance the walk parks, and there is no
+      // state today in which the model evicted but the walk parked
+      // nothing. It is kept because it costs a boolean read and it fails
+      // in the safe direction: any future path that removes geometry
+      // WITHOUT leaving a parked node behind would otherwise reintroduce
+      // exactly the silent empty model this guard exists to prevent. No
+      // test pins it, and none can, because the state cannot be
+      // constructed through the public API.
+      //
+      // What this deliberately does NOT key on is droppedEntities, the
+      // way the retaining path below does. That counter is fed by the
+      // livePlacements filter, which can only ever see placements that
+      // reached the rebuilt map — and evicted ones never do, because
+      // eviction deletes the mesh from the store rather than leaving a
+      // dead handle in it. Keying on it made this throw unreachable and
+      // let a fully-evicted model return silently empty: measured at a
+      // 1-byte budget on mapped_shared_representation.ifc as 0 placements
+      // served, "0 instance(s) across 0 entit(ies)" logged, no throw.
+      if (servedEntities === 0 && (unresolvedInstances > 0 || degraded)) {
+
+        throw new Error(
+            `${entryPoint}: this model was opened with ` +
+            `STREAMING_CONSUMER, so conway kept no reference to the ` +
+            `meshes the pump delivered — the caller owns them — and the ` +
+            `re-walk that serves a late whole-model ask resolved none of ` +
+            `the model (${unresolvedInstances} placed instance(s) ` +
+            `unresolved), because a GEOMETRY_BUDGET_MB eviction has ` +
+            `already freed the geometry behind them. Nothing can be ` +
+            `served. Copy at delivery, raise the budget, or open without ` +
+            `STREAMING_CONSUMER.` )
+      }
+
+      // Partial loss is a warning, matching the retaining path, but the
+      // number comes from the re-walk rather than the filter — see above
+      // for why the filter reads zero here however much was lost.
+      if (unresolvedInstances > 0) {
+        Logger.warning(
+            `[geometry budget] ${entryPoint} re-walked a ` +
+            `STREAMING_CONSUMER model that evicted under a budget: ` +
+            `${unresolvedInstances} placed instance(s) could not be ` +
+            `resolved because their geometry was freed, and are missing ` +
+            `from the ${servedEntities} entit(ies) this call served. ` +
+            `Pump ExtractGeometryBatch and copy at delivery to receive ` +
+            `everything.`)
+      }
+
+    } else if (degraded) {
+
+      // One line for the whole call, not one per dropped instance: this
+      // fires on a path that may drop thousands, and a per-instance log
+      // would bury the fact that anything was dropped at all.
+      Logger.warning(
+          `[geometry budget] ${entryPoint} served a model that evicted ` +
+          `under a budget: ${droppedInstances} instance(s) across ` +
+          `${droppedEntities} entit(ies) were dropped because their ` +
+          `geometry was freed. Pump ExtractGeometryBatch and copy at ` +
+          `delivery to receive everything.`)
+    }
+  }
+
+  /**
+   * Async twin of {@link streamAllMeshes} (conway#660): the whole-model ask
+   * for a model whose source is **windowed**, where the synchronous one
+   * cannot go.
+   *
+   * The sync entry point drains through `extractGeometryBatch`, which
+   * refuses an external source outright — *"ExtractGeometryBatch is
+   * synchronous and cannot page a windowed source"* — so on a model opened
+   * through {@link IfcApiProxyIfc.createFromStore} the late whole-model ask
+   * was unreachable however the model was opened, flag or no flag. That is
+   * the gap this closes, and it closes it in the one place it existed: the
+   * DRAIN. Everything after the drain is
+   * {@link serveDeferredWholeModel_}, shared with the sync path.
+   *
+   * **What the re-walk does for geometry a window would have to page back,
+   * verified rather than assumed.** It does not page anything, and it does
+   * not need to. The walk resolves each scene node through
+   * `IfcSceneBuilder.resolveGeometryNode_`, which reads
+   * `node.model.geometry.getByLocalID(...)` — the in-memory geometry store —
+   * and never touches the byte source. So the source being windowed is
+   * irrelevant to the re-walk: what a fully drained windowed model can serve
+   * is exactly what a fully drained buffered one can, and the only thing
+   * that removes geometry from under either is `GEOMETRY_BUDGET_MB`
+   * eviction, which is reported here identically for both. Re-extracting an
+   * evicted product through the window would NOT help: extraction files the
+   * result under a fresh localID, so the scene node that parked still
+   * resolves nothing while a new node emits the same instance again — the
+   * measured "21 placements against classic's 16" in
+   * {@link streamAllMeshes}' degraded note is that path.
+   *
+   * Safe on a resident source (the async pump's prefetch is a no-op there)
+   * and on a non-deferred model, which has no pump and is delegated to the
+   * sync entry point.
+   *
+   * @param meshCallback Receives one whole-model FlatMesh per entity.
+   * @return {Promise<void>} Resolves once every entity has been delivered.
+   */
+  async streamAllMeshesAsync(
+      meshCallback: (mesh: FlatMesh) => void ): Promise<void> {
+
+    // No pump to drain, so nothing here can page anything: the classic walk
+    // and the released-model replay are already whole-model answers, and
+    // both read the geometry store rather than the source.
+    if (!this.deferredMode_) {
+
+      this.streamAllMeshes(meshCallback)
+      return
+    }
+
+    // Serialised against other asks, so exactly one owner holds the budget
+    // suspension below. Two overlapping asks would each snapshot the other's
+    // suspended (infinite) budget as the value to restore, and whichever
+    // finished first would re-enable eviction underneath the one still
+    // draining — whose own snapshot says nothing was ever evicted. Same
+    // chain shape as the pump lock, one level up; the two cannot deadlock
+    // because they are different chains and the pump lock is only ever taken
+    // inside a call this one has already admitted.
+    const previousAsk = this.askChain_
+
+    let releaseAsk: () => void = () => { /* replaced before any await */ }
+
+    this.askChain_ = new Promise<void>((resolve) => {
+      releaseAsk = resolve
+    })
+
+    await previousAsk
+
+    // Nothing between registering on the chain and this `try`, and nothing
+    // in its `finally` but the release — the same shape as the pump lock, and
+    // for the same reason. Everything the ask does to shared state happens
+    // inside, so any throw still reaches releaseAsk(). Get this wrong and the
+    // failure is not a lost call but a wedged proxy: an unresolved chain
+    // hangs every later ask, and a `budgetSuspendedForAsk_` stuck true makes
+    // setGeometryBudget defer forever while REPORTING the value as applied.
+    try {
+
+      // The budget cannot hold across a whole-model ask, for the reasons the
+      // sync entry point sets out at length — the peak during this call is
+      // the unbudgeted peak, which is what asking for every mesh at once
+      // means. Sampled before the suspension, because everEvicted is what
+      // tells the accounting below whether anything was already lost.
+      const residency = this.model[0].geometryResidency
+      const suspendedBudgetBytes = residency.budgetBytes
+      const degraded = residency.everEvicted
+
+      // From here until serving completes, budget state and that snapshot
+      // must stay coherent, so setGeometryBudget defers instead of applying
+      // — see there for what a mid-drain budget change did before this
+      // existed. Inside the inner try/finally below, so the deferral window
+      // is closed and the budget put back however this call leaves.
+      this.budgetSuspendedForAsk_ = true
+      this.pendingBudgetBytes_ = void 0
+
+      residency.setBudgetBytes(0)
+
+      try {
+
+        const noCallback = void 0
+
+        // The line that differs from the sync path. Each call pages the
+        // batch's product closures in before extracting them, so a source
+        // that is a moving window over an external store is drained the same
+        // way Share drains it.
+        //
+        // The yield before each batch is what makes the `async` on this
+        // method mean something on a RESIDENT deferred source, where the
+        // pump has no real I/O to await: it would otherwise reach only
+        // microtasks (the pump lock, the worklist check), which do not let
+        // timers or I/O run, so an awaiting consumer would be starved
+        // exactly as the sync entry point starves it. Placed before the
+        // batch rather than after, so the caller gets the promise back
+        // before any extraction runs, and so a single-batch model still
+        // yields once.
+        for ( ; ; ) {
+
+          await yieldToEventLoop()
+
+          const { remaining } = await this.extractGeometryBatchAsync(
+              DEFERRED_DRAIN_BATCH, noCallback)
+
+          if (remaining === 0) {
+            break
+          }
+        }
+
+        // Re-read rather than reusing the pre-drain snapshot alone, so the
+        // filter decision is made on POST-drain state.
+        //
+        // Defence in depth behind the deferral above, and the two were
+        // measured separately rather than assumed to overlap. With the
+        // deferral in place this cannot fire: the budget stays suspended for
+        // the whole drain, `evictToBudget` is a no-op while disabled, and
+        // eviction is the only thing that sets `everEvicted`. Revert the
+        // deferral alone and it becomes live — a mid-drain
+        // `SetGeometryBudget( 1 byte )` on a partially pumped retaining
+        // model then evicts, and this re-read is what runs the
+        // live-placement filter so the freed placement is dropped instead of
+        // delivered (measured: 15 placements served rather than 16, and no
+        // freed handle). Revert both and the freed handle reaches the
+        // callback (measured: 16 served, 1 with a deleted native) — the
+        // embind abort of SHARE-1NK.
+        //
+        // So the deferral is what keeps the answer COMPLETE, and this is
+        // what keeps it SAFE if anything ever evicts during a drain anyway.
+        // OR-ed, never replaced, so a model already degraded on entry stays
+        // degraded.
+        const degradedNow = degraded || residency.everEvicted
+
+        this.serveDeferredWholeModel_(
+            meshCallback, degradedNow, 'StreamAllMeshesAsync')
+
+      } finally {
+
+        // In a finally for the same reason as the sync path: meshCallback is
+        // the CALLER's code, and an early return through it would leave the
+        // model permanently unbudgeted with nothing to signal it.
+        //
+        // Cleared FIRST, so that even if putting the budget back throws the
+        // deferral window is shut — a stuck-true flag would make every later
+        // setGeometryBudget defer forever while reporting the value as
+        // applied. This whole block sits inside the ask lock's try, so a
+        // throw here still reaches releaseAsk().
+        this.budgetSuspendedForAsk_ = false
+
+        // A budget requested during the ask wins over the one suspended on
+        // the way in — it is the caller's latest word, and deferring it was
+        // this method's doing, not the caller's. `resume` carries the
+        // normalised value either way, so the finite test below reads "is
+        // there a budget to put back" for both.
+        const resume = this.pendingBudgetBytes_ ?? suspendedBudgetBytes
+
+        this.pendingBudgetBytes_ = void 0
+
+        if (Number.isFinite(resume)) {
+          residency.setBudgetBytes(resume)
+          residency.evictToBudget()
+        }
+      }
+
+    } finally {
+      releaseAsk()
     }
   }
 
@@ -3405,6 +5534,10 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     // populate) the shared meshMap — re-running the classic walk would
     // push every instance a second time. Pump any remainder to
     // completion and serve the accumulated full per-entity meshes.
+    //
+    // Under STREAMING_CONSUMER there is no such accumulation, by contract,
+    // and the drain below is followed by a full re-walk instead — see
+    // recaptureWholeModel_.
     if (this.deferredMode_) {
 
       // A budget cannot hold across this call, and pretending otherwise
@@ -3435,7 +5568,8 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
       // emits the same instances again (21 placements against classic's 16
       // on the shared-representation fixture). Rather than hand out dangling
       // handles, this delivers what is still resident and drops the rest —
-      // see the filter below. Properly serving this combination needs the
+      // see the livePlacements filter in serveDeferredWholeModel_, which is
+      // what this flag feeds. Properly serving this combination needs the
       // meshes re-keyed onto re-extracted geometry, which is follow-up work.
       const degraded = residency.everEvicted
 
@@ -3449,43 +5583,11 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
             DEFERRED_DRAIN_BATCH, noCallback).remaining > 0) {
           // draining
         }
-        this.streamNewMeshes_(() => { /* absorb stragglers into meshMap */ })
 
-        const [, , meshMap, geometryMaterialTransformMap, vectorFlatMesh] =
-          this.model
-
-        let droppedInstances = 0
-        let droppedEntities = 0
-
-        meshMap.forEach((mesh) => {
-
-          if (degraded) {
-
-            const live = livePlacements(mesh[1], geometryMaterialTransformMap)
-
-            droppedInstances += mesh[1].geometries.size() - live.length
-
-            if (live.length === 0) {
-              ++droppedEntities
-              return
-            }
-          }
-
-          vectorFlatMesh.push(mesh[1])
-          meshCallback(mesh[1])
-        })
-
-        // One line for the whole call, not one per dropped instance: this
-        // fires on a path that may drop thousands, and a per-instance log
-        // would bury the fact that anything was dropped at all.
-        if (degraded) {
-          Logger.warning(
-              `[geometry budget] StreamAllMeshes served a model that evicted ` +
-              `under a budget: ${droppedInstances} instance(s) across ` +
-              `${droppedEntities} entit(ies) were dropped because their ` +
-              `geometry was freed. Pump ExtractGeometryBatch and copy at ` +
-              `delivery to receive everything.`)
-        }
+        // Everything past the drain is shared with streamAllMeshesAsync —
+        // see serveDeferredWholeModel_ for why the two entry points must not
+        // grow separate copies of this accounting.
+        this.serveDeferredWholeModel_(meshCallback, degraded, 'StreamAllMeshes')
 
       } finally {
 
@@ -3513,7 +5615,7 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
       geometryMaterialTransformMap,
       vectorFlatMesh] = this.model
 
-    let coordinationMatrix: ArrayLike<number> = this.model[5]
+    let coordinationMatrix: ArrayLike<number> = this.classicCoordinationSeed_()
 
     // eslint-disable-next-line no-unused-vars
     for (const [_, nativeTransform, geometry, material, entity] of scene.walk()) {
@@ -3539,9 +5641,10 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
           nativePt = geometry.geometry.getPoint(0)
         }
 
-        // normalize() recenters the geometry buffer (side effect) and
-        // returns the local centre used to place it.
-        const center = geometry.geometry.normalize()
+        // Recenters the geometry buffer (side effect) and MEASURES the
+        // local centre used to place it; normalize()'s own return value
+        // is (0,0,0) on the pinned wasm (see geometry_recentre).
+        const center = normalizeWithCentreF64(geometry.geometry)
 
         // create PlacedGeometry
         const expressID = model.getElementByLocalID(geometry.localID)?.expressID as number
@@ -3562,6 +5665,9 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
         const newTransformArr =
             composeTransformF64(coordinationMatrix, geometryTransform, center)
+
+        this.reportLargeCoordinate_(newTransformArr, geometry.geometry)
+
         geometryMaterialTransformMap.set(expressID,
             [geometry.geometry, material_!, newTransformArr])
 
@@ -3649,6 +5755,14 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
   }
 
   /**
+   * Deliberately NOT routed through recaptureWholeModel_ under
+   * STREAMING_CONSUMER. This entry point has no deferred branch at all — it
+   * runs the classic walk on a deferred model today, seeding coordination
+   * from model[5] — so it is already wrong there for reasons that predate
+   * and are wider than this contract, and gating it here would only hide
+   * that behind a flag. Under the contract meshMap is at least empty when it
+   * starts, so its walk builds a clean set rather than doubling a cached
+   * one. Fixing the deferred coordination seed here is separate work.
    *
    * @param modelID
    * @param types
@@ -3663,7 +5777,7 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
       geometryMaterialTransformMap,
       vectorFlatMesh] = this.model
 
-    let coordinationMatrix: ArrayLike<number> = this.model[5]
+    let coordinationMatrix: ArrayLike<number> = this.classicCoordinationSeed_()
 
     const conwayTypesArray: number[] = []
     types.forEach((type) => {
@@ -3706,9 +5820,10 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
           nativePt = geometry.geometry.getPoint(0)
         }
 
-        // normalize() recenters the geometry buffer (side effect) and
-        // returns the local centre used to place it.
-        const center = geometry.geometry.normalize()
+        // Recenters the geometry buffer (side effect) and MEASURES the
+        // local centre used to place it; normalize()'s own return value
+        // is (0,0,0) on the pinned wasm (see geometry_recentre).
+        const center = normalizeWithCentreF64(geometry.geometry)
 
         // create PlacedGeometry
         const expressID = model.getElementByLocalID(geometry.localID)?.expressID as number
@@ -3729,6 +5844,9 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
         const newTransformArr =
             composeTransformF64(coordinationMatrix, geometryTransform, center)
+
+        this.reportLargeCoordinate_(newTransformArr, geometry.geometry)
+
         geometryMaterialTransformMap.set(expressID,
             [geometry.geometry, material_!, newTransformArr])
 
@@ -3822,13 +5940,28 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
    * @return {Vector<FlatMesh>}
    */
   loadAllGeometry(): Vector<FlatMesh> {
+
+    // A STREAMING_CONSUMER model has no cached meshes to hand back, and the
+    // classic walk below cannot build them: it seeds coordination from
+    // model[5], which a deferred open never writes. Route the whole ask
+    // through streamAllMeshes, which drains the pump, re-walks with the
+    // frame the stream actually used, and throws if the natives are gone.
+    // It leaves one entry per entity in the spine, which is what this
+    // returns.
+    if (this.streamingConsumer_) {
+
+      this.streamAllMeshes(() => { /* the spine is the return value */ })
+
+      return this.model[4]
+    }
+
     const [model,
       scene,
       meshMap,
       geometryMaterialTransformMap,
       vectorFlatMesh] = this.model
 
-    let coordinationMatrix: ArrayLike<number> = this.model[5]
+    let coordinationMatrix: ArrayLike<number> = this.classicCoordinationSeed_()
 
     // eslint-disable-next-line no-unused-vars
     for (const [_, nativeTransform, geometry, material, entity] of scene.walk()) {
@@ -3854,9 +5987,10 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
           nativePt = geometry.geometry.getPoint(0)
         }
 
-        // normalize() recenters the geometry buffer (side effect) and
-        // returns the local centre used to place it.
-        const center = geometry.geometry.normalize()
+        // Recenters the geometry buffer (side effect) and MEASURES the
+        // local centre used to place it; normalize()'s own return value
+        // is (0,0,0) on the pinned wasm (see geometry_recentre).
+        const center = normalizeWithCentreF64(geometry.geometry)
 
         // create PlacedGeometry
         const expressID = model.getElementByLocalID(geometry.localID)?.expressID as number
@@ -3877,6 +6011,9 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
         const newTransformArr =
             composeTransformF64(coordinationMatrix, geometryTransform, center)
+
+        this.reportLargeCoordinate_(newTransformArr, geometry.geometry)
+
         geometryMaterialTransformMap.set(expressID,
             [geometry.geometry, material_!, newTransformArr])
 
@@ -4035,6 +6172,13 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     // eslint-disable-next-line no-unused-vars
     const [model, scene, meshMap] = this.model
 
+    // Empty is the STEADY state under STREAMING_CONSUMER, not the
+    // not-loaded-yet state it means elsewhere, so this fires on the FIRST
+    // single-mesh ask on such a model and the re-walk it routes into (see
+    // loadAllGeometry) is what serves it. That re-walk repopulates the map,
+    // so subsequent asks are cache hits again — the contract stops conway
+    // paying for the cache on every load, not from ever building one when a
+    // caller asks for something only the cache can answer.
     if (meshMap.size <= 0) {
 
       this.loadAllGeometry()

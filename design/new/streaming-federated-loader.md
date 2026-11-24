@@ -657,12 +657,118 @@ Deliberately small first step; each has a measurable exit.
   "budgeted arena", in the production pump rather than a harness.
   `GeometryResidency` (`src/ifc/geometry_residency.ts`) holds an LRU over
   both of a model's geometry stores against a byte ceiling, evicting at
-  each batch boundary. Configured at open (`GEOMETRY_BUDGET_MB`) or after
-  (`SetGeometryBudget`), and **unlimited by default**, because eviction
-  changes a contract: an evicted asset is gone from `GetGeometry` until
-  something re-extracts it, which is safe for a consumer that copies
-  payloads at delivery (Share#1640) and unsafe for one that fetches
-  lazily later.
+  the START of each pump call. Configured at open (`GEOMETRY_BUDGET_MB`)
+  or after (`SetGeometryBudget`), and **unlimited by default**, because
+  eviction changes a contract: an evicted asset is gone from
+  `GetGeometry` until something re-extracts it, which is safe for a
+  consumer that copies payloads at delivery (Share#1640) and unsafe for
+  one that fetches lazily later.
+
+    Eviction runs at the head of a pump call, not its tail, and that is
+  load-bearing rather than incidental: "at delivery" for a real embedder
+  means *after the pump call returns* — Share's `onMeshBatch` reads the
+  delta back through `GetGeometry` once it has the batch, then yields and
+  pumps again. Tail eviction made that window a lie whenever a single
+  batch's geometry exceeded the whole budget (a 1.9 GB Revit export at
+  64 MB), freeing what the call had just delivered and handing the copy a
+  deleted embind handle — *"Cannot pass deleted object as a pointer of
+  type IfcGeometry"*, Sentry SHARE-1NK. The guarantee is now: everything
+  pump call N delivered is resident until call N+1 begins, at the price of
+  a transient overshoot of up to one batch.
+
+    **Implementation, third landed piece — a streaming-consumer ownership
+  contract (2026-08-29, conway#638).** The budget above bounds *native*
+  bytes. The JS side had its own, larger problem: a deferred open builds
+  each `PlacedGeometry` once and files that one object into **three**
+  pointer spines — the model's cumulative per-entity `meshMap`, its
+  `vectorFlatMesh`, and whatever the embedder keeps from the mesh
+  callback. Measured on a D3D load that graph is **475 MB** of V8 heap,
+  the largest single bucket, and dropping any one spine alone frees only
+  ~4.4 MB, because the other two keep the same graph alive (4.4 MB is
+  the *predicted* size of one 562 351-entry spine at 8 B, so that number
+  confirms the model rather than refuting it). A consumer that assembles
+  every batch as it lands — Share's incremental batched builder — never
+  reads the two conway holds.
+
+    `STREAMING_CONSUMER` (a `DEFER_GEOMETRY`-only open setting, default
+  off, both proxies) lets the caller say so: the pump hands each delta
+  `FlatMesh` to the callback and keeps no reference, so neither conway
+  spine grows. **It drops JS pointer spines and nothing else** — the
+  natives are owned by the geometry store and freed only by eviction or
+  `ReleaseModelGeometry`, so the copy-window guarantee above is
+  untouched, as is the trailing zero-work pump call that trims the final
+  batch. The retention was never load-bearing for Share's empty-pump
+  fallback, which the issue text originally claimed: that fallback fires
+  only when the pump produced *nothing*, and in that case `meshMap` was
+  empty going in and a fresh scene walk serves it.
+
+    What is load-bearing is a late whole-model ask. `StreamAllMeshes`,
+  `LoadAllGeometry` and `GetFlatMesh` on such a model **re-walk the live
+  scene** rather than replaying a cache that no longer exists — with the
+  delta capture, not the classic walk, because only the delta capture
+  seeds coordination from the frame the stream actually used. Because the
+  re-walk clears and restarts at instance zero, it is *idempotent*, which
+  incidentally closes the latent doubling bug a second `StreamAllMeshes`
+  has on the retaining path (Share's `IfcItemsMap.js:274-283`).
+
+    **A re-walk does not recover evicted geometry, and the reporting had
+  to be rebuilt around that.** Eviction deletes the mesh from the store
+  (`IfcModelGeometry.delete`), so the walk resolves nothing for that scene
+  node, parks it, and the placement is *absent* from the rebuilt map
+  rather than present-and-dead. The retaining path's `livePlacements`
+  filter therefore reads zero however much was lost — it can only see
+  placements that made it into the map, and all of those are live. The
+  first version of this shipped a throw keyed on that filter, which made
+  it unreachable: at a 1-byte budget on `mapped_shared_representation.ifc`
+  the model served **0 placements, logged "0 across 0", and did not
+  throw** — the exact silent-empty failure the contract exists to
+  prevent, in Share's own production config. The signal is instead the
+  count of instances the re-walk **parked**: partial loss warns with that
+  count, total loss (nothing resolved) **throws and names the contract**,
+  as does any whole-model ask after `ReleaseModelGeometry`. A model that
+  genuinely has no geometry still returns empty, quietly, as classic does.
+
+    **Scope: on a windowed source the ask is `StreamAllMeshesAsync`
+  (conway#660).** The synchronous whole-model entry points drain through
+  the synchronous pump, which refuses a windowed source outright, so
+  `StreamAllMeshes` on a model opened over an external store throws before
+  serving anything. That predates this contract, is identical with and
+  without it, and is deliberately left alone. What #660 added is the async
+  entry point beside it: `StreamAllMeshesAsync` drains through
+  `ExtractGeometryBatchAsync` — the pump that pages each batch's product
+  closures — and then runs the *same* post-drain code the sync path runs
+  (`serveDeferredWholeModel_`, single-sourced in both proxies), so the
+  re-walk, the idempotence, the partial-loss warning, the total-loss throw
+  and the post-release throw are the same behaviour reached by a drain
+  that can page. It matters because GitHub/OPFS `File` loads take the
+  windowed open by default, i.e. the large models that motivated this work
+  are exactly the ones the sync ask could not serve.
+
+    **Where the paging does and does not happen — the part worth being
+  precise about.** Only the drain pages. The re-walk resolves each scene
+  node through `IfcSceneBuilder.resolveGeometryNode_`, which reads
+  `node.model.geometry.getByLocalID(...)` — the in-memory geometry store —
+  and never touches the byte source, so windowing is invisible to it. Two
+  consequences, both load-bearing for a consumer deciding whether to keep
+  its own copy: a fully drained windowed model serves *exactly* what a
+  fully drained resident one serves, with no boundary between them; and
+  geometry a `GEOMETRY_BUDGET_MB` eviction already freed is **not** paged
+  back by the ask on either — it is reported missing, by the same parked-
+  node count as above. Re-extracting the evicted product through the
+  window would not fix that: extraction files the result under a fresh
+  localID, so the parked scene node still resolves nothing while a new
+  node re-emits the instance (the measured "21 placements against
+  classic's 16" behind the degraded note). So the contract Share can rely
+  on is *"the same stream the pump delivered, or an exact account of what
+  is missing"* — not recovery.
+
+    AP214 gets the entry point for format parity, and it is synchronous
+  underneath: that proxy has no async pump. Since conway#757 a windowed
+  AP214 model *is* reachable (`OpenModelStream` and `OpenModelFromIndex`
+  take STEP), and the synchronous pump still serves it, because a windowed
+  AP214 model is only ever built over a store with `readSync`: its
+  synchronous reads fault their windows in rather than throw. See
+  "STEP windowed: synchronous fault-in" below.
 
   **PSB.ifc at batch 8 — the size Share pumps at:**
 
@@ -980,14 +1086,169 @@ Deliberately small first step; each has a measurable exit.
     interchange format** — `sidecarMatchesSource` gates trust on the
     hash+length handshake and falls back to a cold scan on any mismatch
     (the placeholder FNV-1a hash swaps for SHA-256 as a version bump, not
-    a reshape). Inline / multi-mapping children are a v2 extension
-    (`hasChildren` flags the records the v1 format under-describes).
+    a reshape). Inline / multi-mapping children were a v2 extension —
+    **since delivered, see M4c.**
     `RangeByteSource` (a `StepExternalByteStore`) models an HTTP-Range /
     block store: it returns exactly the requested bytes while accounting
     for the wider block-aligned fetch it would really incur, so
     index-first open can read back from `stats` how little of the file it
     touched. *Remaining for M4b: the OPFS/HTTP sidecar cache round-trip in
     Share and the wired index-first open path over `RangeByteSource`.*
+  - **M4c — sidecar v2 + open-from-index (engine core, landed; conway#541).**
+    Two things, and the first is a correctness fix rather than a feature.
+
+    **v2 carries the whole index**, `[0, count)`, not just the top-level
+    range: the inline-entity range and the multi-mapping holders too. What
+    v1 dropped was not exotic — inline entities are ordinary typed values
+    written inside an attribute list, and a restored model's
+    `inlineAddressMap_` was empty, so `StepEntityBase.extractReference`
+    resolved every one of them to `null` under the default `nullOnErrors`.
+    Measured share of the index: MB-Khaya 0.274 %, PSB 0.594 %, DOWA
+    5.414 %, **D3D 20.995 % (720,661 rows)** — a 77× spread across
+    exporters, so whether v1 was safe depended on who wrote the file. The
+    symptom is surface styles, transparency and measure-valued attributes
+    quietly degrading on a model that otherwise loads and looks right.
+    `complexEntries` is 0 on every corpus model, so v1's own framing
+    (multi-mapping holders) was watching the right column for the wrong
+    risk. v1 blobs are rejected by version, never reinterpreted. Two
+    smaller repairs ride along: `address` is stored as u32 to match the
+    `Uint32Array` column it restores into (v1 wrote f64 and truncated in
+    silence above 4 GiB — now a throw at both ends), and
+    `sidecarMatchesSource` takes a structural `SidecarSourceIdentity` so
+    the columns path reaches it without the `as any` the repo's own test
+    used to need.
+
+    **`openIfcModelFromIndex` / `IfcAPI.OpenModelFromIndex`** consume that
+    index instead of building one. The seam is narrow by construction:
+    everything after the columns — `WindowedStepBufferProvider` →
+    `IfcStepModel` → demand prep → extraction — is index-agnostic and is
+    now literally one shared body (`IfcApiProxyIfc.finishWindowedOpen`).
+    The header comes off the same bounded 64 KiB prefix the store open
+    already reads for format detection, so the load report's `Model` line
+    stays real on this path. There is **no internal cold-parse fallback**:
+    `OpenModelFromIndex` returns `-1` and the caller falls back to
+    `OpenModelStream` explicitly, because silently re-parsing would spend
+    exactly the cost the call exists to avoid and make a stale index
+    invisible. An index-first open has no live parse, so it has no preview
+    channel and no derived coordination frame — fine for a worker, which
+    takes the coordinator's via `SetCoordinationFrame`, and the reason
+    index-first must not silently become the coordinator's own path.
+
+    **The trust gate has two halves now**, because one full verify per
+    consumer is the N-way I/O a shared index exists to remove.
+    `HashingByteSource` can fold the digest into a parse's own window pass
+    — `src/indexing/hashing.ts`'s `fnv1a` is range-scoped and resumable
+    with the same basis and prime, so chaining it reproduces `hashSource`
+    byte for byte at zero extra I/O — leaving consumers to check
+    `byteLength` alone (`sidecarMatchesSourceLength`). Full verification
+    stays for the revisit case behind `VERIFY_INDEX_SOURCE_HASH`, where a
+    persisted sidecar really may describe a file that has since changed.
+
+    **The coordinator half is not wired.** `HashingByteSource` is the
+    mechanism, exported and tested, but nothing in the tree wraps a parse
+    source with it — every use is a standalone whole-file pass. Nor does
+    the compat surface have a *producer*: `IfcAPI` gains
+    `OpenModelFromIndex` and no method returning columns or a source hash,
+    so a coordinator must build the sidecar through the engine API
+    (`openStreamedIfcModel*` → `columns` →
+    `serializeIndexSidecarFromColumns`). Both are M4d, Share-side, and
+    should be planned as work rather than assumed present.
+  - **M4d (producer half) — export a sidecar from an open model (engine
+    core, landed; conway#756).** `exportIfcIndexSidecar` and the compat
+    `IfcAPI.ExportIndexSidecar(modelID)` write the v2 sidecar for an IFC
+    model that is already open. That covers every way of opening one:
+    resident, windowed from birth, spilled, and index-first itself. So an
+    embedder that terminates an engine to free a model can bring the next
+    one up with `OpenModelFromIndex`. The columns come straight off the
+    model (`StepModelBase.indexColumns`, the model's own arrays). Both
+    constructor paths leave the parse's layout, so the export is
+    **byte-identical** to `serializeIndexSidecarFromColumns` over a fresh
+    parse.
+
+    The hash is the one the **open** recorded
+    (`StepModelBase.indexedSourceHash`). Every streaming IFC open folds it
+    into its own parse pass with `HashingByteSource` /
+    `HashingSyncByteSource`; the classic resident opens take it over the
+    buffer they parsed; an index-first open adopts the sidecar's. It is
+    *not* re-derived at export. The index describes the bytes that were
+    parsed. Hashing whatever the source holds at export time would bind
+    those offsets to a resident buffer mutated after open, or to a
+    same-length store swapped in by `SpillModelSource`, and a verified
+    reopen would then accept them (codex review of conway#760). So the
+    export reads no source at all.
+
+    Recording is **opt-in**: `RECORD_SOURCE_HASH` on the compat opens,
+    `recordSourceHash` on the engine ones. The fold measured ~+1.3 s
+    (~12 %) on the bare index build of a 902 MB model. That is too much
+    to charge every open for a feature most never use. A model opened
+    without it cannot be exported. `IfcAPI.ExportIndexSidecar` refuses;
+    only an engine caller can supply a hash (`exportIfcIndexSidecar`'s
+    `sourceHash`).
+    The fold is `Math.imul`, because `indexing/hashing.ts`'s shift-and-add
+    `fnv1a` measured ~6× slower in Node 22.
+
+    **A native digest, as a `hashAlgorithm` id (bldrs-ai/Share#2092).**
+    The FNV fold is one serial xor → `Math.imul` chain per byte, so it
+    runs at the multiply's latency even fully optimised (~1.2 s of V8 CPU
+    on PSB, 902 MB) and several times slower in any lower JIT tier. In
+    Firefox's engine worker, which discarded all its JIT code at 9 of 11
+    major GCs of a PSB parse, the hash and the sidecar export together
+    measured ~10 s of a 40.7 s parse (30.8 s with neither); the export
+    runs after the pump, outside Parsing, so the parse's share is the
+    hash's. `SOURCE_HASH_ALGORITHM: 'sha256Blocks'` (engine:
+    `sourceHashAlgorithm`) records `hashAlgorithm` 2 instead: SHA-256
+    (`crypto.subtle.digest`) of each 4 MiB block cut at file offsets,
+    chained under the length and truncated to the 32-bit slot
+    (`source_hash.ts#Sha256BlockFold`). `HashingByteSource` hands each
+    read's fresh bytes to the digest a block at a time (the call copies
+    them before it returns, per WebCrypto, so the parse's reused window is
+    safe); no JS loop touches the bytes, which the tests count rather than
+    time (`Math.imul` runs for the ~0.5 MB sampled digest only). At most
+    eight block digests run before a read waits. The asynchronous opens
+    take it, IFC and AP214, buffered and windowed; the synchronous ones
+    and a platform without WebCrypto record FNV-1a, and the sidecar says
+    which. No version bump: a verify runs the id the sidecar carries, so
+    persisted FNV sidecars still verify; without WebCrypto an id-2 sidecar
+    is stale (`reason: 'algorithm'`), never trusted unverified; and a
+    conway that predates id 2 refuses one (its FNV verify does not match;
+    without a verify its decode throws on the id). Node numbers for PSB
+    are in the PR (bldrs-ai/conway, branch `claude/source-hash-off-parse`);
+    no Firefox number exists for it yet. A caller-supplied digest (the
+    page already hashes the file for its GLB cache key) was considered and
+    not taken: on a reopen that digest is a record trusted by size,
+    lastModified and a 128 KiB probe, which is weaker than the full verify
+    Share chose over `'sampled'`, and some sources have none.
+
+    A mismatch at open is an
+    `IndexSidecarStaleError` (`reason: 'length' | 'hash'`), which the
+    compat surface records as load status `INDEX_STALE`. That status is
+    the "parse instead" signal. The compat open checks the sidecar
+    against the store *before* refusing a source that no longer sniffs
+    as IFC, so a source truncated inside its header still reports as
+    stale.
+
+    The parity suite (`ifc_api_export_index_sidecar.test.ts`) runs every
+    in-repo IFC4 fixture through five opens. It checks the bytes, the
+    express IDs, the spatial tree, the compat property reads *and* the
+    engine's typed attribute reads. Typed reads are needed because the
+    compat reads decode raw bytes and resolve an inline value whether or
+    not the index carries the inline range. Dropping that range is caught
+    only by the typed path. The suite also includes mutants that show
+    each comparison can fail.
+
+    **Refused, not written lossily:** IFC4X3 models (the compat route's
+    field masks have no slot, and the index-first open refuses IFC4X3
+    headers anyway; conway#758), and every STEP schema (no schema slot,
+    and no STEP index-first open; conway#757).
+
+    **Measured** (Node, store-backed, deferred, warm page cache). On a
+    902 MB / 9.4 M-row model:
+    - parse to index: 15.6 s;
+    - export: a 0.11 s serialise, since the hash comes from the parse; the
+      sidecar is 151 MB;
+    - restore from the sidecar under the length check: 0.46 s;
+    - the full-hash verify: another 2.5–2.8 s, ~85 % of verified time to
+      index. That is the case conway#758's sampled digest is for.
 - **M5 — Federation MVP.** Two cross-referenced files, shared budgets,
   link navigation, composed skeleton. Exit: a 2-file project browses
   under the same memory budget as either file alone.
@@ -1301,3 +1562,89 @@ large parse (measured: 583 ms into Schependomlaan's 1.2 s parse). The
 post-parse durable pump re-extracts everything and replaces the
 preview, so final parity is untouched; the channel pins the
 coordination frame the pump then adopts.
+
+**STEP previews (AP214, Share engine-worker.md §11).** The same channel
+serves AP214 through `ap214PreviewAdapter`, and three things make it
+deliver on STEP files (the first is parked; see it), all in the shared
+channel and switched on by the adapter's data rather than a STEP copy:
+
+- *A parse-end tick* (`StreamedPreviewChannel.finishParse`). A STEP parse
+  is short against its geometry (0.4–2 s against 2–31 s on the corpus), so
+  the parse-time ticks are few, and a file written leaf-at-tail cannot
+  place anything from any prefix: Arty_Z7 (Alibre) writes every
+  CARTESIAN_POINT and DIRECTION after record ~700k of 1.04M, and every
+  unit of every prefix generation failed on a dangling reference. For a
+  fixed-unit-list adapter (`retryEmptyUnits`) the proxy calls
+  `finishParse` once the parse completes, which builds one generation over
+  the whole index and runs one tick of `FINISH_BUDGET_MS` on it before the
+  index is published. A no-op for IFC, whose product list grows with the
+  parse. **Off by default (`PREVIEW_FINISH_PARSE`) until conway#773**: the
+  tick's first unit pays the throwaway generation's lazy extraction prep
+  (#751), which put +0.5 s on Arty_Z7's open and +0.3 s on DSA2's (Node,
+  n=3, #772) for previews landing about when the old first durable mesh
+  did. Share#2084 makes the durable batches pickable from the first one,
+  which covers those files meanwhile.
+- *Units passed over by estimated cost.* A tick cannot preempt a unit, and
+  a STEP unit's cost is uneven: the 14 MB pinball board's PCB is one unit
+  of ~1.0 s, its neighbours 20–30 ms, and running it blind stalled the
+  parse for 0.8 s. A generation that offers `unitFaceEstimate` (AP214: faces
+  counted off the record bytes, `ap214_demand_unit_cost.ts`) has a unit
+  whose estimate, at the channel's learned ms-per-face, exceeds the tick's
+  remaining budget passed over; the durable pump draws it. The `Preview:`
+  line reports them as `N over budget` when there are any.
+- *The occurrence path on every payload.* The AP214 generation walks
+  `walkWithOccurrence`, so each `PreviewMeshPayload` carries the
+  `occurrencePath` of the durable placement it draws (`[]` at the root,
+  absent for IFC), and a pick on a preview selects the occurrence, not
+  every reuse of the part.
+
+The channel takes its prefix source opaquely (`StreamedPreviewChannel<TSource>`),
+so a windowed STEP open can hand its adapter whatever its prefix model reads
+through rather than a resident buffer.
+
+## STEP windowed: synchronous fault-in (conway#757)
+
+IFC opens windowed over any store because its extraction pages each
+product's record closure in *asynchronously* before it reads
+(`IfcGeometryExtraction.ensureResidentFor*`). AP214 has no such pager: its
+assembly walk, demand units and property extraction read records
+synchronously all over the model, and much of what they read is reached
+through inverse relationships no forward closure discovers. Writing one
+would be a second extraction-side pager to keep in step with the AP214
+geometry code.
+
+So the shared seam is one level down, in the provider.
+`StepExternalByteStore` gained an optional `readSync(offset, length)`, and
+`WindowedStepBufferProvider.acquire` uses it to page a missing window in
+on the spot instead of throwing `StepBufferNotResidentError`. The window
+goes through the same LRU cap, pin accounting and adaptive residency
+policy an `ensureResident` load does. Nothing in AP214 changed to run
+windowed; every synchronous read just works.
+
+- **Which stores qualify.** A worker's OPFS `FileSystemSyncAccessHandle`
+  (Share's engine worker, #2072), `FileReaderSync` in a worker, and
+  `fs.readSync` in Node. A main-thread `Blob` cannot, so a STEP over one is
+  refused with `StoreNotSynchronousError` (load status
+  `STORE_NOT_SYNCHRONOUS`), and the embedder opens it buffered. That
+  requirement is the one place the two formats differ on this path, and it
+  is data, not a second pipeline: `fromStore` / `fromIndex` pick the engine
+  by the sniffed format, and the AP214 engine states what it needs.
+- **Views are what hold memory, not the LRU.** A record read keeps a view
+  of its whole 4 MiB window on its descriptor, and a view keeps an evicted
+  window alive. A walk that reads everywhere would hold every window it
+  touched however small the cap. `StepModelBase.releaseCapturedSourceViews`
+  drops every view captured since the last call. The AP214 pump calls it
+  after each batch, and the AP214 property index build and the resident-safe
+  readers call it when they finish. That bounds a drain to about one
+  batch's windows plus the LRU cap.
+- **IFC is unchanged** unless its store offers `readSync`. When it does, a
+  read the async pager missed faults in rather than throws. A missed page
+  used to be a swallowed throw in permissive map prep, so a windowed IFC
+  open over such a store can only read more of the model than before,
+  never less.
+- **Measured** (Node, sync file store, deferred drain, conway#757's PR): see
+  the PR for the table. On the two large corpus STEP models the adaptive
+  policy grows the window to most of the file (55.5 of 55.5 MB, and 61.7 of
+  105.7 MB), so windowing takes the source out of the JS heap but not the
+  pages out of residency. Peak RSS is dominated by geometry either way.
+

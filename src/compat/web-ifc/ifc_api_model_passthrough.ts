@@ -1,4 +1,6 @@
+import { DemandPrepYieldLike } from '../../core/progress_log'
 import { StepExternalByteStore } from '../../step/step_buffer_provider'
+import { IfcIndexSidecarExport } from '../../ifc/ifc_index_sidecar_export'
 import { FlatMesh, IfcGeometry, RawLineData, Vector } from './ifc_api'
 import { PropertiesPassthrough } from './properties_passthrough'
 
@@ -11,6 +13,15 @@ export interface IfcApiModelPassthrough {
   loadAllGeometry(): Vector<FlatMesh>
   streamAllMeshesWithTypes(types: number[], meshCallback: (mesh: FlatMesh) => void): void
   streamAllMeshes(meshCallback: (mesh: FlatMesh) => void): void
+
+  /**
+   * Async twin of streamAllMeshes (conway#660) — drains a deferred model's
+   * pump through the ASYNC pump before serving, so a windowed source can be
+   * paged. Optional, and feature-detected with typeof: the sync entry point
+   * refuses a windowed source outright, so this is the only whole-model ask
+   * such a model can answer. See IfcApiProxyIfc.streamAllMeshesAsync.
+   */
+  streamAllMeshesAsync?(meshCallback: (mesh: FlatMesh) => void): Promise<void>
   /**
    * Deferred-mode batch pump (IFC proxies opened with DEFER_GEOMETRY) —
    * see IfcApiProxyIfc.extractGeometryBatch.
@@ -37,6 +48,14 @@ export interface IfcApiModelPassthrough {
   setCoordinationFrame?( matrix?: number[] ): void
 
   /**
+   * What building this model's demand worklists cost (conway extension,
+   * M3) — see IfcAPI.GetDemandPrepYield. Optional and undefined until the
+   * first pump: passthroughs with no demand worklists (AP214/STEP) never
+   * build any, and a deferred model has none before it pumps.
+   */
+  readonly demandPrepYield?: DemandPrepYieldLike
+
+  /**
    * Set the resident-geometry budget in bytes (conway extension, M3) —
    * see IfcAPI.SetGeometryBudget. Optional so non-IFC passthroughs, whose
    * models have no evictable geometry store, simply do not offer it.
@@ -55,15 +74,32 @@ export interface IfcApiModelPassthrough {
     batchSize: number,
     meshCallback?: (mesh: FlatMesh) => void):
     Promise<{extracted: number, remaining: number}>
+
+  /**
+   * Distinct owning elements (IFC products; STEP product definitions or
+   * representations) that so far own at least one placed geometry whose
+   * mesh was built (conway#740). Grows as a demand pump extracts; IfcAPI
+   * copies it onto the model's Statistics.
+   */
+  getProductsWithGeometryCount?(): number
+
   getCoordinationMatrix(): number[]
 
   /**
-   * Optional: the coordination frame the open ACTUALLY applied to
-   * emitted placements (COORDINATE_TO_ORIGIN recenter). Unlike
+   * Optional: the coordination frame the open ACTUALLY composed into the
+   * placements it emitted (the COORDINATE_TO_ORIGIN recentre, plus the
+   * Z-up -> Y-up normalize and unit scale that ride with it). Unlike
    * getCoordinationMatrix — whose classic identity contract consumers
-   * stamp onto assembled models — this reports the real offset, so
-   * embedders can map rendered points back to source-world coordinates
+   * stamp onto assembled models — this reports the real frame, so
+   * embedders can map rendered points back to authored world coordinates
    * (Share#1634 acceptance).
+   *
+   * The full contract an implementation must satisfy — the composition
+   * order, the `world = inverse(A) * rendered` inverse it has to make
+   * computable from the return value ALONE, when identity is owed, and
+   * the preview-adopted-versus-durable rule — is stated once on
+   * `IfcAPI.GetAppliedCoordinationMatrix`. Read it before changing an
+   * implementation of this.
    */
   getAppliedCoordination?(): number[]
   getAllLines(): Vector<number>
@@ -117,4 +153,26 @@ export interface IfcApiModelPassthrough {
    * Multi-mapped entities may repeat; callers should dedupe.
    */
   rootExpressIDs?(): IterableIterator< number >
+
+  /**
+   * Optional: serialise the model's entity index to a v2 index sidecar, so
+   * a later engine can `OpenModelFromIndex` instead of re-parsing
+   * (conway#756; STEP since conway#757). See `IfcAPI.ExportIndexSidecar`.
+   */
+  exportIndexSidecar?(): Promise< IfcIndexSidecarExport >
+
+  /**
+   * Optional: `getLine` that is safe on a windowed source (IFC: pages the
+   * read's closure in; AP214: faults windows in synchronously).
+   */
+  getLineResident?(
+    expressID: number, flatten?: boolean, includeRepresentations?: boolean ): Promise< any >
+
+  /**
+   * Optional: visit records' line data in file order, paging a windowed
+   * source about once per window (conway#752/#755).
+   */
+  visitLineDataInFileOrder?(
+    expressIDs: Iterable< number >,
+    visit: ( expressID: number, line: any ) => void ): Promise< void >
 }

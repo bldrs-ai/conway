@@ -1,3 +1,0 @@
-# corpus: private
-# Headline. ~418 MB IFC.
-DOWA_AR_DW_4.ifc

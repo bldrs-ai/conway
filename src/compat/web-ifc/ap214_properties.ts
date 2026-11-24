@@ -8,6 +8,7 @@ import {
   ExtractedPropertyMap,
 } from '../../AP214E3_2010/ap214_property_extraction'
 import EntityTypesAP214 from '../../AP214E3_2010/AP214E3_2010_gen/entity_types_ap214.gen'
+import { ap214TypeName } from '../../AP214E3_2010/ap214_tessellated_types'
 import AP214StepModel from '../../AP214E3_2010/ap214_step_model'
 import { IfcApiProxyAP214 } from './ifc_api_proxy_ap214'
 import {
@@ -99,11 +100,23 @@ interface AP214Node extends Node {
    */
   occurrencePath: number[]
 
+  /**
+   * Express ids of the `product_definition_shape`s describing this node — the
+   * ids a geometry instance reports as its owner (its parent / "expressID" on
+   * the scene side). A row resolves to the node whose `occurrencePath` equals
+   * its own AND whose list holds its owner; that pair is exact where the path
+   * alone is not, i.e. the several roots of a multi-root file, which all
+   * carry `[]`. Empty on the synthetic multi-root wrapper. See
+   * `ProductStructureNode.productDefinitionShapeExpressIDs`.
+   */
+  productDefinitionShapeExpressIDs: number[]
+
   children: AP214Node[]
 
   /**
-   * True for ephemeral (non-product) nodes — solid-level bodies surfaced via
-   * `SpatialStructureOptions.includeSolids`. Share should render these
+   * True for ephemeral (non-product) nodes — solid-level bodies of a
+   * multibody part, on by default and dropped by
+   * `SpatialStructureOptions.includeSolids: false`. Share should render these
    * lighter-weight, selectable-but-not-product.
    */
   ephemeral?: boolean
@@ -142,10 +155,11 @@ const SYNTHETIC_ROOT_EXPRESS_ID = 0
 export class AP214Properties {
 
   private structureRoots_?: ProductStructureNode[]
-  private structureRootsWithSolids_?: ProductStructureNode[]
+  private structureRootsWithoutSolids_?: ProductStructureNode[]
   private propertyMap_?: ExtractedPropertyMap
   private ownerByExpressID_?: Map<number, number>
   private nodeNameByExpressID_?: Map<number, string>
+  private nodeTypeByExpressID_?: Map<number, string>
   private propertyByItemId_?: Map<number, ExtractedProperty>
 
   /**
@@ -174,8 +188,12 @@ export class AP214Properties {
    *   NominalValue: {type,value} }`, the shape `unpackHelper` reads after it
    *   dereferences a `HasProperties` handle;
    * - a **tree node** (NAUO occurrence id, or `product_definition[_shape]` id
-   *   for single-part files) → `{ expressID, Name: {type,value} }`, the part's
-   *   identity row that the Properties panel runs through `deref`.
+   *   for single-part files) → `{ expressID, type, Name: {type,value} }`, the
+   *   part's identity row that the Properties panel runs through `deref`.
+   *   `type` is the node entity's STEP type name (`NEXT_ASSEMBLY_USAGE_
+   *   OCCURRENCE`, `PRODUCT_DEFINITION`, …), the same shape the arbitrary-
+   *   entity fallback below returns — so a consumer's Type row reads the same
+   *   for a part as for any other entity.
    *
    * Property-single ids and node ids are disjoint (distinct STEP entities), so
    * the lookup is unambiguous.
@@ -201,10 +219,12 @@ export class AP214Properties {
     const nodeName = this.nodeNameByExpressID_!.get( id )
 
     if ( nodeName !== void 0 ) {
-      return {
-        expressID: id,
-        Name: valueHandle( nodeName ),
-      }
+
+      const nodeType = this.nodeTypeByExpressID_!.get( id )
+
+      return nodeType === void 0 ?
+        { expressID: id, Name: valueHandle( nodeName ) } :
+        { expressID: id, type: nodeType, Name: valueHandle( nodeName ) }
     }
 
     // Arbitrary-entity fallback: an id that is neither a property single nor
@@ -232,7 +252,7 @@ export class AP214Properties {
 
       return {
         expressID: id,
-        type: EntityTypesAP214[ element.type ],
+        type: ap214TypeName( element.type ),
         Name: valueHandle( itemName ),
       }
     }
@@ -332,9 +352,9 @@ export class AP214Properties {
    *
    * @param includeProperties When true, merge each node's item properties onto
    * the node (mirrors the IFC surface's `includeProperties`).
-   * @param options Optional shaping: `{ includeSolids: true }` adds the
-   * ephemeral solid layer beneath multibody products (`type: 'solid'`,
-   * `ephemeral: true` nodes) — see `design/new/step-nonproduct-semantics.md`.
+   * @param options Optional shaping: `{ includeSolids: false }` drops the
+   * solid layer beneath multibody products (`type: 'solid'`, `ephemeral: true`
+   * nodes) — see `design/new/step-nonproduct-semantics.md`.
    * @return {Promise<Node>} The root node. A single-root file returns its root
    * directly; a multi-root file is wrapped in a synthetic container root.
    */
@@ -342,8 +362,8 @@ export class AP214Properties {
       includeProperties?: IncludeProperties,
       options?: SpatialStructureOptions ): Promise<Node> {
 
-    const roots = options?.includeSolids === true ?
-      this.productStructureWithSolids() : this.productStructure()
+    const roots = options?.includeSolids === false ?
+      this.productStructureWithoutSolids() : this.productStructure()
 
     const nodes = await Promise.all(
         roots.map( ( root ) => this.toSpatialNode( root, includeProperties ) ) )
@@ -358,6 +378,10 @@ export class AP214Properties {
       Name: valueHandle( 'Model' ),
       productDefinitionExpressID: SYNTHETIC_ROOT_EXPRESS_ID,
       occurrencePath: [],
+      // The wrapper is not in the file, so no PDS describes it and no row can
+      // join to it: this is what keeps a root's rows off the wrapper, which
+      // shares the roots' empty path.
+      productDefinitionShapeExpressIDs: [],
       children: nodes,
     }
 
@@ -411,6 +435,7 @@ export class AP214Properties {
       Name: valueHandle( node.name ),
       productDefinitionExpressID: node.productDefinitionExpressID,
       occurrencePath: node.occurrencePath,
+      productDefinitionShapeExpressIDs: node.productDefinitionShapeExpressIDs,
       children,
     }
 
@@ -467,6 +492,10 @@ export class AP214Properties {
    *   property map is keyed);
    * - `nodeNameByExpressID_` — node id → display name (for `getItemProperties`
    *   identity rows);
+   * - `nodeTypeByExpressID_` — node id → STEP entity type name, for the same
+   *   rows. Resolved here, not per call, because this sweep runs while the
+   *   source is resident (see {@link primeIndexes}); after a spill the row
+   *   stays a pure map lookup, like the name;
    * - `propertyByItemId_` — representation-item id → property (so a pset's
    *   `HasProperties` reference resolves back to its key/value).
    */
@@ -494,6 +523,7 @@ export class AP214Properties {
 
     this.ownerByExpressID_ = new Map<number, number>()
     this.nodeNameByExpressID_ = new Map<number, string>()
+    this.nodeTypeByExpressID_ = new Map<number, string>()
 
     for ( const root of this.structureRoots_ ) {
       this.indexNodes( root )
@@ -508,11 +538,18 @@ export class AP214Properties {
         }
       }
     }
+
+    // A full-model sweep over a windowed source (conway#757) faulted in
+    // every window it read and left a view on each record; the indexes
+    // above hold copies, so drop the views and trim back to the cap. No-op
+    // when resident.
+    model.releaseCapturedSourceViews()
+    model.trimSourceResidency()
   }
 
   /**
-   * Record a node's owning product-definition id and display name, recursing
-   * into children.
+   * Record a node's owning product-definition id, display name and STEP type
+   * name, recursing into children.
    *
    * @param node The node to index.
    */
@@ -520,6 +557,12 @@ export class AP214Properties {
 
     this.ownerByExpressID_!.set( node.expressID, node.productDefinitionExpressID )
     this.nodeNameByExpressID_!.set( node.expressID, node.name )
+
+    const element = this.api.StepModel.getElementByExpressID( node.expressID )
+
+    if ( element !== void 0 ) {
+      this.nodeTypeByExpressID_!.set( node.expressID, ap214TypeName( element.type ) )
+    }
 
     for ( const childNode of node.children ) {
       this.indexNodes( childNode )
@@ -537,30 +580,22 @@ export class AP214Properties {
   }
 
   /**
-   * Return (and cache) the product-structure forest with the ephemeral solid
-   * layer included. Built separately from the plain forest so default callers
-   * never pay for the solid walk; the solid nodes are also indexed so
-   * `getItemProperties` resolves a solid id to its identity row and
-   * `getPropertySets` maps it to the owning product's rows.
+   * Return (and cache) the products-only forest, for the
+   * `{ includeSolids: false }` opt-out. Built separately from the default
+   * forest — and never indexed, since its nodes are a subset of the default
+   * one's, already in `ownerByExpressID_` / `nodeNameByExpressID_`.
    *
-   * @return {ProductStructureNode[]} The cached solid-including roots.
+   * @return {ProductStructureNode[]} The cached products-only roots.
    */
-  private productStructureWithSolids(): ProductStructureNode[] {
+  private productStructureWithoutSolids(): ProductStructureNode[] {
 
     this.buildIndexes()
 
-    if ( this.structureRootsWithSolids_ === void 0 ) {
+    this.structureRootsWithoutSolids_ ??=
+      new AP214ProductStructureExtraction( this.api.StepModel )
+          .extractProductStructure( { includeSolids: false } )
 
-      this.structureRootsWithSolids_ =
-        new AP214ProductStructureExtraction( this.api.StepModel )
-            .extractProductStructure( { includeSolids: true } )
-
-      for ( const root of this.structureRootsWithSolids_ ) {
-        this.indexNodes( root )
-      }
-    }
-
-    return this.structureRootsWithSolids_
+    return this.structureRootsWithoutSolids_
   }
 
   /**

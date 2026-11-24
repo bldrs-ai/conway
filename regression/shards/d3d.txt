@@ -1,3 +1,0 @@
-# corpus: private
-# Headline. ~224 MB IFC, random-access / high read-amplification load.
-D3D.ifc

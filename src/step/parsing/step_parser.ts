@@ -1181,10 +1181,33 @@ export default class StepParser<TypeIDType> extends StepHeaderParser {
       /* console.trace();*/ return [indexResult, ParseResult.SYNTAX_ERROR]
     }
 
-    const parseInlineElement = (): [Argument[], ParseResult] | undefined => {
+    // Lists open at record level, innermost last. Each closes into the
+    // record's arguments, a nested one too rather than into its parent
+    // (the CLOSE_PAREN arm of the record loop; conway#764).
+    const containerStack: any[][] = []
 
-      // const inlineIndexResult: any[] = []
+    // An inline element is a typed value written in place, e.g.
+    // `IFCLABEL('a')` or `IFCPROPERTYSETDEFINITIONSET((#20,#21))`; the raw
+    // line keeps only its value, not its type. That value goes where the
+    // inline element itself sits (`enclosing`): an open list, or the
+    // record's arguments. A list written inside the element is built as a
+    // list and lands there whole. `enclosing` is resolved by the caller:
+    // nothing can open or close a list around the element while it parses.
+    //
+    // This used to push every value to the record's top-level arguments,
+    // ignoring both, and to open the element's own lists on the record-level
+    // stack without ever closing them. So a typed list in a select kept only
+    // its first member in the attribute and spilled the rest into the
+    // following attributes, and typed values inside a list (an enumerated
+    // value's `(IFCLABEL('a'),IFCLABEL('b'))`) left their list empty, with
+    // the same spill (conway#763).
+    const parseInlineElement = (enclosing: any[]): [Argument[], ParseResult] | undefined => {
+
+      // Lists open inside this inline element, innermost last.
       const inlineContainerStack: any[][] = []
+      const target = (): any[] =>
+        inlineContainerStack.length > 0 ?
+          inlineContainerStack[inlineContainerStack.length - 1] : enclosing
 
       whitespace()
 
@@ -1208,6 +1231,12 @@ export default class StepParser<TypeIDType> extends StepHeaderParser {
         if (charws(CLOSE_PAREN)) {
           firstAttribute = false
           --stackDepth
+          // Every paren past the element's own opened a list here, so a
+          // close at depth > 0 ends one: pop it into its parent.
+          if (inlineContainerStack.length > 0) {
+            const closed = inlineContainerStack.pop()!
+            target().push(closed)
+          }
           continue
         }
 
@@ -1235,10 +1264,12 @@ export default class StepParser<TypeIDType> extends StepHeaderParser {
 
           case ATTRIBUTE_PARSE_TYPE.INLINE_INSTANCE: {
 
-            const elementResult = parseInlineElement()
+            const elementResult = parseInlineElement(target())
 
-            if (elementResult !== (void 0)) {
-              //     indexResult.push(elementResult[0])
+            // A failure inside the element leaves the cursor part-way
+            // through it, so the parse cannot continue.
+            if (elementResult?.[1] === ParseResult.SYNTAX_ERROR) {
+              return syntaxError()
             }
             break
           }
@@ -1252,11 +1283,7 @@ export default class StepParser<TypeIDType> extends StepHeaderParser {
                 value: extractReal,
               }
 
-              if (inlineContainerStack.length > 0) {
-                inlineContainerStack[inlineContainerStack.length - 1].push(arg_)
-              } else {
-                indexResult.push(arg_)
-              }
+              target().push(arg_)
             } else {
               return syntaxError()
             }
@@ -1280,11 +1307,7 @@ export default class StepParser<TypeIDType> extends StepHeaderParser {
               value: enumString,
             }
 
-            if (inlineContainerStack.length > 0) {
-              inlineContainerStack[inlineContainerStack.length - 1].push(arg_)
-            } else {
-              indexResult.push(arg_)
-            }
+            target().push(arg_)
 
             break
 
@@ -1307,11 +1330,7 @@ export default class StepParser<TypeIDType> extends StepHeaderParser {
               value: extractString,
             }
 
-            if (inlineContainerStack.length > 0) {
-              inlineContainerStack[inlineContainerStack.length - 1].push(arg_)
-            } else {
-              indexResult.push(arg_)
-            }
+            target().push(arg_)
             break
 
 
@@ -1327,11 +1346,7 @@ export default class StepParser<TypeIDType> extends StepHeaderParser {
                 value: expressID_,
               }
 
-              if (inlineContainerStack.length > 0) {
-                inlineContainerStack[inlineContainerStack.length - 1].push(arg_)
-              } else {
-                indexResult.push(arg_)
-              }
+              target().push(arg_)
 
             } else {
               return syntaxError()
@@ -1344,8 +1359,9 @@ export default class StepParser<TypeIDType> extends StepHeaderParser {
             input.step()
             ++stackDepth
 
-            // Start a new container: push a new empty array onto the stack.
-            containerStack.push([])
+            // A list inside the inline element, e.g. the set in
+            // IFCPROPERTYSETDEFINITIONSET((#20,#21)).
+            inlineContainerStack.push([])
             break
 
           case ATTRIBUTE_PARSE_TYPE.HEXBITS:
@@ -1356,16 +1372,15 @@ export default class StepParser<TypeIDType> extends StepHeaderParser {
             break
 
           case ATTRIBUTE_PARSE_TYPE.NULL:
-            if (inlineContainerStack.length > 0) {
-              inlineContainerStack[inlineContainerStack.length - 1].push(null)
-            } else {
-              indexResult.push(null)
-            }
+            target().push(null)
 
             input.step()
             break
 
           case ATTRIBUTE_PARSE_TYPE.DERIVED:
+
+            // A slot like any other; see the record-level arm below.
+            target().push({ type: 0 })
 
             input.step()
             break
@@ -1386,7 +1401,6 @@ export default class StepParser<TypeIDType> extends StepHeaderParser {
 
     // const startElement = input.cursor
     let stackDepth = 1
-    const containerStack: any[][] = []
 
     while (stackDepth > 0) {
       if (charws(CLOSE_PAREN)) {
@@ -1424,10 +1438,14 @@ export default class StepParser<TypeIDType> extends StepHeaderParser {
 
         case ATTRIBUTE_PARSE_TYPE.INLINE_INSTANCE: {
 
-          const elementResult = parseInlineElement()
+          const elementResult = parseInlineElement(
+              containerStack.length > 0 ? containerStack[containerStack.length - 1] : indexResult)
 
-          if (elementResult !== (void 0)) {
-            // indexResult.push(elementResult[0])
+          // As in the nested arm above: a failure inside the element used to
+          // be ignored, and the record could come back COMPLETE with its
+          // arguments shifted.
+          if (elementResult?.[1] === ParseResult.SYNTAX_ERROR) {
+            return syntaxError()
           }
           break
         }
@@ -1554,10 +1572,33 @@ export default class StepParser<TypeIDType> extends StepHeaderParser {
           input.step()
           break
 
-        case ATTRIBUTE_PARSE_TYPE.DERIVED:
+        case ATTRIBUTE_PARSE_TYPE.DERIVED: {
+
+          // `*` is a redeclared-derived attribute (IfcSIUnit's Dimensions,
+          // a sub-context's four inherited context attributes, an oriented
+          // edge's EdgeStart / EdgeEnd, AP214's oriented_* and
+          // mechanism_base_placement; AP214's si_unit only appears inside
+          // complex records, which this parse never sees). It
+          // still occupies its slot, and the line converters
+          // (ifc2x4_helper.ts FromTape) read arguments by position, so it
+          // must yield a value. Stepping over it silently used to shift
+          // every later attribute one slot early and drop the last
+          // (conway#788).
+          //
+          // `{ type: 0 }` is what web-ifc's own raw line gives `*` (checked
+          // against the pinned web-ifc devDependency, package 0.0.35, whose
+          // engine reports 0.0.34), keeping it distinct from `$` (null).
+          const derived = { type: 0 }
+
+          if (containerStack.length > 0) {
+            containerStack[containerStack.length - 1].push(derived)
+          } else {
+            indexResult.push(derived)
+          }
 
           input.step()
           break
+        }
 
         default:
       }

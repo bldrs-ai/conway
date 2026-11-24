@@ -2,7 +2,7 @@ import ParsingBuffer from '../parsing/parsing_buffer'
 import StepParser, {ParseProgressCallback, ParseResult} from '../step/parsing/step_parser'
 import AP214StepModel from './ap214_step_model'
 import EntityTypesAP214 from './AP214E3_2010_gen/entity_types_ap214.gen'
-import EntitTypesIfcSearch from './AP214E3_2010_gen/entity_types_search.gen'
+import { EntityTypesAP214TessellatedSearch } from './ap214_tessellated_types'
 
 /**
  * Parser for taking IFC file serialized in step and turning them into a lazily parsed model.
@@ -10,9 +10,15 @@ import EntitTypesIfcSearch from './AP214E3_2010_gen/entity_types_search.gen'
 export default class AP214StepParser extends StepParser< EntityTypesAP214 > {
   /**
    * Construct the IFC step parser.
+   *
+   * The type index is the composite one, not the generated minimal perfect
+   * hash on its own: it falls through to the AP242 shadow schema
+   * (`ap214_tessellated_types.ts`) for the handful of tessellated keywords the
+   * generated AP214 schema has no id for. Every other keyword resolves exactly
+   * as before.
    */
   constructor() {
-    super( EntitTypesIfcSearch )
+    super( EntityTypesAP214TessellatedSearch )
   }
 
   /**

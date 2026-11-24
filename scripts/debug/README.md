@@ -12,9 +12,20 @@ zero, twice attached to the wrong seam, and never survived the session.
 | Tool | Answers |
 |---|---|
 | [`model_report.mjs`](model_report.mjs) | Which entities produced bad geometry, and at which stage of the pipeline |
+| [`face_health.mjs`](face_health.mjs) | Which of a face's own trim-loop points reached its emitted geometry — the silently dropped ring `model_report.mjs` reads clean through |
+| [`seam_census.mjs`](seam_census.mjs) | Why a solid is not watertight: every unpaired edge, welded across the whole solid and sorted into winding disagreement versus a real gap, and for a gap what the neighbouring face did with that boundary |
+| [`occurrence_report.mjs`](occurrence_report.mjs) | Whether a click selects one thing — how many placements each body got, whether their occurrence paths are unique, and whether those paths are the product-structure tree's |
 | [`../render_glb.cjs`](../render_glb.cjs) | What does the output actually look like (zero-dependency software rasterizer, deterministic, pair mode for before/after) |
 | [`../visual_diff_report.cjs`](../visual_diff_report.cjs) | Which regression models changed appearance in this PR |
 | The STEP / IFC CLI mains | Query entities by express ID, and export GLB/GLTF/OBJ to feed the renderer |
+
+`model_report.mjs` first, always — but it is an *outlier* detector, so a
+face that emits the right-looking geometry from a quarter of its own
+boundary reads as clean through every one of its stages. When a solid is
+plainly wrong (open shell, negative signed volume, a hole where a surface
+should be) and the stages are quiet, reach for `face_health.mjs`: its
+`mapped=` ratio is the one signal here that names a ring the triangulator
+dropped. That gap cost bldrs-ai/test-models#65 two wrong diagnoses.
 
 
 ## Quick start
@@ -23,7 +34,7 @@ Needs a built tree — the tools import from `compiled/`, not `src/`:
 
 ```
 yarn build-incremental              # TypeScript only
-yarn build-codex-MT                 # if conway-geom (C++/wasm) changed
+yarn build-codex-node               # if conway-geom (C++/wasm) changed (Node + NodeMT)
 ```
 
 Then:
@@ -32,7 +43,18 @@ Then:
 node scripts/debug/model_report.mjs Right_Hand.step
 node scripts/debug/model_report.mjs haus.ifc --stage mesh --top 40
 node scripts/debug/model_report.mjs part.step --limit 0.25 --json | jq .
+
+node scripts/debug/occurrence_report.mjs BLSN_007.stp        # STEP selection identity
 ```
+
+`occurrence_report.mjs` answers the *other* "looks wrong": the render is
+right and the selection is not — a click highlights the whole model, or a
+NavTree node highlights nothing. Both halves of that come from conway (the
+scene's per-instance occurrence path, and `getSpatialStructure`'s node
+paths) and neither is checkable alone, which is how BLSN_007 shipped with
+2,268 bodies placed 308 times each under 616 shared paths while its tree
+showed one product and its meshes looked fine
+(test-models-private#98 / conway#628).
 
 To see it, export a GLB and rasterize it. The CLI mains take the model
 directly; `yarn cli` / `yarn step` are the same entry points bundled, and
@@ -219,6 +241,16 @@ Boundary-edge count is not a clean substitute either: refinement adds
 per-face vertices that fail to pair, so it moves for reasons unrelated to
 closedness.
 
+An unpaired count is not a gap count either. `seam_census.mjs` welds each
+solid as a whole and pairs edges by count. On `Right_Hand.step`
+(conway-geom#215, conway-geom `d049451`) it finds 1,269 unpaired edges:
+- 1,092 are winding flips over shared vertices;
+- 27 are overlapping sheets;
+- 53 are short non-manifold edges;
+- only 97 were missing on one side.
+
+Report winding and gaps separately.
+
 What does hold up, and what a before/after should report:
 
 | Signal | Reads |
@@ -265,8 +297,44 @@ they apply to any new instrumentation you write, not just to this script.
    - **A stale prebuilt wasm.** `yarn wasm-prebuilt` checks whether the
      Dist files are *present*, not whether they match the current
      `conway-geom` pin, and reports `already present — skipping`. Three
-     geometry suites failed against binaries several commits old. Use
-     `FORCE=1 yarn wasm-prebuilt` after any submodule change.
+     geometry suites failed against binaries several commits old.
+
+     This bullet used to end "use `FORCE=1 yarn wasm-prebuilt` after any
+     submodule change", and that was not enough — a countermeasure you
+     have to remember is one you eventually don't. It recurred in Sep
+     2026 with worse consequences than a failing suite: `face_health.mjs`
+     ran against a Dist several commits behind the checked-out submodule
+     and reported `ADVANCED_FACE #18856` still carrying the fold that
+     conway-geom#214 had already removed. A closed defect read as live,
+     with no signal of any kind, in the exact workflow this repo runs
+     (bump the submodule, measure, commit the pin).
+
+     It is now checked rather than remembered, though deliberately
+     NARROWLY. `Dist/` carries a `.wasm-provenance.json` recording, per
+     build target, the conway-geom source it was built from. The scripts
+     in this directory **refuse to run** (exit 3) on exactly one
+     condition: that record names a different submodule SHA than the
+     checkout has — the incident above. Everything else it can tell you
+     (a dirty submodule, an unstamped bundle, a stale sibling) is
+     printed and allowed through.
+
+     That asymmetry is the design, not an oversight. The first version
+     tried to be sound about what the build depends on, and across four
+     review rounds each widening found another missing term — untracked
+     file contents, nested submodules, runtime variant selection — while
+     twice rejecting a *correctly rebuilt* tree. A check that is
+     occasionally wrong about correct work is one people learn to
+     bypass, which is how the original prose warning failed. See
+     `scripts/wasmProvenance.cjs` for the full list of what is
+     uncovered by choice.
+
+     The verdict is about `ConwayGeomWasmNodeMT`, the one artifact these
+     scripts and jest load by default. A stale sibling is a note rather
+     than a refusal, and the check does not follow loader overrides such
+     as `FORCE_SINGLE_THREAD`. Set `CONWAY_ALLOW_STALE_WASM=1` to
+     downgrade even the SHA mismatch to a warning, for a deliberate A/B
+     against an older pin; it still prints which engine you are running.
+
    - **A format string.** `printf`-ing a `double` through `%zu` printed
      `cap=0` for every face, which made "169 of 169 faces hit the
      amplification cap" look true when it was comparing against zero.
@@ -314,7 +382,7 @@ they apply to any new instrumentation you write, not just to this script.
    existed and was rebuilt from scratch as a Playwright + three.js
    harness over about four iterations, for a worse result: the existing
    one needs no browser and is bit-deterministic across machines.
-4. **Batch C++ edits per rebuild.** `yarn build-codex-MT` is ~90 s.
+4. **Batch C++ edits per rebuild.** `yarn build-codex-node` is ~3 min (two variants).
    Staging a set of hypotheses and evaluating them in one build beats a
    rebuild per edit, and the TypeScript-only path (`yarn
    build-incremental`) is far cheaper when the change is above the wasm

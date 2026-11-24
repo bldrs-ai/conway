@@ -10,6 +10,7 @@ import ModelFormatDetector, { ModelFormatType } from '../format_detection/model_
 import { IfcGeometryExtraction } from '../ifc/ifc_geometry_extraction'
 import { IfcProduct } from '../ifc/ifc4_gen'
 import IfcStepParser from '../ifc/ifc_step_parser'
+import { selectIfcSchemaKindForHeader } from '../ifc/ifc_schema_selection'
 import Logger from '../logging/logger'
 import Memory from '../memory/memory'
 import ParsingBuffer from '../parsing/parsing_buffer'
@@ -466,6 +467,19 @@ export class ConwayModelLoader {
 
             Logger.info( formatModelLine( modelInfo ) )
             options?.onModelInfo?.( modelInfo )
+
+            // An IFC4X3-family header is classified from the FULL
+            // FILE_SCHEMA entry list (selectIfcSchemaKindForHeader, again
+            // inside parseDataToModelForHeader below), not modelInfo.schema
+            // (which keeps only the first quoted entry). A recognised 4X3
+            // file takes the IFC4-compatible route (ifc4x3_ifc4_compat.ts):
+            // indexed privately, then either decoded as IFC4 with its
+            // translated records masked, or refused with
+            // Ifc4x3IneligibleError. An unrecognised 4X3-family spelling
+            // throws UnrecognizedIfc4x3SchemaError here, before the data
+            // parse, rather than falling back to IFC4 (codex review of #713,
+            // P1 & P2).
+            selectIfcSchemaKindForHeader( stepHeader )
           }
 
           tracker?.beginPhase( 'dataParse', 'bytes', data.length )
@@ -475,8 +489,8 @@ export class ConwayModelLoader {
 
           const parseDataTimeStart = Date.now()
           const [result1, model] = cooperative ?
-            await parser.parseDataToModelAsync(bufferInput, parseTick) :
-            parser.parseDataToModel(bufferInput, parseTick)
+            await parser.parseDataToModelForHeaderAsync( stepHeader, bufferInput, parseTick ) :
+            parser.parseDataToModelForHeader( stepHeader, bufferInput, parseTick )
           const parseDataTimeEnd = Date.now()
 
           tracker?.endPhase( data.length )

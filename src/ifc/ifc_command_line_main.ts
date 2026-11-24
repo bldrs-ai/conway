@@ -23,6 +23,7 @@ import Memory from '../memory/memory'
 import { ExtractResult } from '../core/shared_constants'
 import path from 'path'
 import { extractModelInfo, parseFileHeader } from '../loaders/loading_utilities'
+import { Ifc4x3IneligibleError } from './ifc4x3_ifc4_compat'
 
 // create a model ID
 const modelID: number = 0
@@ -44,6 +45,8 @@ async function main() {
     const initializationStatus = await conwaywasm.initialize()
 
     if (!initializationStatus) {
+      console.error('Conway geometry engine failed to initialize')
+      process.exitCode = 1
       return
     }
 
@@ -53,6 +56,18 @@ async function main() {
     doWork()
   } catch (error) {
     console.error('An error occurred:', error)
+    // Setting exitCode rather than calling exit()/process.exit() here: this
+    // catch is the ONLY thing standing between an uncaught throw (e.g.
+    // selectIfcSchemaKindForHeader's UnrecognizedIfc4x3SchemaError for a
+    // schema identifier this repo hasn't verified, such as IFC4X3_TC1) and
+    // exiting 0 -- `exit()` with no argument uses process.exitCode, which
+    // defaults to 0, so a caller/shell script driving this CLI could not
+    // tell a crash from success. process.exitCode lets Node finish flushing
+    // any pending output before exiting non-zero, rather than truncating it
+    // the way a forced process.exit() can (codex review of
+    // bldrs-ai/conway#713, P1: the same gap fixed for the explicit exit(1)
+    // calls below in e5696915 also applies to whatever this catch swallows).
+    process.exitCode = 1
   }
 }
 
@@ -200,13 +215,13 @@ function doWork() {
           } catch (_ex) {
             Logger.error(
                 'Couldn\'t read file, check that it is accessible at the specified path.')
-            exit()
+            exit(1)
           }
 
           if (indexIfcBuffer === void 0) {
             Logger.error(
                 'Couldn\'t read file, check that it is accessible at the specified path.')
-            exit()
+            exit(1)
           }
 
           // create a statistics object
@@ -260,7 +275,33 @@ function doWork() {
             (cursorBytes: number) => tracker.update(cursorBytes) : void 0
 
           const parseDataTimeStart = Date.now()
-          const [result1, model] = parser.parseDataToModel(bufferInput, parseTick)
+          // An IFC4X3 header takes the IFC4-compatible route
+          // (ifc4x3_ifc4_compat.ts) inside parseDataToModelForHeader: indexed
+          // privately, then decoded as IFC4 with translated records masked,
+          // or refused with Ifc4x3IneligibleError before corrupted geometry
+          // could reach `-g`'s output (codex review of bldrs-ai/conway#713,
+          // P1, round 5: this CLI had no gate at all).
+          let parsed: ReturnType<typeof parser.parseDataToModelForHeader>
+
+          try {
+            parsed = parser.parseDataToModelForHeader(stepHeader, bufferInput, parseTick)
+          } catch (error) {
+
+            if (!(error instanceof Ifc4x3IneligibleError)) {
+              throw error
+            }
+
+            Logger.error(
+                `${error.message} (FILE_SCHEMA ${extractModelInfo(stepHeader,
+                    indexIfcBuffer.length).schema})`)
+            // `exit()` with no argument exits 0 (Node uses the current
+            // `process.exitCode`, which defaults to 0): a bin that refuses
+            // its input still has to report failure to `$?`, or a
+            // caller/shell script driving it treats the refusal as a success.
+            exit(1)
+          }
+
+          const [result1, model] = parsed
           const parseDataTimeEnd = Date.now()
 
           tracker?.endPhase(indexIfcBuffer.length)
@@ -294,6 +335,7 @@ function doWork() {
           }
 
           if (model === void 0) {
+            process.exitCode = 1
             return
           }
 
@@ -466,6 +508,13 @@ function doWork() {
 /**
  * Serialize the geometry.
  *
+ * A failure here logs and sets `process.exitCode = 1` rather than throwing:
+ * what was already written stays usable, but the exit status still says the
+ * run failed, so a caller such as scripts/visual_diff_report.cjs doesn't take
+ * it for a clean export. A failed generation or file write carries on with
+ * the other outputs; a buffer/URI count mismatch returns at once, skipping
+ * the formats after it.
+ *
  * @param scene
  * @param fileNameNoExtension
  * @param maxGeometrySize
@@ -520,6 +569,7 @@ function serializeGeometry(
 
         if (glbResult.buffers.size() !== glbResult.bufferUris.size()) {
           Logger.error('Buffer size != Buffer URI size!\n')
+          process.exitCode = 1
           return
         }
 
@@ -534,10 +584,12 @@ function serializeGeometry(
             fs.writeFileSync(uri, managedBuffer)
           } catch (err) {
             Logger.error(`Error writing to file: ${err}`)
+            process.exitCode = 1
           }
         }
       } else {
         Logger.error('GLB generation unsuccessful')
+        process.exitCode = 1
       }
 
       glbResult.bufferUris?.delete()
@@ -564,6 +616,7 @@ function serializeGeometry(
 
         if (glbDracoResult.buffers.size() !== glbDracoResult.bufferUris.size()) {
           Logger.error('Buffer size != Buffer URI size!\n')
+          process.exitCode = 1
           return
         }
 
@@ -578,10 +631,12 @@ function serializeGeometry(
             fs.writeFileSync(uri, managedBuffer)
           } catch (err) {
             Logger.error(`Error writing to file: ${err}`)
+            process.exitCode = 1
           }
         }
       } else {
         console.error('GLB Draco generation unsuccessful')
+        process.exitCode = 1
       }
 
       glbDracoResult.bufferUris?.delete()
@@ -607,6 +662,7 @@ function serializeGeometry(
 
         if (gltfResult.buffers.size() !== gltfResult.bufferUris.size()) {
           Logger.error('Buffer size !== Buffer URI size!\n')
+          process.exitCode = 1
           return
         }
 
@@ -622,10 +678,12 @@ function serializeGeometry(
             fs.writeFileSync(uri, managedBuffer)
           } catch (err) {
             Logger.error(`Error writing to file: ${err}`)
+            process.exitCode = 1
           }
         }
       } else {
         Logger.error('GLTF generation unsuccessful')
+        process.exitCode = 1
       }
 
       gltfResult.bufferUris?.delete()
@@ -651,6 +709,7 @@ function serializeGeometry(
 
         if (gltfResultDraco.buffers.size() !== gltfResultDraco.bufferUris.size()) {
           Logger.error('Buffer size !== Buffer URI size!\n')
+          process.exitCode = 1
           return
         }
 
@@ -666,10 +725,12 @@ function serializeGeometry(
             fs.writeFileSync(uri, managedBuffer)
           } catch (err) {
             Logger.error(`Error writing to file: ${err}`)
+            process.exitCode = 1
           }
         }
       } else {
         Logger.error('Draco GLTF generation unsuccessful')
+        process.exitCode = 1
       }
 
       gltfResultDraco.bufferUris?.delete()
@@ -769,6 +830,7 @@ function geometryExtraction(
 
   if (extractionResult !== ExtractResult.COMPLETE) {
     console.error('Could not extract geometry, exiting...')
+    process.exitCode = 1
     return void 0
   }
 

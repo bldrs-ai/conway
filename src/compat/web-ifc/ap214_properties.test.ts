@@ -3,14 +3,19 @@ import { describe, expect, test } from '@jest/globals'
 import AP214StepParser from '../../AP214E3_2010/ap214_step_parser'
 import ParsingBuffer from '../../parsing/parsing_buffer'
 import { ParseResult } from '../../step/parsing/step_parser'
+import { ap214TypeName } from '../../AP214E3_2010/ap214_tessellated_types'
 import { AP214Properties } from './ap214_properties'
 import { IfcApiProxyAP214 } from './ifc_api_proxy_ap214'
+import { Node } from './properties_passthrough'
 
 
 const parser = AP214StepParser.Instance
 
 /** web-ifc tape type code for an entity reference (a `HasProperties` handle). */
 const WEB_IFC_REF_TYPE = 5
+
+/** PDS express id of part "Plates" in `ap214-two-root-parts.step`. */
+const PLATES_PDS_EXPRESS_ID = 108
 
 /** Express id of the single CTC part (`product_definition`) in the fixture. */
 const CTC_PRODUCT_DEFINITION_EXPRESS_ID = 4368
@@ -59,20 +64,11 @@ describe( 'compat/web-ifc/AP214Properties', () => {
     }
   } )
 
-  test( 'getSpatialStructure surfaces the ephemeral solid layer on opt-in only', async () => {
+  test( 'getSpatialStructure surfaces the solid layer by default, opt-out drops it', async () => {
 
     const surface = compatSurfaceFor( 'data/ap214-multibody-part.step' )
 
-    const plainRoot = await surface.getSpatialStructure() as any
-    const collectTypes = ( node: any, into: Set<string> ): Set<string> => {
-      into.add( node.type )
-      node.children.forEach( ( child: any ) => collectTypes( child, into ) )
-      return into
-    }
-
-    expect( collectTypes( plainRoot, new Set() ).has( 'solid' ) ).toBe( false )
-
-    const root = await surface.getSpatialStructure( void 0, { includeSolids: true } ) as any
+    const root = await surface.getSpatialStructure() as any
     const widget = root.children.find( ( node: any ) => node.Name.value === 'widget' )
     const solids = widget.children.filter( ( node: any ) => node.type === 'solid' )
 
@@ -81,13 +77,56 @@ describe( 'compat/web-ifc/AP214Properties', () => {
     for ( const solid of solids ) {
       expect( solid.ephemeral ).toBe( true )
       expect( solid.Name.type ).toBe( 1 )
-      expect( solid.occurrencePath ).toEqual( widget.occurrencePath )
+      // The body's own express id ends the path, so each body of the part is
+      // its own selection rather than all of them sharing the part's path.
+      expect( solid.occurrencePath )
+          .toEqual( [ ...widget.occurrencePath, solid.expressID ] )
     }
 
     // A solid id resolves to its own identity row, like any tree node.
     const item = await surface.getItemProperties( solids[0].expressID ) as any
 
     expect( item.Name.value ).toBe( solids[0].Name.value )
+
+    // The opt-out is still honoured, for a consumer that wants the outline.
+    const plainRoot =
+      await surface.getSpatialStructure( void 0, { includeSolids: false } ) as any
+    const collectTypes = ( node: any, into: Set<string> ): Set<string> => {
+      into.add( node.type )
+      node.children.forEach( ( child: any ) => collectTypes( child, into ) )
+      return into
+    }
+
+    expect( collectTypes( plainRoot, new Set() ).has( 'solid' ) ).toBe( false )
+  } )
+
+  test( 'a multi-root wrapper carries no PDS, each root its own', async () => {
+
+    // Every node here has `occurrencePath: []`; the PDS list is what a row
+    // (whose owner is one of these PDSs) joins on instead. The wrapper is not
+    // in the file, so nothing may join to it.
+    const root = await compatSurfaceFor( 'data/ap214-two-root-parts.step' ).getSpatialStructure() as any
+
+    expect( root.expressID ).toBe( 0 )
+    expect( root.productDefinitionShapeExpressIDs ).toEqual( [] )
+    expect( root.children.map( ( node: any ) =>
+      [ node.Name.value, node.occurrencePath, node.productDefinitionShapeExpressIDs ] ) )
+        .toEqual( [ [ 'Shells', [], [ 8 ] ], [ 'Plates', [], [ 108 ] ] ] )
+  } )
+
+  test( 'the public Node type exposes the STEP join fields without a cast', async () => {
+
+    // Typed through the public `Node` on purpose, with no `as any`: if
+    // `occurrencePath` or `productDefinitionShapeExpressIDs` leave that
+    // interface, this stops compiling, which is the failure a TypeScript
+    // consumer (Share) would hit (conway#723 review).
+    const root: Node = await compatSurfaceFor( 'data/ap214-two-root-parts.step' ).getSpatialStructure()
+    const plates: Node | undefined = root.children.find( ( node ) => node.Name?.value === 'Plates' )
+    const occurrencePath: number[] | undefined = plates?.occurrencePath
+    const pdsIds: number[] | undefined = plates?.productDefinitionShapeExpressIDs
+
+    expect( occurrencePath ).toEqual( [] )
+    expect( pdsIds ).toEqual( [ PLATES_PDS_EXPRESS_ID ] )
   } )
 
   test( 'getItemProperties returns a {value}-wrapped identity for a node', async () => {
@@ -99,6 +138,39 @@ describe( 'compat/web-ifc/AP214Properties', () => {
 
     expect( item.expressID ).toBe( root.expressID )
     expect( item.Name.value ).toBe( 'as1' )
+  } )
+
+  test( 'a node identity row carries its STEP entity type name', async () => {
+
+    // Without `type` the Properties panel has no Type row for a STEP part —
+    // on a fresh parse, and on a Share cache hit, which stores exactly this
+    // row. The arbitrary-entity fallback already returned a type; tree nodes
+    // (the rows a user actually selects) did not.
+    const surface = compatSurfaceFor( 'data/as1-assembly.step' )
+    const root = await surface.getSpatialStructure() as any
+    const nodes: any[] = []
+    const collect = ( node: any ): void => {
+      nodes.push( node )
+      node.children.forEach( collect )
+    }
+
+    collect( root )
+
+    const occurrence = nodes.find( ( node: any ) => node.type === 'product_occurrence' )
+
+    expect( occurrence ).toBeDefined()
+    expect( ( await surface.getItemProperties( occurrence.expressID ) as any ).type )
+        .toBe( 'NEXT_ASSEMBLY_USAGE_OCCURRENCE' )
+
+    // Every node: the row's type is the model's own entity type for that id.
+    const model = ( surface as any ).api.StepModel
+
+    for ( const node of nodes ) {
+      const item = await surface.getItemProperties( node.expressID ) as any
+      const element = model.getElementByExpressID( node.expressID )
+
+      expect( item.type ).toBe( ap214TypeName( element.type ) )
+    }
   } )
 
   test( 'value handles carry a deref-compatible web-ifc type (string => 1)', async () => {
@@ -174,6 +246,49 @@ describe( 'compat/web-ifc/AP214Properties', () => {
     expect( resolved.get( 'Company' ) ).toBe( 'ACME' )
   } )
 
+  test( 'an AP242-only property representation is skipped, not fatal', async () => {
+
+    // bldrs-ai/test-models#61: the NIST AP242 PMI files route through the
+    // interim AP214 loader, which carries no class for the AP242-only
+    // entities two of their property chains reference — the fixture's
+    // `#4304 → #4319` (INTEGER_REPRESENTATION_ITEM items) and
+    // `#4314 → #4344 → #13` (a complex draughting model outside AP214's
+    // characterized_definition SELECT). Both getters threw out through
+    // AP214PropertyExtraction, so the whole properties + spatial-structure
+    // build died and Share showed "Could not read full model structure."
+    // The two untypeable chains must now be skipped while everything
+    // representable still comes through.
+    const surface = compatSurfaceFor( 'data/nist-ctc-properties.step' )
+
+    // getSpatialStructure is the call Share makes, and buildIndexes() runs the
+    // property walk on its way to the tree — so the untypeable chains killed
+    // the structure too, which is what the issue's screenshot is showing.
+    const root = await surface.getSpatialStructure() as any
+
+    expect( root.type ).toBe( 'product_structure' )
+
+    const psets = await surface.getPropertySets( CTC_PRODUCT_DEFINITION_EXPRESS_ID )
+    const resolved = new Map<string, string | number>()
+
+    for ( const pset of psets ) {
+      for ( const ref of pset.HasProperties ) {
+        const prop = await surface.getItemProperties( ref.value ) as any
+
+        resolved.set( prop.Name.value, prop.NominalValue.value )
+      }
+    }
+
+    expect( resolved.get( 'Modeled By' ) ).toBe( 'Engineer' )
+    expect( resolved.get( 'CAGE Code' ) ).toBe( '64JW1' )
+    expect( resolved.get( 'Company' ) ).toBe( 'ACME' )
+    expect( resolved.get( 'volume measure' ) ).toBe( 14644822.6361138 )
+    expect( resolved.get( 'wetted area measure' ) ).toBe( 807080.802199914 )
+
+    // The untypeable rows are dropped rather than surfacing as blanks.
+    expect( resolved.has( 'part user attributes' ) ).toBe( false )
+    expect( resolved.has( 'number of annotations' ) ).toBe( false )
+  } )
+
   test( 'getPropertySets is empty for an element with no properties', async () => {
 
     const surface = compatSurfaceFor( 'data/as1-assembly.step' )
@@ -188,17 +303,19 @@ describe( 'getItemProperties arbitrary-entity fallback (anonymous geometry)', ()
 
   test( 'resolves a non-tree solid id to its STEP type and body name', async () => {
 
-    // Body1 (#431) is a solid inside the widget product's representation —
-    // never a tree node unless the ephemeral solid layer is requested, so it
-    // exercises the express-id-index fallback a picked anonymous piece takes.
+    // PinBody (#434) is the pin product's ONLY solid, so the solid layer gives
+    // it no node of its own (the pin's product node already maps 1:1 onto it)
+    // — which is exactly the pick with no tree identity this fallback serves.
+    // Body1 (#431) used to stand here; since the layer became the default it
+    // is a tree node, and a tree node resolves to its identity row instead.
     const surface = compatSurfaceFor( 'data/ap214-multibody-part.step' )
-    const solidExpressId = 431
+    const solidExpressId = 434
 
     const item: any = await surface.getItemProperties( solidExpressId )
 
     expect( item.expressID ).toBe( solidExpressId )
     expect( item.type ).toBe( 'MANIFOLD_SOLID_BREP' )
-    expect( item.Name.value ).toBe( 'Body1' )
+    expect( item.Name.value ).toBe( 'PinBody' )
   } )
 
   test( 'resolves an anonymous face id to its STEP type (label seed for #387)', async () => {

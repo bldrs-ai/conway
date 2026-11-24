@@ -18,6 +18,8 @@ import EntityTypesIfc from './ifc4_gen/entity_types_ifc.gen'
 import { IfcBooleanResult } from './ifc4_gen'
 import { MemoizationCapture, RegressionCaptureState } from '../core/regression_capture_state'
 import { wasmHeapByteLength } from '../core/wasm_heap'
+import { extractModelInfo } from '../loaders/loading_utilities'
+import { Ifc4x3IneligibleError } from './ifc4x3_ifc4_compat'
 import {
   RetainedMemoryMb,
   retainedMemoryMb,
@@ -371,6 +373,26 @@ async function main() {
     doWork()
   } catch (error) {
     console.error('An error occurred:', error)
+    // Setting exitCode rather than calling exit()/process.exit() here: this
+    // catch is the ONLY thing standing between an uncaught throw and
+    // exiting 0 -- `exit()` with no argument uses process.exitCode, which
+    // defaults to 0, so `ifc_regression_batch_main.ts`'s childProcess.exec
+    // callback (which reads `err.code` off the child's exit status to
+    // decide Failed vs. a clean run) would read this as a clean run.
+    // Covers a throw ahead of doWork() (e.g. Environment.checkEnvironment())
+    // reaching here synchronously; it does NOT cover a throw inside the
+    // command handler below, which is `async` -- yargs' own default
+    // fail-and-exit already calls `process.exit(1)` for that case
+    // (including selectIfcSchemaKindForHeader's UnrecognizedIfc4x3SchemaError
+    // for an unrecognised 4X3-family schema such as IFC4X3_TC1), verified
+    // empirically with `--unhandled-rejections=warn` still exiting 1 -- so
+    // this catch's own exitCode assignment is defense for the paths yargs
+    // does not own, not a fix for that one. process.exitCode also lets Node
+    // finish flushing any pending output before exiting non-zero rather than
+    // truncating it the way a forced process.exit() can (codex review of
+    // bldrs-ai/conway#713, P1: the same gap fixed for the explicit exit(1)
+    // calls below in e5696915 also applies to whatever this catch swallows).
+    process.exitCode = 1
   }
 }
 
@@ -474,7 +496,7 @@ function doWork() {
 
           const parseStartMs = Date.now()
 
-          const result0 = parser.parseHeader(bufferInput)[ 1 ]
+          const [stepHeader, result0] = parser.parseHeader(bufferInput)
 
           switch (result0) {
             case ParseResult.COMPLETE:
@@ -504,7 +526,43 @@ function doWork() {
             default:
           }
 
-          const [result1, model] = parser.parseDataToModel( bufferInput)
+          // An IFC4X3 header takes the IFC4-compatible route
+          // (ifc4x3_ifc4_compat.ts) inside parseDataToModelForHeader: indexed
+          // privately, then decoded as IFC4 with translated records masked,
+          // or refused with Ifc4x3IneligibleError before anything reaches
+          // the extraction below. This executable parses directly via
+          // `IfcStepParser` rather than through the streaming-open surface,
+          // so the refusal is handled here (codex review of
+          // bldrs-ai/conway#713, P1, round 5 asked this direct parser path
+          // be audited; it had no gate at all).
+          let parsed: ReturnType< typeof parser.parseDataToModelForHeader >
+
+          try {
+            parsed = parser.parseDataToModelForHeader( stepHeader, bufferInput )
+          } catch ( error ) {
+
+            if ( !( error instanceof Ifc4x3IneligibleError ) ) {
+              throw error
+            }
+
+            Logger.error(
+                `${error.message} (FILE_SCHEMA ${extractModelInfo(stepHeader,
+                    indexIfcBuffer.length).schema})` )
+            displayErrors(ifcFile)
+            // `exit()` with no argument exits 0 (Node uses the current
+            // `process.exitCode`, which defaults to 0). This file is spawned
+            // by `ifc_regression_batch_main.ts`'s `safeExecWithCancellation`
+            // via `childProcess.exec`, whose callback reads the child's exit
+            // status into `err.code`, and `runForFile` turns a non-null
+            // `err` into a `failed.csv` row. Exit 0 would instead classify
+            // this refusal as "loaded, produced no digest" — the same shape
+            // as a model that legitimately has no geometry — which is how an
+            // IFC4X3 refusal once hid in regression/zero_geometry_allowlist.txt
+            // (bldrs-ai/conway#713).
+            exit(1)
+          }
+
+          const [result1, model] = parsed
 
           switch (result1) {
             case ParseResult.COMPLETE:

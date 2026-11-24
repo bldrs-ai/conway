@@ -1,0 +1,26 @@
+ISO-10303-21;
+HEADER;FILE_DESCRIPTION(('ViewDefinition [CoordinationView]'),'2;1');
+FILE_NAME('derived_attributes.ifc','2026-11-18T00:00:00',('Bldrs'),('Bldrs Inc'),'conway','conway#788 fixture','');
+FILE_SCHEMA(('IFC4'));
+ENDSEC;
+DATA;
+/* conway#788: records that write a redeclared-derived attribute as `*` ahead
+   of explicit ones. IFC4's three: IfcSIUnit (Dimensions), IfcGeometric-
+   RepresentationSubContext (the four inherited context attributes) and
+   IfcOrientedEdge (EdgeStart, EdgeEnd). #21 and #22 are the units of Bldrs
+   Share's storeyQuantities.ifc, where the shift was reported. */
+#1=IFCPROJECT('0DerivedFixtureProj001',$,'Derived attribute fixture',$,$,$,$,(#10),#20);
+#10=IFCGEOMETRICREPRESENTATIONCONTEXT($,'Model',3,1.0E-5,#11,$);
+#11=IFCAXIS2PLACEMENT3D(#12,$,$);
+#12=IFCCARTESIANPOINT((0.,0.,0.));
+#13=IFCGEOMETRICREPRESENTATIONSUBCONTEXT('Body','Model',*,*,*,*,#10,$,.MODEL_VIEW.,$);
+#14=IFCCARTESIANPOINT((1.,0.,0.));
+#20=IFCUNITASSIGNMENT((#21,#22));
+#21=IFCSIUNIT(*,.LENGTHUNIT.,.MILLI.,.METRE.);
+#22=IFCSIUNIT(*,.AREAUNIT.,$,.SQUARE_METRE.);
+#30=IFCVERTEXPOINT(#12);
+#31=IFCVERTEXPOINT(#14);
+#32=IFCEDGE(#30,#31);
+#33=IFCORIENTEDEDGE(*,*,#32,.F.);
+ENDSEC;
+END-ISO-10303-21;

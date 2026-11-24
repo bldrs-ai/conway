@@ -148,7 +148,8 @@ interface DemandPassthrough {
   ensureDemandWorklists_(): void
   ensureDemandWorklistsAsync_(): Promise< void >
   demandProducts_?: number[]
-  demandAggregates_?: { localID: number }[]
+  // Local IDs (bldrs-ai/Share#2139: entities held here pinned a spilled source).
+  demandAggregates_?: number[]
   conwayGeometry_: { aggregateTargetLocalIDs(): Set< number > }
 }
 
@@ -331,7 +332,7 @@ describe( 'dispatch keys on a windowed source', () => {
 
         const expectedProducts = ( whole.passthrough.demandProducts_ ?? [] ).slice()
         const expectedAggregates =
-          ( whole.passthrough.demandAggregates_ ?? [] ).map( ( each ) => each.localID )
+          ( whole.passthrough.demandAggregates_ ?? [] ).slice()
 
         expect( expectedProducts.length ).toBeGreaterThan( 0 )
 
@@ -351,8 +352,7 @@ describe( 'dispatch keys on a windowed source', () => {
 
           unionProducts.push( ...( shardModel.passthrough.demandProducts_ ?? [] ) )
           unionAggregates.push(
-              ...( shardModel.passthrough.demandAggregates_ ?? [] )
-                  .map( ( each ) => each.localID ) )
+              ...( shardModel.passthrough.demandAggregates_ ?? [] ) )
 
           api.CloseModel( shardModel.modelID )
         }
@@ -365,3 +365,360 @@ describe( 'dispatch keys on a windowed source', () => {
             .toEqual( expectedAggregates.slice().sort( ( a, b ) => a - b ) )
       }, 240000 )
 } )
+
+
+describe( 'demand prep yield', () => {
+
+  test( 'is absent until a build runs, then reports what that build cost',
+      async () => {
+
+        // The build is lazy — it happens inside the FIRST pump call — and
+        // that laziness is exactly why an external probe cannot time it
+        // without a product of geometry riding along. So the yield must be
+        // undefined beforehand rather than zeroed: "not measured" and
+        // "measured as nothing" are different answers, and the ledger's
+        // discipline is to print the first as absent (conway#682).
+        const api = new IfcAPI()
+
+        await api.Init()
+
+        const { modelID, passthrough } =
+          await openDeferred( api, 'data/mapped_shared_representation.ifc', false )
+
+        expect( api.GetDemandPrepYield( modelID ) ).toBeUndefined()
+
+        passthrough.ensureDemandWorklists_()
+
+        const prep = api.GetDemandPrepYield( modelID )
+
+        expect( prep ).toBeDefined()
+
+        // An unsharded build takes the `shard_ === void 0` return before a
+        // single dispatch key is computed, so the key term is ABSENT. This
+        // is the asymmetry the ledger's §11.4 turns on: the unsharded
+        // reference does not perform this work, so it cannot be the
+        // denominator for it.
+        expect( prep!.keysMs ).toBeUndefined()
+        expect( prep!.shardCount ).toBeUndefined()
+        expect( prep!.windowed ).toBe( false )
+
+        // Nothing was filtered, so the walk and the worklist agree.
+        expect( prep!.candidateProducts )
+            .toBe( ( passthrough.demandProducts_ ?? [] ).length )
+        expect( prep!.keptProducts ).toBe( prep!.candidateProducts )
+        expect( prep!.keptAggregates ).toBe( prep!.candidateAggregates )
+        expect( prep!.candidateProducts ).toBeGreaterThan( 0 )
+
+        // Wall time is a real interval, and the parts fit inside the whole.
+        // Bounded rather than pinned: Date.now() is millisecond-resolution
+        // and this fixture builds in less than one, so anything stricter
+        // than an ordering would be asserting the clock.
+        expect( prep!.candidatesMs ).toBeGreaterThanOrEqual( 0 )
+        expect( prep!.totalMs ).toBeGreaterThanOrEqual( prep!.candidatesMs )
+
+        api.CloseModel( modelID )
+      }, 240000 )
+
+  test( 'every shard walks the WHOLE model, which is what makes prep replicated',
+      async () => {
+
+        // The measurement conway#682 is filed on, asserted rather than
+        // timed. A shard narrows what is BUILT, not what is walked: each
+        // worker's `candidateProducts` is the whole model's count, while its
+        // `keptProducts` is only its own share. So N workers between them
+        // enumerate the model N times and build it once, and the gap
+        // between the two columns is the replication — visible here without
+        // depending on a clock.
+        const api = new IfcAPI()
+
+        await api.Init()
+
+        const fixture = 'data/mapped_shared_representation.ifc'
+        const shardCount = 2
+
+        const whole = await openDeferred( api, fixture, false )
+
+        whole.passthrough.ensureDemandWorklists_()
+
+        const wholeProducts = ( whole.passthrough.demandProducts_ ?? [] ).length
+        const wholeAggregates =
+          ( whole.passthrough.demandAggregates_ ?? [] ).length
+
+        expect( wholeProducts ).toBeGreaterThan( 1 )
+
+        api.CloseModel( whole.modelID )
+
+        let keptProducts = 0
+        let keptAggregates = 0
+
+        for ( let index = 0; index < shardCount; ++index ) {
+
+          const shardModel = await openDeferred( api, fixture, false )
+
+          expect( api.SetGeometryShard(
+              shardModel.modelID, { index, count: shardCount } ) ).toBe( true )
+
+          shardModel.passthrough.ensureDemandWorklists_()
+
+          const prep = api.GetDemandPrepYield( shardModel.modelID )
+
+          expect( prep ).toBeDefined()
+
+          // Every shard walked the whole model...
+          expect( prep!.candidateProducts ).toBe( wholeProducts )
+          expect( prep!.candidateAggregates ).toBe( wholeAggregates )
+
+          // ...and ran the dispatch-key pass the unsharded build skipped.
+          expect( prep!.keysMs ).toBeDefined()
+          expect( prep!.keysMs ).toBeGreaterThanOrEqual( 0 )
+
+          expect( prep!.shardIndex ).toBe( index )
+          expect( prep!.shardCount ).toBe( shardCount )
+
+          // ...but kept only its own share of it.
+          expect( prep!.keptProducts ).toBeLessThan( prep!.candidateProducts )
+          expect( prep!.keptProducts )
+              .toBe( ( shardModel.passthrough.demandProducts_ ?? [] ).length )
+
+          keptProducts += prep!.keptProducts
+          keptAggregates += prep!.keptAggregates
+
+          api.CloseModel( shardModel.modelID )
+        }
+
+        // The partition closes, so the walk really was N times the build:
+        // shardCount x wholeProducts products enumerated to produce
+        // wholeProducts built.
+        expect( keptProducts ).toBe( wholeProducts )
+        expect( keptAggregates ).toBe( wholeAggregates )
+      }, 240000 )
+
+  test( 'a windowed build marks its wall time as containing paging', async () => {
+
+    // The async builder awaits `ensureAggregateTargetLocalIDs` and
+    // `computeDispatchKeys`, both of which page a windowed source. Its
+    // `totalMs` is therefore not comparable with a resident worker's
+    // without knowing that, so the flag travels with the number rather
+    // than being inferred from the configuration by whoever reads it.
+    const api = new IfcAPI()
+
+    await api.Init()
+
+    const { modelID, passthrough } =
+      await openDeferred( api, 'data/aggregate_master_voids.ifc', true )
+
+    expect( api.SetGeometryShard( modelID, { index: 0, count: 2 } ) ).toBe( true )
+
+    await passthrough.ensureDemandWorklistsAsync_()
+
+    const prep = api.GetDemandPrepYield( modelID )
+
+    expect( prep ).toBeDefined()
+    expect( prep!.windowed ).toBe( true )
+    expect( prep!.keysMs ).toBeDefined()
+    expect( prep!.shardCount ).toBe( 2 )
+    expect( prep!.keptProducts )
+        .toBe( ( passthrough.demandProducts_ ?? [] ).length )
+
+    api.CloseModel( modelID )
+  }, 240000 )
+} )
+
+
+/* The lever conway#640's closing experiment runs on. Named here rather than
+ * imported because the engine keeps it private on purpose — a test that had
+ * to import it could not also prove it is reachable from the environment,
+ * which is the whole interface. */
+const PERMUTE_ENV = 'CONWAY_PERMUTE_WORKLIST'
+
+/* The largest fixture in `data/` by product count — seven products and
+ * three rel-aggregates, enough that a shuffle is an observation rather than
+ * a coin toss, and enough to shard two ways with both halves non-empty. */
+const PERMUTE_FIXTURE = 'data/index.ifc'
+
+
+/**
+ * Build one model's worklists with the lever set to `seed`, and report what
+ * order they came out in.
+ *
+ * The variable is set around the open and restored after it, because the
+ * engine reads it at worklist-build time and nothing else in the suite may
+ * inherit it.
+ *
+ * @param seed The seed, or undefined to leave the lever off.
+ * @return {Promise<object>} The adopted product and aggregate worklists.
+ */
+async function worklistsUnderSeed( seed: string | undefined ):
+    Promise< { products: number[], aggregates: number[] } > {
+
+  const previous = process.env[ PERMUTE_ENV ]
+
+  if ( seed === void 0 ) {
+    delete process.env[ PERMUTE_ENV ]
+  } else {
+    process.env[ PERMUTE_ENV ] = seed
+  }
+
+  try {
+
+    const api = new IfcAPI()
+
+    await api.Init()
+
+    const { modelID, passthrough } =
+      await openDeferred( api, PERMUTE_FIXTURE, false )
+
+    passthrough.ensureDemandWorklists_()
+
+    const products = [ ...( passthrough.demandProducts_ ?? [] ) ]
+    const aggregates = [ ...( passthrough.demandAggregates_ ?? [] ) ]
+
+    api.CloseModel( modelID )
+
+    return { products, aggregates }
+
+  } finally {
+
+    if ( previous === void 0 ) {
+      delete process.env[ PERMUTE_ENV ]
+    } else {
+      process.env[ PERMUTE_ENV ] = previous
+    }
+  }
+}
+
+
+/**
+ * One shard's product worklist under a given lever setting.
+ *
+ * @param seed The seed, or undefined for off.
+ * @param index Which shard to narrow to.
+ * @param count How many shards the partition has.
+ * @return {Promise<number[]>} The products that shard kept.
+ */
+async function shardProductsUnderSeed(
+    seed: string | undefined,
+    index: number,
+    count: number ): Promise< number[] > {
+
+  const previous = process.env[ PERMUTE_ENV ]
+
+  if ( seed === void 0 ) {
+    delete process.env[ PERMUTE_ENV ]
+  } else {
+    process.env[ PERMUTE_ENV ] = seed
+  }
+
+  try {
+
+    const api = new IfcAPI()
+
+    await api.Init()
+
+    const { modelID, passthrough } =
+      await openDeferred( api, PERMUTE_FIXTURE, false )
+
+    expect( api.SetGeometryShard( modelID, { index, count } ) ).toBe( true )
+
+    passthrough.ensureDemandWorklists_()
+
+    const kept = [ ...( passthrough.demandProducts_ ?? [] ) ]
+
+    api.CloseModel( modelID )
+
+    return kept
+
+  } finally {
+
+    if ( previous === void 0 ) {
+      delete process.env[ PERMUTE_ENV ]
+    } else {
+      process.env[ PERMUTE_ENV ] = previous
+    }
+  }
+}
+
+
+describe( 'the demand worklist permutation lever', () => {
+
+  test( 'unset, the worklist is the model\'s own order', async () => {
+
+    // The default has to be free, not merely cheap: every load in Share and
+    // every digest in the regression corpus goes through this site.
+    // `collectDemandCandidates_` walks the type index, so an unpermuted
+    // worklist is ascending local IDs — which a shuffle of any size breaks.
+    const { products, aggregates } = await worklistsUnderSeed( void 0 )
+
+    // The fixture has to carry enough products for "the order changed" to
+    // be a real observation below — on a worklist of one or two it would
+    // pass or fail by luck. This one holds seven.
+    expect( products.length ).toBeGreaterThan( 4 )
+
+    for ( let where = 1; where < products.length; ++where ) {
+      expect( products[ where ] ).toBeGreaterThan( products[ where - 1 ] )
+    }
+
+    for ( let where = 1; where < aggregates.length; ++where ) {
+      expect( aggregates[ where ] ).toBeGreaterThan( aggregates[ where - 1 ] )
+    }
+  }, 240000 )
+
+  test( 'a seed reorders the worklist and changes nothing else', async () => {
+
+    // The property the experiment rests on. If a seeded run dropped or
+    // added a product, a divergence in the built geometry would say nothing
+    // about order — it would just be a different model.
+    const plain = await worklistsUnderSeed( void 0 )
+    const permuted = await worklistsUnderSeed( '1' )
+
+    expect( [ ...permuted.products ].sort( ( a, b ) => a - b ) )
+        .toEqual( plain.products )
+    expect( [ ...permuted.aggregates ].sort( ( a, b ) => a - b ) )
+        .toEqual( plain.aggregates )
+
+    expect( permuted.products ).not.toEqual( plain.products )
+  }, 240000 )
+
+  test( 'a seed names one permutation, and two seeds name two', async () => {
+
+    // A run record cites a seed, so the seed has to be enough to reproduce
+    // the run — and two seeds have to actually differ, or a null result
+    // would mean "the lever did nothing" rather than "order does not
+    // matter".
+    const first = await worklistsUnderSeed( '7' )
+    const again = await worklistsUnderSeed( '7' )
+    const other = await worklistsUnderSeed( '8' )
+
+    expect( again.products ).toEqual( first.products )
+    expect( again.aggregates ).toEqual( first.aggregates )
+
+    expect( other.products ).not.toEqual( first.products )
+  }, 240000 )
+
+  test( 'a value that is not a number leaves the lever off', async () => {
+
+    // Reached by a shell that exported the variable with a word, or with
+    // nothing. Permuting on a seed of NaN would make the run unreproducible
+    // in exactly the situation where reproducibility is the point.
+    const plain = await worklistsUnderSeed( void 0 )
+
+    expect( ( await worklistsUnderSeed( 'yes' ) ).products )
+        .toEqual( plain.products )
+    expect( ( await worklistsUnderSeed( '' ) ).products )
+        .toEqual( plain.products )
+  }, 240000 )
+
+  test( 'a shard keeps its own products, permuted or not', async () => {
+
+    // Membership is what a shard is; order is what the lever changes. A
+    // shard whose set moved would mean the lever is changing the partition,
+    // and then no comparison against an unsharded reference would hold.
+    const plain = await shardProductsUnderSeed( void 0, 0, 2 )
+    const permuted = await shardProductsUnderSeed( '3', 0, 2 )
+
+    expect( plain.length ).toBeGreaterThan( 1 )
+    expect( [ ...permuted ].sort( ( a, b ) => a - b ) ).toEqual( plain )
+    expect( permuted ).not.toEqual( plain )
+  }, 240000 )
+} )
+

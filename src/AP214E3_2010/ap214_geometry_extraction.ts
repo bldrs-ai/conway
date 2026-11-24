@@ -56,8 +56,11 @@ import {
 } from '../core/native_types'
 import { MemoizationCapture, RegressionCaptureState } from '../core/regression_capture_state'
 import { ExtractResult } from '../core/shared_constants'
-import Logger from '../logging/logger'
+import Logger, { DATA_DEFECT } from '../logging/logger'
+import { isUnresolvedReferenceError } from '../step/dangling_reference_error'
 import { arrayToWasmHeap, wasmHeapView } from '../core/wasm_heap'
+import { cursorIterator } from '../indexing/cursor_utilities'
+import { StepEntityConstructorAbstract } from '../step/step_entity_constructor'
 import {
   advanced_brep_shape_representation,
   advanced_face,
@@ -153,9 +156,20 @@ import {
   view_volume,
 } from './AP214E3_2010_gen'
 import EntityTypesAP214 from './AP214E3_2010_gen/entity_types_ap214.gen'
+import {
+  ap214TypeName,
+  complex_triangulated_face,
+  coordinates_list,
+  tessellated_shape_representation,
+  tessellated_solid,
+} from './ap214_tessellated_types'
+import { AP214DemandUnitCost } from './ap214_demand_unit_cost'
 import { AP214MaterialCache } from './ap214_material_cache'
 import AP214ModelCurves from './ap214_model_curves'
 import { AP214ProductShapeMap } from './ap214_product_shape_map'
+import {
+  AP214ProductStructureExtraction,
+} from './ap214_product_structure_extraction'
 import { AP214SceneBuilder, AP214SceneTransform } from './ap214_scene_builder'
 import AP214StepModel from './ap214_step_model'
 
@@ -164,6 +178,32 @@ type Mutable<T> = { -readonly [P in keyof T]: T[P] }
 // Fewest points a bound can have and still span a plane, which is what
 // GetBasisFromCoplanarPoints needs downstream.
 const MINIMUM_BOUND_POINTS = 3
+
+// styled_item.item's position in a single-class record (name, styles, item);
+// the generated getter reads it as extractElement( 2, 1, 1, ... ).
+const STYLED_ITEM_ITEM_FIELD = 2
+
+/**
+ * Render flat triangle indices as the STEP array text
+ * `Geometry::ExtractTriangles` parses — `((a,b,c),(a,b,c),...)`, 1-based.
+ *
+ * The text form is not a detour: it is the interface `extractVerticesAndTriangles`
+ * exposes, and it is what lets a hand-written AP242 face set reach the same
+ * native ingestion IFC's `IfcTriangulatedFaceSet` uses without a wasm change.
+ *
+ * @param indices Flat triangle indices, three per triangle.
+ * @return {string} The STEP array text.
+ */
+function triangleTupleText( indices: number[] ): string {
+
+  const tuples: string[] = []
+
+  for ( let where = 0; where + 2 < indices.length; where += 3 ) {
+    tuples.push( `(${indices[ where ]},${indices[ where + 1 ]},${indices[ where + 2 ]})` )
+  }
+
+  return `(${tuples.join( ',' )})`
+}
 
 // Ceiling on how finely one span of a pcurve's parameter curve is sampled
 // when it is pushed through an angular surface parameterization. Nothing in
@@ -204,6 +244,20 @@ const AP214_ITEMS_PER_DEMAND_UNIT = 4
 // ~32 ms of work apiece — the 10-50 ms per-unit band this is aiming
 // for — and lands inside the noise band of the unsliced baseline.
 const AP214_MAX_ITEM_UNITS_PER_REPRESENTATION = 256
+
+/**
+ * What a demand unit's slot holds once the cursor has passed it (run or
+ * skipped) — see AP214GeometryExtraction#retireDemandUnits_. Shared, and
+ * captures nothing, which is the point.
+ */
+const RETIRED_DEMAND_UNIT = (): void => { /* already run or skipped */ }
+
+/**
+ * The cost slot's twin of RETIRED_DEMAND_UNIT.
+ *
+ * @return {number} Zero: a retired unit has nothing left to cost.
+ */
+const RETIRED_DEMAND_UNIT_COST = (): number => 0
 
 // Ceiling on how many `placement` items a sliced item range will replay
 // to rebuild the transform state its first item inherits (see
@@ -336,6 +390,58 @@ function isWholeCurveEdge(
   // first and last control points coincide also lands here, which is correct
   // — that edge is the whole curve too.
   return ( from === first && to === last ) || ( from === last && to === first )
+}
+
+
+/**
+ * Scan every sample of a 3D CurveObject for a non-finite coordinate.
+ *
+ * A degenerate AXIS2_PLACEMENT_3D basis (conway#592) makes the untrimmed
+ * whole-curve recovery below (conway#492) sample the same bad placement
+ * that produced the original degenerate trim, so a full complement of
+ * points comes back that are all NaN. The point-COUNT gate the recovery
+ * already applies can't see that — NaN points still outnumber the
+ * collapsed trim — so this is a separate, necessary check (conway#591).
+ *
+ * @param curveObject The curve whose samples to check.
+ * @return {boolean} True only if every sample's x, y, and z are finite.
+ */
+export function isCurveFinite( curveObject: CurveObject ): boolean {
+
+  for ( let i = 0; i < curveObject.getPointsSize(); ++i ) {
+
+    const point = curveObject.get3d( i )
+
+    if ( !Number.isFinite( point.x ) ||
+         !Number.isFinite( point.y ) ||
+         !Number.isFinite( point.z ) ) {
+
+      return false
+    }
+  }
+
+  return true
+}
+
+
+/**
+ * Check every component of a native 4x4 transform for a non-finite value.
+ *
+ * GetAxis2Placement3D (conway-geom) normalises its axis references with no
+ * finiteness check of its own: a non-finite or zero-length direction ratio
+ * — or a ref_direction parallel to axis — propagates through glm::normalize
+ * and both cross products, and the matrix comes back with its X and Y basis
+ * columns entirely NaN while Z and the translation still look ordinary
+ * (conway#592). Scanning all 16 values rather than just the two known-bad
+ * columns catches that shape and any other non-finite result the same way,
+ * without hard-coding the column layout here.
+ *
+ * @param transform The native transform to check.
+ * @return {boolean} True only if every component is finite.
+ */
+export function isTransformFinite( transform: NativeTransform4x4 ): boolean {
+
+  return transform.getValues().every( ( value ) => Number.isFinite( value ) )
 }
 
 /**
@@ -839,11 +945,44 @@ export class AP214GeometryExtraction {
 
 
   /**
-   * Face localID to the extent of the representation that DEFINES it, in
-   * that representation's own raw file coordinates. `undefined` until
-   * `resolveRepresentationExtents` has run.
+   * Which representations DEFINE each face, and each representation's
+   * extent once a face of it has asked — the table behind
+   * `representationExtentForFace`. `undefined` until
+   * `collectRepresentationExtents` has run.
+   *
+   * Two halves because they cost very differently (conway#773). Membership
+   * — which faces each representation's items reach — is a cheap walk over
+   * shells, and it has to be whole-model up front: a face's extent is the
+   * MIN over every representation that reaches it, so a face cannot be
+   * answered until every representation has been asked whether it holds
+   * it. The extent of one representation — a descent through edges and
+   * vertices to the points — is the expensive half, and it is needed only
+   * for representations whose faces are actually tessellated. Building both
+   * halves on the first face put that whole-model descent inside whichever
+   * demand unit ran first: 238 ms of Arty_Z7's first unit (an estimated 163
+   * faces) and 135 ms of DSA2's, measured in Node, in the durable pump and
+   * again in the preview channel's parse-end generation, where no per-unit
+   * estimate could see it and no tick could preempt it.
+   *
+   * The values are unchanged: each representation's extent is the same
+   * min/max reduction over the same sample as before, whenever it runs,
+   * and a face still takes the min over the same set of representations.
+   * What moved is only WHEN a representation is descended.
    */
-  private faceExtent_: Map< number, number > | undefined = undefined
+  private extentTable_?: {
+    /** Face localID → slot of the first representation that defines it. */
+    firstSlot: Map< number, number >
+    /** Face localID → slots of any FURTHER representations that define it
+     * (a malformed file listing one solid twice; empty on the corpus). */
+    furtherSlots: Map< number, number[] >
+    /** Per slot: the localIDs of the faces `extentSample` picked, until the
+     * slot is descended; then undefined. */
+    samples: ( number[] | undefined )[]
+    /** Per slot: the extent diagonal once descended, NaN before, and
+     * -Infinity for a representation whose sample reached no finite point
+     * (whose faces the table therefore does not answer). */
+    extents: Float64Array
+  }
 
   /**
    * How many advanced faces this extraction tessellated, and how many of
@@ -881,6 +1020,95 @@ export class AP214GeometryExtraction {
   public extentMeasuredFaceCount   = 0
   public extentMissingFaceCount    = 0
   public extentDegenerateFaceCount = 0
+
+  /**
+   * When true, extractAdvancedFace records whether each face's own
+   * contribution actually landed any triangles (conway#596). Off by
+   * default: the check flushes staged tessellation right after every
+   * face's own addOrStageFace call so the triangle count read back is
+   * that face's alone, rather than the batch's — which serialises
+   * tessellation for this extraction. Callers that don't need the count
+   * (every extraction except the digest/regression path today) pay
+   * nothing by leaving this false.
+   */
+  public trackFaceAccounting = false
+
+  /**
+   * localID -> did this face's own extraction call land at least one
+   * triangle. Populated only while trackFaceAccounting is true; a face
+   * never visited (unsupported item type, unreached representation, or
+   * one whose extraction threw and was caught in extractFaces) simply
+   * never gets an entry, which unaccountedFaceCount treats the same as
+   * an explicit false — the model declared it and nothing accounted for
+   * it either way. Keyed by localID rather than expressID: expressID is
+   * undefined for inline entities, and localID is what every other
+   * face-keyed lookup in this file already uses (model.geometry included).
+   */
+  private readonly faceAccounted = new Map<number, boolean>()
+
+  /**
+   * Record one face's outcome for the conway#596 tally. No-op unless
+   * trackFaceAccounting is set, so untracked extractions don't pay for a
+   * map that nothing will read.
+   *
+   * @param localID The face's local ID.
+   * @param accounted Did this face's own extraction call land a triangle.
+   */
+  private recordFaceAccounted( localID: number, accounted: boolean ): void {
+
+    if ( !this.trackFaceAccounting ) {
+      return
+    }
+
+    // A face visited twice (the styled-item memo-reuse path) keeps its
+    // ALREADY-recorded outcome rather than being overwritten by a later,
+    // unrelated call that reuses its localID for something else - in
+    // practice this only fires from the memo-reuse branch itself, which
+    // computes its own accounted value from the reused geometry, so this
+    // is here to make the contract explicit rather than to change behavior.
+    if ( !this.faceAccounted.has( localID ) ) {
+      this.faceAccounted.set( localID, accounted )
+    }
+  }
+
+  /**
+   * Per-model unaccounted-face count for the conway#596 diagnostic: how
+   * many of this model's ADVANCED_FACEs never landed a triangle anywhere
+   * — not merged into their solid's mesh, and not emitted as their own
+   * styled mesh. `undefined` when trackFaceAccounting was never turned on
+   * (the count would be meaningless: nothing was recorded to subtract).
+   *
+   * The denominator is the STEP file's own advanced_face count, not a
+   * count of extraction visits — so a face extraction skips entirely
+   * (unsupported item type, unreached representation) is unaccounted by
+   * construction, same as one that ran and produced nothing.
+   *
+   * @return {number | undefined} The unaccounted count, or undefined if
+   * tracking was off.
+   */
+  public getUnaccountedFaceCount(): number | undefined {
+
+    if ( !this.trackFaceAccounting ) {
+      return void 0
+    }
+
+    let totalFaces = 0
+
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    for ( const _face of this.model.types( advanced_face ) ) {
+      ++totalFaces
+    }
+
+    let accounted = 0
+
+    for ( const wasAccounted of this.faceAccounted.values() ) {
+      if ( wasAccounted ) {
+        ++accounted
+      }
+    }
+
+    return totalFaces - accounted
+  }
 
   /**
    * The scale a face's deflection target may not be refined below: the
@@ -988,9 +1216,85 @@ export class AP214GeometryExtraction {
    */
   private representationExtentEntry( faceLocalID: number ): number | undefined {
 
-    this.faceExtent_ ??= this.resolveRepresentationExtents()
+    const table = this.collectRepresentationExtents()
+    const first = table.firstSlot.get( faceLocalID )
 
-    return this.faceExtent_.get( faceLocalID )
+    if ( first === void 0 ) {
+      return void 0
+    }
+
+    // A face reached from two representations is malformed — the same
+    // solid listed twice — and there is then no single right answer. Take
+    // the SMALLER extent, matching every other bound in this design: it
+    // errs toward a finer floor, i.e. less of the saving and never a
+    // fidelity loss. (The larger one is arguable too, on the grounds that
+    // the bigger representation is the visual object; it is rejected only
+    // because it errs the other way.) A representation whose sample reached
+    // no finite point contributes nothing, exactly as it contributed no
+    // entry to the eager table this replaces.
+    let extent = this.slotExtent( table, first )
+
+    const further = table.furtherSlots.get( faceLocalID )
+
+    if ( further !== void 0 ) {
+      for ( const slot of further ) {
+        const candidate = this.slotExtent( table, slot )
+
+        if ( candidate !== -Infinity &&
+            ( extent === -Infinity || candidate < extent ) ) {
+          extent = candidate
+        }
+      }
+    }
+
+    return extent === -Infinity ? void 0 : extent
+  }
+
+  /**
+   * One representation's extent, descending its sample the first time it is
+   * asked (see `extentTable_`).
+   *
+   * @param table The extent table.
+   * @param slot The representation's slot.
+   * @return {number} The extent diagonal, or -Infinity when its sample
+   * reached no finite point.
+   */
+  private slotExtent(
+      table: NonNullable< AP214GeometryExtraction[ 'extentTable_' ] >,
+      slot: number ): number {
+
+    const known = table.extents[ slot ]
+
+    if ( !Number.isNaN( known ) ) {
+      return known
+    }
+
+    const box = {
+      minX: Infinity, minY: Infinity, minZ: Infinity,
+      maxX: -Infinity, maxY: -Infinity, maxZ: -Infinity,
+    }
+
+    for ( const faceLocalID of table.samples[ slot ] ?? [] ) {
+
+      // The same record the collection walk read, resolved again by localID
+      // so the table holds numbers rather than face objects between the
+      // collection and the descent (models over MEMOIZATION_THRESHOLD do not
+      // cache entities, so held objects would be the table's own copies).
+      const face_ = this.model.getElementByLocalID( faceLocalID ) as face | undefined
+
+      if ( face_ !== void 0 ) {
+        this.growBoxByFace( face_, box )
+      }
+    }
+
+    const extent = Number.isFinite( box.minX ) ?
+      Math.hypot( box.maxX - box.minX, box.maxY - box.minY, box.maxZ - box.minZ ) :
+      -Infinity
+
+    table.extents[ slot ] = extent
+    table.samples[ slot ] = void 0
+
+    return extent
   }
 
   /**
@@ -1034,7 +1338,7 @@ export class AP214GeometryExtraction {
       }
     }
 
-    for ( const definition of this.model.types( shape_definition_representation ) ) {
+    for ( const definition of this.extentWalkEntities_( shape_definition_representation ) ) {
       try {
         add( definition.used_representation )
       } catch {
@@ -1042,7 +1346,7 @@ export class AP214GeometryExtraction {
       }
     }
 
-    for ( const relationship of this.model.types( shape_representation_relationship ) ) {
+    for ( const relationship of this.extentWalkEntities_( shape_representation_relationship ) ) {
       try {
         add( relationship.rep_1 )
         add( relationship.rep_2 )
@@ -1051,7 +1355,7 @@ export class AP214GeometryExtraction {
       }
     }
 
-    for ( const map of this.model.types( representation_map ) ) {
+    for ( const map of this.extentWalkEntities_( representation_map ) ) {
       try {
         add( map.mapped_representation )
       } catch {
@@ -1061,7 +1365,7 @@ export class AP214GeometryExtraction {
 
     // Free-floating representations, which no relationship or definition
     // names. These are the concrete kinds extraction's own root scan uses.
-    for ( const free of this.model.types(
+    for ( const free of this.extentWalkEntities_(
         shape_representation,
         advanced_brep_shape_representation,
         geometrically_bounded_wireframe_shape_representation ) ) {
@@ -1070,6 +1374,63 @@ export class AP214GeometryExtraction {
     }
 
     return found.values()
+  }
+
+  /**
+   * `model.types(...)` for the extent walk, with each record materialized
+   * under its own catch.
+   *
+   * The walk is preparation (it runs in the demand plan), so a record that
+   * throws as it materializes, such as a malformed complex record, must not
+   * end the plan. A generator that throws cannot be resumed, so the catch
+   * has to sit inside the iteration, around each record. A skipped record's
+   * faces get no floor (the pre-#564 per-face target), which is the safe
+   * direction everywhere in this table. The throw is logged the way a
+   * failing demand unit's is.
+   *
+   * Before the walk moved into the plan, the same throw escaped
+   * `resolveRepresentationExtents` on the first advanced face. The table was
+   * never built, so every later face retried the walk and threw again: every
+   * advanced face of the model failed (codex on #774).
+   *
+   * Same records in the same order as `model.types`: the same type-index
+   * cursor, and a record with no entity is skipped as `StepModelBase.from`
+   * skips it.
+   *
+   * @param types The entity types to walk.
+   * @yields Each record of those types that materializes.
+   */
+  private *extentWalkEntities_<
+      T extends StepEntityConstructorAbstract< EntityTypesAP214 >[]>( ...types: T ):
+      IterableIterator< InstanceType< T[ number ] > > {
+
+    const distinctTypes = types.length === 1 ? types[ 0 ].query :
+      new Set( types.flatMap( ( type ) => type.query ) )
+    const cursor = this.model.typeIndex.cursor( ...distinctTypes )
+
+    try {
+      for ( const localID of cursorIterator( cursor ) ) {
+
+        let entity: unknown
+
+        try {
+          entity = this.model.getElementByLocalID( localID )
+        } catch ( ex ) {
+          if ( !this.quietRecoverableLogging ) {
+            Logger.error( ex instanceof Error ?
+              `Error collecting representation extents: \n\t${ex.name}\n\t${ex.message}` :
+              `Unknown exception collecting representation extents (${ex})` )
+          }
+          continue
+        }
+
+        if ( entity !== void 0 ) {
+          yield entity as InstanceType< T[ number ] >
+        }
+      }
+    } finally {
+      cursor.free()
+    }
   }
 
   /**
@@ -1123,7 +1484,17 @@ export class AP214GeometryExtraction {
   }
 
   /**
-   * Build the face localID to defining-representation-extent table.
+   * Build the membership half of the face localID to defining-representation
+   * extent table (see `extentTable_`): which representations define each
+   * face, and which of each one's faces `extentSample` will descend. No
+   * representation is descended here; `slotExtent` does that the first time
+   * a face of it asks. Idempotent — the table is built once per extraction.
+   *
+   * Public so a caller can pay it at a point of its choosing instead of
+   * inside the first face: `prepareDemandExtraction` builds it as part of
+   * the plan, which is what moves it out of the first demand unit and into
+   * the preparation the preview channel times as a generation build
+   * (conway#773).
    *
    * `mapped_item` is deliberately NOT followed. A mapped representation is
    * visited in its own right by the loop below, and following it from here
@@ -1131,12 +1502,18 @@ export class AP214GeometryExtraction {
    * which is precisely the reference-dependence that scoping to the
    * definition exists to remove.
    *
-   * @return {Map<number, number>} Extent diagonal keyed by face localID.
-   * Faces no representation reaches are absent.
+   * @return The table.
    */
-  private resolveRepresentationExtents(): Map< number, number > {
+  public collectRepresentationExtents():
+      NonNullable< AP214GeometryExtraction[ 'extentTable_' ] > {
 
-    const faceExtent = new Map< number, number >()
+    if ( this.extentTable_ !== void 0 ) {
+      return this.extentTable_
+    }
+
+    const firstSlot = new Map< number, number >()
+    const furtherSlots = new Map< number, number[] >()
+    const samples: number[][] = []
 
     for ( const representation_ of this.geometryRepresentations() ) {
 
@@ -1156,40 +1533,43 @@ export class AP214GeometryExtraction {
         continue
       }
 
-      const box = {
-        minX: Infinity, minY: Infinity, minZ: Infinity,
-        maxX: -Infinity, maxY: -Infinity, maxZ: -Infinity,
-      }
+      const slot = samples.length
 
-      for ( const face_ of this.extentSample( faces ) ) {
-        this.growBoxByFace( face_, box )
-      }
-
-      if ( !Number.isFinite( box.minX ) ) {
-        continue
-      }
-
-      const extent =
-        Math.hypot( box.maxX - box.minX, box.maxY - box.minY, box.maxZ - box.minZ )
+      samples.push( this.extentSample( faces ).map( ( face_ ) => face_.localID ) )
 
       for ( const face_ of faces ) {
 
-        const existing = faceExtent.get( face_.localID )
+        const first = firstSlot.get( face_.localID )
 
-        // A face reached from two representations is malformed — the same
-        // solid listed twice — and there is then no single right answer.
-        // Take the SMALLER extent, matching every other bound in this
-        // design: it errs toward a finer floor, i.e. less of the saving and
-        // never a fidelity loss. (The larger one is arguable too, on the
-        // grounds that the bigger representation is the visual object; it is
-        // rejected only because it errs the other way.)
-        faceExtent.set(
-            face_.localID,
-            existing === undefined ? extent : Math.min( existing, extent ) )
+        if ( first === void 0 ) {
+          firstSlot.set( face_.localID, slot )
+          continue
+        }
+
+        // Listed twice in one representation: one membership, as the eager
+        // table's repeated set of the same extent was.
+        if ( first === slot ) {
+          continue
+        }
+
+        const further = furtherSlots.get( face_.localID )
+
+        if ( further === void 0 ) {
+          furtherSlots.set( face_.localID, [ slot ] )
+        } else if ( further[ further.length - 1 ] !== slot ) {
+          further.push( slot )
+        }
       }
     }
 
-    return faceExtent
+    this.extentTable_ = {
+      firstSlot,
+      furtherSlots,
+      samples,
+      extents: new Float64Array( samples.length ).fill( NaN ),
+    }
+
+    return this.extentTable_
   }
 
   /**
@@ -2337,8 +2717,8 @@ export class AP214GeometryExtraction {
     if ( from.base_surface instanceof plane ) {
       const paramsAxis2Placement3D: ParamsAxis2Placement3D =
         this.extractAxis2Placement3D( from.base_surface.position, from.localID, true )
-      const axis2PlacementTransform = this.conwayModel
-          .getAxis2Placement3D( paramsAxis2Placement3D )
+      const axis2PlacementTransform = this.getAxis2Placement3D(
+          paramsAxis2Placement3D, from.base_surface.position.expressID )
 
       // get geometry
       const parameters: ParamsGetHalfspaceSolid = {
@@ -2925,9 +3305,10 @@ export class AP214GeometryExtraction {
     // (extractCylindricalSurface and friends), so the pcurve is orthonormalised
     // identically to the surface it lies on rather than by a second, subtly
     // different implementation here.
-    const placement = this.conwayModel.getAxis2Placement3D(
+    const placement = this.getAxis2Placement3D(
         this.extractAxis2Placement3D(
-            parameterization.position, basisSurface.localID, true ) )
+            parameterization.position, basisSurface.localID, true ),
+        parameterization.position.expressID )
 
     const transform = placement.getValues()
 
@@ -3288,8 +3669,9 @@ export class AP214GeometryExtraction {
 
     } else {
 
-      axis2Placement3D = this.conwayModel.getAxis2Placement3D(
-          this.extractAxis2Placement3D(from.position, from.localID, true) )
+      axis2Placement3D = this.getAxis2Placement3D(
+          this.extractAxis2Placement3D(from.position, from.localID, true),
+          from.position.expressID )
       dimension = this.THREE_DIMENSIONS
     }
 
@@ -3355,8 +3737,9 @@ export class AP214GeometryExtraction {
 
     } else {
 
-      axis2Placement3D = this.conwayModel.getAxis2Placement3D(
-          this.extractAxis2Placement3D(from.position, from.localID, true) )
+      axis2Placement3D = this.getAxis2Placement3D(
+          this.extractAxis2Placement3D(from.position, from.localID, true),
+          from.position.expressID )
       dimension = this.THREE_DIMENSIONS
     }
 
@@ -3811,6 +4194,17 @@ export class AP214GeometryExtraction {
   public readonly geometryTypeCounts = new Map<string, number>()
 
   /**
+   * True while the walk is iterating the items of a
+   * `tessellated_shape_representation` — the one context a TESSELLATED_SOLID
+   * is part shape in (see the gate in extractRepresentationItem).
+   *
+   * Set and restored around that one item loop, so every other route into
+   * extractRepresentationItem (a mapped item, a styled item, a plain
+   * SHAPE_REPRESENTATION's items) sees it false and skips the solid.
+   */
+  private inTessellatedShapeRepresentation_ = false
+
+  /**
    * Increment the geometry-type breakdown counter for a type name.
    *
    * @param name The entity type name.
@@ -3845,10 +4239,30 @@ export class AP214GeometryExtraction {
       from instanceof placement ||
       from instanceof advanced_face ||
       from instanceof face ||
+      from instanceof coordinates_list ||
       from instanceof cartesian_point ) {
-      
+
       return // skip these types, not 3D geometry or top level types
 
+    }
+
+    // test-models#62: a TESSELLATED_SOLID renders only when the walk reached
+    // it as an item of a TESSELLATED_SHAPE_REPRESENTATION. Three chains reach
+    // the one in nist_ftc_08_asme1_ap242-e1-tg.stp and only that one is the
+    // part shape:
+    //
+    //   #106 TESSELLATED_SHAPE_REPRESENTATION -> #11436   <- render this
+    //   #11451 SHAPE_REPRESENTATION -> #11436             <- PMI association
+    //   #25231 SHAPE_REPRESENTATION -> #25216 TESSELLATED_SHELL
+    //
+    // The middle one is the 'shape for associated data' idiom: a SHAPE_ASPECT
+    // pointing a PROPERTY_DEFINITION at the same solid. Rendering it as well
+    // double-places the mesh — model.geometry memoizes by localID, but
+    // scene.addGeometry is called again regardless — which is why this gate
+    // sits BEFORE the memoization check below rather than beside the dispatch.
+    if ( from instanceof tessellated_solid && !this.inTessellatedShapeRepresentation_ ) {
+
+      return
     }
 
     const foundGeometry = this.model.geometry.getByLocalID(from.localID)
@@ -3876,9 +4290,13 @@ export class AP214GeometryExtraction {
     // Geometry-type breakdown for the load report (issue #301 follow-up):
     // after the memoization early-return, so each unique geometry
     // definition counts once regardless of occurrence instancing.
-    this.countGeometryType(EntityTypesAP214[from.type])
+    this.countGeometryType(ap214TypeName(from.type))
 
-    if ( from instanceof boolean_result ) {
+    if ( from instanceof tessellated_solid ) {
+
+      this.extractTessellatedSolid( from )
+
+    } else if ( from instanceof boolean_result ) {
 
       // also handles AP214BooleanClippingResult
       this.extractBooleanResult( from )
@@ -3909,13 +4327,185 @@ export class AP214GeometryExtraction {
 
     } else  {
 
-      Logger.warning( `Unsupported type: ${EntityTypesAP214[from.type]} ` +
+      Logger.warning( `Unsupported type: ${ap214TypeName(from.type)} ` +
       `expressID: ${from.expressID}`)
     }
     
     if ( !isMappedItem) {
       this.scene.addGeometry( from.localID, owningElementLocalID )
     }
+  }
+
+  /**
+   * Reify one COMPLEX_TRIANGULATED_FACE's strips and fans into flat triangle
+   * indices, resolved through `pnindex` to 1-based positions in the face's
+   * coordinates list.
+   *
+   * Two rules, both measured against
+   * `nist_ftc_08_asme1_ap242-e1-tg.stp`'s own declared per-vertex normals:
+   *
+   *  - STRIP WINDING ALTERNATES. Triangle k of a strip is
+   *    `(s[k], s[k+1], s[k+2])` for even k and `(s[k+1], s[k], s[k+2])` for
+   *    odd k. Taking every triangle in strip order instead agrees with the
+   *    file's normals on only 960 of 1729 triangles; alternating agrees on
+   *    1729 of 1729. Getting it wrong turns half the surface inside out in a
+   *    way that still looks like a solid.
+   *  - `pnindex` IS AN INDIRECTION, not decoration. Strip and fan values are
+   *    1-based indices into `pnindex`, whose values are in turn 1-based
+   *    indices into the coordinates list. It is present on every face of that
+   *    file; when a face omits it, the strip values address the coordinates
+   *    list directly.
+   *
+   * Fans are `(f[0], f[k], f[k+1])` — no alternation, they share the hub.
+   *
+   * @param face The face to triangulate.
+   * @param into Receives the triangles, three 1-based coordinate indices each.
+   * @return {number[]} `into`.
+   */
+  public static triangulateComplexFace(
+      face: complex_triangulated_face,
+      into: number[] = [] ): number[] {
+
+    const pointIndices = face.pnindex
+
+    const resolve = pointIndices.length > 0 ?
+      ( value: number ) => pointIndices[ value - 1 ] :
+      ( value: number ) => value
+
+    for ( const strip of face.triangle_strips ) {
+
+      for ( let where = 0; where + 2 < strip.length; ++where ) {
+
+        const first  = resolve( strip[ where ] )
+        const second = resolve( strip[ where + 1 ] )
+        const third  = resolve( strip[ where + 2 ] )
+
+        if ( ( where & 1 ) === 0 ) {
+          into.push( first, second, third )
+        } else {
+          into.push( second, first, third )
+        }
+      }
+    }
+
+    for ( const fan of face.triangle_fans ) {
+
+      const hub = resolve( fan[ 0 ] )
+
+      for ( let where = 1; where + 1 < fan.length; ++where ) {
+        into.push( hub, resolve( fan[ where ] ), resolve( fan[ where + 1 ] ) )
+      }
+    }
+
+    return into
+  }
+
+  /**
+   * Extract geometry from an AP242 TESSELLATED_SOLID (test-models#62).
+   *
+   * The faces are grouped by the coordinates list they index into (in
+   * practice one list per solid — all 272 faces of the NIST -tg part share
+   * `#111`), and each group becomes a single wasm call: the coordinates
+   * list's points attribute goes across as raw STEP text via
+   * `extractParseBuffer`, and the triangles as synthesised STEP-array text in
+   * a second parse buffer. `Geometry::ExtractVertices` / `ExtractTriangles`
+   * parse array text and decrement the 1-based indices; they are entirely
+   * schema-agnostic, which is why this needs no C++ or wasm change — it is
+   * the same pair of calls IFC's `IfcTriangulatedFaceSet` path makes.
+   *
+   * Per-vertex normals are dropped, exactly as that IFC path drops them:
+   * `Geometry` stores positions only and shades faceted.
+   *
+   * @param from The solid to extract.
+   */
+  extractTessellatedSolid( from: tessellated_solid ) {
+
+    const conwayModel = this.conwayModel
+    const geometry    = conwayModel.nativeGeometry()
+
+    const faceGroups = new Map< number, [ coordinates_list, complex_triangulated_face[] ] >()
+
+    for ( const face of from.items ) {
+
+      const faceCoordinates = face.coordinates
+      let   group           = faceGroups.get( faceCoordinates.localID )
+
+      if ( group === void 0 ) {
+
+        group = [ faceCoordinates, [] ]
+        faceGroups.set( faceCoordinates.localID, group )
+      }
+
+      group[ 1 ].push( face )
+    }
+
+    for ( const [ faceCoordinates, faces ] of faceGroups.values() ) {
+
+      const triangleIndices: number[] = []
+
+      for ( const face of faces ) {
+        AP214GeometryExtraction.triangulateComplexFace( face, triangleIndices )
+      }
+
+      if ( triangleIndices.length === 0 ) {
+        continue
+      }
+
+      const coordinateBuffer = conwayModel.nativeParseBuffer()
+      const triangleBuffer   = conwayModel.nativeParseBuffer()
+
+      // Declared out here so the finally can release it: unlike the parse
+      // buffers there is no pool to hand it back to, and `appendGeometry`
+      // takes its operand by const reference and COPIES the vertex and
+      // triangle vectors (Geometry::AppendGeometry), so nothing downstream
+      // owns this one. Without the delete each coordinate-list group leaks a
+      // whole duplicate mesh in the wasm heap for the life of the load.
+      let groupGeometry: GeometryObject | undefined
+
+      try {
+
+        // COORDINATES_LIST slot 2 is `points`, already in the
+        // `((x,y,z),(x,y,z),...)` form ExtractVertices parses.
+        if ( !faceCoordinates.extractParseBuffer(
+            2, 1, 2, coordinateBuffer, this.wasmModule, true ) ) {
+
+          continue
+        }
+
+        const triangleText = new TextEncoder().encode( triangleTupleText( triangleIndices ) )
+
+        // resize() can grow the wasm heap, so the destination view is taken
+        // after it rather than off a cached HEAPU8 (same reason as #485 in
+        // StepEntityBase.extractParseBuffer).
+        const trianglePointer = triangleBuffer.resize( triangleText.length )
+
+        wasmHeapView( this.wasmModule, Uint8Array, trianglePointer, triangleText.length )
+            .set( triangleText )
+
+        groupGeometry = conwayModel.nativeGeometry()
+
+        groupGeometry.extractVerticesAndTriangles( coordinateBuffer, triangleBuffer )
+
+        geometry.appendGeometry( groupGeometry )
+
+      } finally {
+
+        groupGeometry?.delete()
+
+        conwayModel.freeParseBuffer( coordinateBuffer )
+        conwayModel.freeParseBuffer( triangleBuffer )
+      }
+    }
+
+    const canonicalMesh: CanonicalMesh = {
+      type: CanonicalMeshType.BUFFER_GEOMETRY,
+      geometry: geometry,
+      localID: from.localID,
+      model: this.model,
+      temporary: false,
+    }
+
+    this.model.geometry.add( canonicalMesh )
   }
 
   /**
@@ -4046,7 +4636,25 @@ export class AP214GeometryExtraction {
         }
       } catch (error) {
 
-        if ( error instanceof Error ) {
+        if ( isUnresolvedReferenceError( error ) ) {
+
+          // A face whose bounds or surface name a record the schema cannot
+          // type there (Sentry SHARE-1NB). The face is skipped and the rest
+          // of the shell still tessellates — that part was already true —
+          // but the message now holds nothing per-record, so Logger's
+          // `count` is the number of faces this file lost rather than a row
+          // of 1s: `error.stack` differs per throw site and a dangling
+          // reference writes its own express ID into `error.message`, so
+          // between them the old line was very nearly unique per face.
+          // The face's own express ID is on the entry, unioned across
+          // repeats, and the marker says the file is at fault (conway#708).
+          Logger.error(
+            `Skipping face with an unresolved or mistyped STEP reference: ${
+              EntityTypesAP214[face_.type]}`,
+            face_.expressID,
+            DATA_DEFECT )
+
+        } else if ( error instanceof Error ) {
           Logger.error(
             `Error extracting face ${EntityTypesAP214[face_.type]} - ${
               error.message}\t\n${error.stack} - expressID: #${face_.expressID}`)
@@ -4092,7 +4700,7 @@ export class AP214GeometryExtraction {
     const transform =
       this.extractAxis2Placement3D(location, from.localID, true)
 
-    return this.conwayModel.getAxis2Placement3D( transform )
+    return this.getAxis2Placement3D( transform, location.expressID )
   }
 
   /**
@@ -4257,15 +4865,30 @@ export class AP214GeometryExtraction {
 
     const bounds = from.bounds
     const previousFaceGeometry = this.model.geometry.getByLocalID(from.localID)
-    
+
     if ( previousFaceGeometry !== void 0  ) {
-    
+
       previousFaceGeometry.temporary = false
+
+      // A revisit of a face that already has its own styled mesh (the
+      // only path that keys model.geometry by a face's OWN localID) -
+      // inherit that mesh's outcome rather than leaving this visit
+      // unrecorded.
+      this.recordFaceAccounted(
+          from.localID,
+          previousFaceGeometry.type === CanonicalMeshType.BUFFER_GEOMETRY &&
+          previousFaceGeometry.geometry.getTriangleCount() > 0)
+
       return
     }
 
     if ( from.bounds.length === 0 ) {
-    
+
+      // No boundary at all - the file declares a face with nothing to
+      // tessellate. Not a bug this extraction can do anything about, but
+      // still a face that produced no geometry.
+      this.recordFaceAccounted( from.localID, false )
+
       return
     }
     
@@ -4460,9 +5083,20 @@ export class AP214GeometryExtraction {
                     edgeCurve, true, true,
                     { exist: false, start: void 0, end: void 0 } )
 
-                const recovered =
+                const untrimmedLarger =
                   untrimmed !== void 0 &&
                   untrimmed.getPointsSize() > curve.getPointsSize()
+
+                // Point count alone isn't proof the recovery is good: a
+                // degenerate placement (conway#592) makes the untrimmed
+                // re-extraction sample the SAME bad basis that produced the
+                // collapsed trim, and that comes back as a full complement of
+                // NaN points which still passes the count check. Confirming
+                // every recovered point is finite is what tells the two
+                // cases apart (conway#591) — only accept the recovery once
+                // both hold.
+                const recovered =
+                  untrimmedLarger && isCurveFinite( untrimmed! )
 
                 if ( recovered ) {
 
@@ -4482,6 +5116,42 @@ export class AP214GeometryExtraction {
                   // this its native allocation is unreachable.
                   curve.delete()
                   curve = untrimmed
+                } else if ( untrimmedLarger ) {
+
+                  // The recovery produced more points than the trim, but they
+                  // aren't usable - distinct message from the one above so
+                  // errors.csv keeps the two families apart (the split
+                  // geometry_utils.h's no-basis branch uses for the same
+                  // reason). Stay on the original (loud) collapsed-trim path:
+                  // the caller below still sees `curve` at its degenerate
+                  // point count, which is what makes the failure visible
+                  // downstream instead of silently substituting NaN.
+                  Logger.warning(
+                      `Whole-curve trim on edge #${edgeElement.expressID} ` +
+                      `(${EntityTypesAP214[edgeCurve.type]}) resolved to ` +
+                      `${curve.getPointsSize()} point(s); untrimmed recovery ` +
+                      `produced ${untrimmed!.getPointsSize()} non-finite ` +
+                      'point(s), discarding it.' )
+
+                  // extractCurve's own untrimmed call (above) already
+                  // memoised this exact object into this.curves — under the
+                  // BASIS curve's localID, and, when that basis curve is a
+                  // surface_curve/seam_curve (or any other extractCurve
+                  // variant that recurses and caches at each level, e.g. a
+                  // pcurve's surface_curve or a composite_curve_segment's
+                  // parent_curve), ALSO under the inner curve's own localID
+                  // from the recursive call. Deleting the native object
+                  // without removing every one of those entries leaves the
+                  // others dangling: the next lookup of ANY alias (another
+                  // edge on the same curve, or the regression digest's
+                  // curves.objs() traversal) would retrieve an
+                  // already-deleted Embind object instead of re-extracting.
+                  // deleteValue finds every alias by object identity rather
+                  // than retracing which recursive shape produced them, so
+                  // this holds regardless of how many levels deep the
+                  // caching went.
+                  this.curves.deleteValue( untrimmed! )
+                  untrimmed!.delete()
                 }
 
                 // Memoise under the edge either way. The adjacent face's
@@ -4789,7 +5459,15 @@ export class AP214GeometryExtraction {
       const faceGeometry = (new (this.wasmModule.IfcGeometry)) as GeometryObject
 
       this.addOrStageFace(parameters, faceGeometry)
- 
+
+      // Flush now, before reading the count below - see trackFaceAccounting's
+      // doc. faceGeometry is fresh, so its triangle count is entirely this
+      // face's own contribution; no "before" reading is needed.
+      if ( this.trackFaceAccounting ) {
+        this.finalizeStagedFaces()
+        this.recordFaceAccounted( from.localID, faceGeometry.getTriangleCount() > 0 )
+      }
+
       const canonicalMesh: CanonicalMesh = {
         type: CanonicalMeshType.BUFFER_GEOMETRY,
         geometry: faceGeometry,
@@ -4801,7 +5479,36 @@ export class AP214GeometryExtraction {
 
     } else {
 
+      // Unlike the styled branch, `geometry` is the SHARED buffer other
+      // faces of this solid append into - so the triangle count has to be
+      // sampled on both sides of this face's own call to isolate its
+      // delta, and (per trackFaceAccounting's doc) staged tessellation has
+      // to be flushed in between so the "after" read is not measuring
+      // work this face merely enqueued.
+      //
+      // The "before" read needs the same flush FIRST: a shell mixes plain
+      // `face`s (extractFace -> addOrStageFaceSimple, staged, no flush of
+      // its own) with advanced_faces into this same buffer via extractFaces,
+      // so an earlier simple face in the shell can still have a staged job
+      // outstanding when this face's baseline is read. Without flushing
+      // here, that job lands together with THIS face's own staged job at
+      // the flush below, and its triangles inflate the delta - a
+      // zero-triangle advanced face reads as accounted for because of
+      // triangles a DIFFERENT, earlier face produced.
+      if ( this.trackFaceAccounting ) {
+        this.finalizeStagedFaces()
+      }
+
+      const beforeTriangleCount =
+        this.trackFaceAccounting ? geometry.getTriangleCount() : 0
+
       this.addOrStageFace(parameters, geometry)
+
+      if ( this.trackFaceAccounting ) {
+        this.finalizeStagedFaces()
+        this.recordFaceAccounted(
+            from.localID, geometry.getTriangleCount() > beforeTriangleCount )
+      }
     }
 
     nativeSurface.delete()
@@ -4981,7 +5688,7 @@ export class AP214GeometryExtraction {
     const transform =
       this.extractAxis2Placement3D(location, from.localID, true)
 
-    nativeSurface.transformation = this.conwayModel.getAxis2Placement3D(transform)
+    nativeSurface.transformation = this.getAxis2Placement3D(transform, location.expressID)
     nativeSurface.cylinder = { active: true, radius: from.radius }
   }
 
@@ -4998,7 +5705,7 @@ export class AP214GeometryExtraction {
     const transform =
       this.extractAxis2Placement3D(location, from.localID, true)
 
-    nativeSurface.transformation = this.conwayModel.getAxis2Placement3D(transform)
+    nativeSurface.transformation = this.getAxis2Placement3D(transform, location.expressID)
     nativeSurface.sphere = { active: true, radius: from.radius }
   }
 
@@ -5016,7 +5723,7 @@ export class AP214GeometryExtraction {
     const transform =
       this.extractAxis2Placement3D(location, from.localID, true)
 
-    nativeSurface.transformation = this.conwayModel.getAxis2Placement3D(transform)
+    nativeSurface.transformation = this.getAxis2Placement3D(transform, location.expressID)
     nativeSurface.cone = { active: true, radius: from.radius, semiAngle: from.semi_angle }
   }
 
@@ -5033,7 +5740,7 @@ export class AP214GeometryExtraction {
     const transform =
       this.extractAxis2Placement3D(location, from.localID, true)
 
-    nativeSurface.transformation = this.conwayModel.getAxis2Placement3D(transform)
+    nativeSurface.transformation = this.getAxis2Placement3D(transform, location.expressID)
     nativeSurface.torus = {
       active: true,
       majorRadius: from.major_radius,
@@ -5150,11 +5857,20 @@ export class AP214GeometryExtraction {
           const { pointer, length } = result
 
           // Use them in your WASM call
-          const bound3D: Bound3DObject = this.wasmModule.createSimpleBound3D(
+          // Through conwayModel, not wasmModule: the wrapper types
+          // closedByConstruction as required, and that is the ONLY place a
+          // missing argument is caught - embind does no arity check and would
+          // convert the absent bool to false, silently dropping closure.
+          // See bldrs-ai/conway-geom#195.
+          const bound3D: Bound3DObject = this.conwayModel.createSimpleBound3D(
             pointer,
             length,
             bound.orientation,
             bound.type === EntityTypesAP214.FACE_OUTER_BOUND ? 0 : 1,
+            // A poly loop IS a closed polygon and does not repeat its head.
+            // Passed explicitly rather than re-derived on the wasm side, so the
+            // closure fact crosses the boundary with the entity that knows it.
+            true,
           )
 
           // Push your result somewhere (push_back copies, so free the
@@ -5355,6 +6071,50 @@ export class AP214GeometryExtraction {
   }
 
   /**
+   * Run the native AXIS2_PLACEMENT_3D transform and report a non-finite
+   * result.
+   *
+   * GetAxis2Placement3D (conway-geom) does not check its own inputs or
+   * output: a non-finite or degenerate direction ratio comes back as a
+   * matrix with NaN basis columns, silently (conway#592). The C++ side has
+   * no express ID to log against, so the check has to happen here, where
+   * every call site already has one.
+   *
+   * This only reports — it does not refuse the placement or substitute a
+   * fallback. The corrupt transform is still returned and still used, same
+   * as before this check existed; conway#592 asks for the diagnostic, not
+   * for invented recovery behaviour.
+   *
+   * @param parameters The already-extracted placement parameters.
+   * @param expressID The AXIS2_PLACEMENT_3D entity's express ID, for the
+   *     diagnostic.
+   * @return {NativeTransform4x4} The native transform, unchanged.
+   */
+  private getAxis2Placement3D(
+      parameters: ParamsAxis2Placement3D,
+      expressID: number | undefined ): NativeTransform4x4 {
+
+    const transform = this.conwayModel.getAxis2Placement3D( parameters )
+
+    if ( !isTransformFinite( transform ) ) {
+
+      // The express ID goes through Logger.error's own parameter, not
+      // interpolated into the message: Logger dedups on message text, so
+      // baking a per-call express ID into the string would make every
+      // record a distinct "first occurrence" and defeat that — the whole
+      // point of the record parameter is letting many AXIS2_PLACEMENT_3D
+      // failures collapse into one counted family (findLogIndex, logger.ts).
+      Logger.error(
+          'AXIS2_PLACEMENT_3D produced a non-finite transform (NaN/Inf ' +
+          'basis column) - a non-finite, zero-length, or axis-parallel ' +
+          'direction ratio.',
+          expressID )
+    }
+
+    return transform
+  }
+
+  /**
    * Extract a placement, adding it to the scene.
    *
    * @param from The transform to extract.
@@ -5441,8 +6201,8 @@ export class AP214GeometryExtraction {
       return axis2Placement3DParameters
     }
 
-    const axis2PlacementTransform = this.conwayModel
-        .getAxis2Placement3D(axis2Placement3DParameters)
+    const axis2PlacementTransform = this.getAxis2Placement3D(
+        axis2Placement3DParameters, from.expressID)
 
     return this.scene.addTransform(
         parentLocalId,
@@ -5480,7 +6240,7 @@ export class AP214GeometryExtraction {
   extractRawPlacement(from: placement ): NativeTransform4x4 | undefined {
     if (from instanceof axis2_placement_3d) {
       const parameters = this.extractAxis2Placement3D(from, from.localID, true )
-      return this.conwayModel.getAxis2Placement3D(parameters)
+      return this.getAxis2Placement3D(parameters, from.expressID)
     }
     return
   }
@@ -5589,47 +6349,129 @@ export class AP214GeometryExtraction {
    */
   populateStyledItemsMap() {
 
-    const overridingStyledItems = this.model.types(over_riding_styled_item)
-    const styledItems = this.model.types(styled_item)
+    const model = this.model
     const styledItemMap = this.materials.styledItemMap
 
-    for ( const styledItem of styledItems ) {
+    // styled_item.item is field 2 (name, styles, item), typed
+    // representation_item. The shared StepModelBase walk (the one IFC's
+    // populateStyledItemsMap uses) answers a plain `#n` whose target is a
+    // single-class representation_item — the only case the getter below
+    // resolves without throwing — straight from the record bytes, with the
+    // getter's own instanceof test (typeIDIsA). Everything else (complex
+    // records, `$`, dangling or mistyped references, non-resident bytes)
+    // runs the getter at the same point in the walk, so it throws and is
+    // reported exactly as before, and the map keeps its order.
+    //
+    // Overriding styled items still go second so they win. Note the
+    // generated `query` arrays here are exact types, not subtype closures:
+    // types(styled_item) never yields a single-class over_riding_styled_item
+    // (only a complex record can be both, and those take the entity path,
+    // where the instanceof skip below still applies), and
+    // context_dependent_over_riding_styled_item records are not walked by
+    // either pass — both unchanged from before.
+    model.forEachReferenceInFieldOfTypes(
+        [ styled_item ],
+        STYLED_ITEM_ITEM_FIELD,
+        // Plain records here are exactly STYLED_ITEM (the query above), never
+        // an over_riding_styled_item, so the skip the entity path needs has
+        // nothing to skip on this side.
+        ( styledItemLocalID, itemLocalID ) => {
+          styledItemMap.set( itemLocalID, styledItemLocalID )
+        },
+        ( styledItemLocalID ) => {
 
-      if ( styledItem instanceof over_riding_styled_item ) {
-        continue
-      }
+          const styledItem = model.getElementByLocalID( styledItemLocalID )
 
-      try {
-        if ( styledItem.item !== null ) {
-          styledItemMap.set( styledItem.item.localID, styledItem.localID )
-        }
-      } catch (error) {
-        if ( !this.quietRecoverableLogging ) {
-          // toString(), not localID: localID is the dense internal index and
-          // means nothing against the source file, and these land in the
-          // regression run's `expressids` column where the whole point is to
-          // be able to go look at the record. It also spells the inline case
-          // honestly rather than passing off an index as a reference.
-          Logger.error(
-            `Error populating styled item map: ${error}`, styledItem.toString() )
-        }
-      }
+          // model.types() skips a record with no entity the same way.
+          if ( styledItem === void 0 || styledItem instanceof over_riding_styled_item ) {
+            return
+          }
+
+          try {
+            if ( ( styledItem as styled_item ).item !== null ) {
+              styledItemMap.set( ( styledItem as styled_item ).item.localID, styledItem.localID )
+            }
+          } catch (error) {
+            if ( !this.quietRecoverableLogging ) {
+              // toString(), not localID: localID is the dense internal index and
+              // means nothing against the source file, and these land in the
+              // regression run's `expressids` column where the whole point is to
+              // be able to go look at the record. It also spells the inline case
+              // honestly rather than passing off an index as a reference.
+              //
+              // `${error}` stays out of the message for the family that carries
+              // the express ID in its own text — a dangling reference reads
+              // "Reference to #4211 is not in the index", and Logger dedups on
+              // the message, so interpolating it gave 7 users' worth of one
+              // SolidWorks defect (Sentry SHARE-1NA) one entry apiece with
+              // count 1. Marked as a data defect so Share can tag it without
+              // reading the prose (conway#708).
+              this.reportStyledItemDefect_(
+                  'Error populating styled item map', error, styledItem.toString() )
+            }
+          }
+        },
+        representation_item )
+
+    model.forEachReferenceInFieldOfTypes(
+        [ over_riding_styled_item ],
+        STYLED_ITEM_ITEM_FIELD,
+        ( overridingLocalID, itemLocalID ) => {
+          styledItemMap.set( itemLocalID, overridingLocalID )
+        },
+        ( overridingLocalID ) => {
+
+          const overridingStyledItem = model.getElementByLocalID( overridingLocalID )
+
+          if ( overridingStyledItem === void 0 ) {
+            return
+          }
+
+          try {
+            if ( ( overridingStyledItem as over_riding_styled_item ).item !== null ) {
+              styledItemMap.set(
+                  ( overridingStyledItem as over_riding_styled_item ).item.localID,
+                  overridingStyledItem.localID )
+            }
+          } catch (error) {
+            if ( !this.quietRecoverableLogging ) {
+              this.reportStyledItemDefect_(
+                  'Error populating overriding styled item map',
+                  error,
+                  overridingStyledItem.toString() )
+            }
+          }
+        },
+        representation_item )
+  }
+
+  /**
+   * Report one styled item this map skipped, splitting the input's fault
+   * from conway's.
+   *
+   * An unresolved or mistyped reference means the FILE named something the
+   * schema cannot type there. Nothing is half-built either way — the
+   * `styledItemMap.set` is the whole body, so a throw before it leaves the
+   * map exactly as it was, and the item is simply unstyled — but only the
+   * data-defect branch gets a stable message, and so a `count` that sizes
+   * the defect, and the marker Share reads (conway#708). Anything else
+   * keeps the interpolated text, which is all there is to go on for a throw
+   * nothing has classified.
+   *
+   * @param context What was being populated, for the message.
+   * @param error The throw to classify.
+   * @param reference The styled item's `toString()` — a reference a reader
+   * can look up in the source, not an internal index.
+   */
+  private reportStyledItemDefect_(
+      context: string, error: unknown, reference: string ): void {
+
+    if ( isUnresolvedReferenceError( error ) ) {
+      Logger.error( `${context}: unresolved or mistyped STEP reference`, reference, DATA_DEFECT )
+      return
     }
-    
-    for ( const overridingStyledItem of overridingStyledItems ) {
 
-      try {
-        if ( overridingStyledItem.item !== null ) {
-          styledItemMap.set( overridingStyledItem.item.localID, overridingStyledItem.localID )
-        }
-      } catch (error) {
-        if ( !this.quietRecoverableLogging ) {
-          Logger.error(
-            `Error populating overriding styled item map: ${error}`,
-            overridingStyledItem.toString() )
-        }
-      }
-    }
+    Logger.error( `${context}: ${error}`, reference )
   }
 
   /**
@@ -5752,12 +6594,49 @@ export class AP214GeometryExtraction {
    * exactly — the classic {@link extractAP214GeometryData} runs through
    * this same path. Idempotent.
    */
-  // eslint-disable-next-line max-lines-per-function
   public prepareDemandExtraction(): void {
 
     if ( this.demandUnits_ !== void 0 ) {
       return
     }
+
+    // A planning that threw stays failed: rethrown to every later caller,
+    // never re-run. Since conway#748 the plan is built by the first batch
+    // rather than by the open, so a throw no longer ends the load — the
+    // pump can be called again — and a re-run would start over on state
+    // the failed run already changed (the styled-item map, the memoization
+    // flag it saves for restoration). The IFC prep latches the same way
+    // (IfcGeometryExtraction#runExtractionPrepStep_; codex on conway#751).
+    if ( this.demandPrepFailure_ !== void 0 ) {
+      throw this.demandPrepFailure_.error
+    }
+
+    try {
+      this.planDemandUnits_()
+    } catch ( ex ) {
+      this.demandPrepFailure_ = { error: ex }
+
+      // The plan may have turned element memoization off for a large
+      // buffer, and its restore lives in finishDemandExtraction, which a
+      // failed plan never reaches. Restore it here so a failed plan does
+      // not leave the model unmemoized (codex on #774).
+      if ( this.demandMemoizationRestore_ !== void 0 ) {
+        this.model.elementMemoization = this.demandMemoizationRestore_
+        this.demandMemoizationRestore_ = void 0
+      }
+
+      throw ex
+    }
+  }
+
+  // A thrown planning, latched — see prepareDemandExtraction.
+  private demandPrepFailure_?: { error: unknown }
+
+  /**
+   * The planning behind {@link prepareDemandExtraction}, which guards it.
+   */
+  // eslint-disable-next-line max-lines-per-function
+  private planDemandUnits_(): void {
 
     const model = this.model
 
@@ -5797,6 +6676,45 @@ export class AP214GeometryExtraction {
     }
 
     const treeMap = new Map<number, MappedSceneNode>()
+
+    // Local ids of the solid-level bodies that are individually addressable —
+    // the ones whose own express id extends the occurrence path of the
+    // geometry under them, so two bodies of one multibody part are two
+    // selections rather than one (BLSN_007: 2,268 named hull bodies — 1,884
+    // breps and 384 shells — under a single product with no NAUO anywhere in
+    // the file). The product-structure extractor owns the decision and emits a
+    // tree node for exactly this set; reading it from there rather than
+    // re-deriving it here is what keeps "the mesh's path" and "the node's
+    // path" the same thing.
+    const solidOccurrenceLocalIDs = new Set<number>()
+
+    for ( const solidExpressID of
+      new AP214ProductStructureExtraction( model ).identityBearingSolidExpressIDs() ) {
+
+      const solidLocalID = model.getElementByExpressID( solidExpressID )?.localID
+
+      if ( solidLocalID !== void 0 ) {
+        solidOccurrenceLocalIDs.add( solidLocalID )
+      }
+    }
+
+    // conway#597: representation localID → the PDS a pick under it should
+    // report, populated by the plain shape_representation_relationship loop
+    // further down and consulted here by makeThunk's item-attribution calls
+    // only — occurrence-path threading keeps using each edge's own
+    // relationship localID exactly as before (see the loop for why).
+    // Declared here, outside the block that populates it, so makeThunk's
+    // closure — defined before that block — can see it.
+    const ownerOverrideByRepLocalID = new Map<number, number>()
+
+    // conway#597 review: memoises resolvePdsLocalID's outcome per SOURCE
+    // representation (present once resolution for that source has run, even
+    // when the outcome was undefined/ambiguous) so a source reachable via
+    // several plain-SRR edges is resolved exactly once, from itself, seeing
+    // every edge's target together — not once per edge from that edge's
+    // own target alone, which let a later edge silently overwrite an
+    // earlier one's entry and bypassed the equidistant-ambiguity refusal.
+    const sourceOwnerResolution = new Map<number, number | undefined>()
 
     const makeThunk = (
         representation: shape_representation,
@@ -5855,8 +6773,28 @@ export class AP214GeometryExtraction {
               // Malformed PDS.definition — fall through to the express-id fallback.
               occurrenceExpressID = void 0
             }
-            occurrenceExpressID ??= this.model.getExpressIDByLocalID( childOwningLocalID )
-            this.scene.pushOccurrence( occurrenceExpressID ?? childOwningLocalID )
+
+            // A plain shape_representation_relationship is NOT an occurrence:
+            // it binds a representation with no SDR of its own (a multibody
+            // advanced_brep_shape_representation, a tessellated rep) to the
+            // SDR-bound representation of the SAME part. This edge used to
+            // contribute its own express id as a path segment, which put an
+            // id the product-structure tree has no node for in the middle of
+            // every such path — so a NEMA motor body's mesh path
+            // ([14107, 6611]) matched no node, and every body of the part
+            // shared the one path. The bodies are told apart by the per-item
+            // segment pushed in the item loop below instead, which is the
+            // segment the tree also emits.
+            if ( occurrenceExpressID === void 0 &&
+                !( owningElement instanceof shape_representation_relationship ) ) {
+
+              occurrenceExpressID =
+                this.model.getExpressIDByLocalID( childOwningLocalID ) ?? childOwningLocalID
+            }
+
+            if ( occurrenceExpressID !== void 0 ) {
+              this.scene.pushOccurrence( occurrenceExpressID )
+            }
 
             try {
               // A sliced unit that reaches deeper than this level supplies
@@ -5875,7 +6813,9 @@ export class AP214GeometryExtraction {
               }
             }
 
-            this.scene.popOccurrence()
+            if ( occurrenceExpressID !== void 0 ) {
+              this.scene.popOccurrence()
+            }
 
             while ( this.scene.stackLength > enterChildStackDepth ) {
               this.scene.popTransform()
@@ -5888,12 +6828,55 @@ export class AP214GeometryExtraction {
           }
         }
                 
+        // conway#597: items belonging directly to a representation reached
+        // only via a plain shape_representation_relationship (no SDR of its
+        // own — the SolidWorks multibody pattern) attribute to the owning
+        // part's PDS rather than to `owningLocalID` (which stays the
+        // relationship's own id, still correct for occurrence-path
+        // threading above/below). Every other representation has no entry
+        // here and this is a no-op.
+        const itemOwningLocalID =
+          ownerOverrideByRepLocalID.get( representation.localID ) ?? owningLocalID
+
         const includeItems = slice?.includeItems ?? true
 
         // `representation.items` is a dereferencing getter, so keep it
         // untouched when this slice carries no items at all — the
         // pre-slicing code never read it in that case either.
-        const items = includeItems ? representation.items : []
+        //
+        // It also THROWS, on a representation holding an item type the AP214
+        // schema has no id for: #25231 in nist_ftc_08_asme1_ap242-e1-tg.stp
+        // holds a TESSELLATED_SHELL. Letting that escape from here skipped
+        // the transform unwind at the bottom of this thunk, so the root
+        // transform this thunk pushed stayed current and the NEXT root
+        // composed onto it — which is how the tessellated part in that file
+        // came out 1000x too small, its own mm->m root scale multiplied by
+        // the leaked one (test-models#62; the two roots are #25231 and #106,
+        // adjacent in the free-root scan). Capture, unwind, then settle it
+        // at the end of the thunk, where the transform state is sound
+        // again.
+        //
+        // What "settle" means depends on the throw, and the split is
+        // conway#708 / bldrs-ai/ops#28. An unresolved or mistyped reference
+        // is a defect in the FILE: the representation's items cannot be
+        // typed against AP214 no matter how often they are retried, so the
+        // representation is skipped, counted and reported as a data defect
+        // right here — where the owning record is still in hand, which the
+        // demand pump's catch no longer has (a unit is an opaque closure
+        // there, so its report named no entity at all: Sentry SHARE-1P2,
+        // "Error processing demand unit: Value in STEP was incorrectly
+        // typed"). Anything else still propagates to that catch untouched.
+        let items: representation_item[] = []
+        let deferredItemsError: unknown = void 0
+
+        if ( includeItems ) {
+          try {
+            items = representation.items
+          } catch ( ex ) {
+            deferredItemsError = ex
+          }
+        }
+
         const itemStart = slice?.itemStart ?? 0
         const itemEnd = Math.min( slice?.itemEnd ?? items.length, items.length )
 
@@ -5925,60 +6908,93 @@ export class AP214GeometryExtraction {
         // instead of as silently misplaced geometry two ranges later.
         const verifySliceNeutrality = slice?.itemStart !== void 0
 
-        for ( let itemIndex = itemStart; itemIndex < itemEnd; ++itemIndex ) {
+        // test-models#62: the one context in which a TESSELLATED_SOLID is
+        // part shape rather than a PMI association is as an item of a
+        // TESSELLATED_SHAPE_REPRESENTATION. Saved and restored rather than
+        // simply cleared, because a thunk runs its children before its own
+        // items and a child thunk is what this one is nested inside.
+        const enclosingTessellatedRepresentation = this.inTessellatedShapeRepresentation_
 
-          const item = items[ itemIndex ]
-          const depthBeforeItem = verifySliceNeutrality ? this.scene.stackLength : 0
+        this.inTessellatedShapeRepresentation_ =
+          representation instanceof tessellated_shape_representation
 
-          try {
-            if ( item instanceof placement ) {
-              this.extractPlacement( item, mappedItem )
-              continue
+        try {
+          for ( let itemIndex = itemStart; itemIndex < itemEnd; ++itemIndex ) {
+
+            const item = items[ itemIndex ]
+            const depthBeforeItem = verifySliceNeutrality ? this.scene.stackLength : 0
+
+            // An individually addressable body (see solidOccurrenceLocalIDs)
+            // ends its geometry's occurrence path with its own express id, so
+            // the path is unique per body and equal to the path of the tree
+            // node the product-structure extractor emits for it. Bodies of a
+            // single-solid part, and the bodies of an anonymous solid dump the
+            // tree deliberately suppresses, are not in the set: their geometry
+            // keeps the owning product's path, which is the node a pick on
+            // them should resolve to.
+            const itemCarriesOccurrence = solidOccurrenceLocalIDs.has( item.localID )
+
+            if ( itemCarriesOccurrence ) {
+              this.scene.pushOccurrence( item.expressID ?? item.localID )
             }
 
-            if ( item instanceof styled_item ) {
-              this.extractStyledItemWithProcessing( item, owningLocalID )
-              continue
-            }
-
-            if ( item instanceof mapped_item ) {
-              this.extractMappedItem( item, owningLocalID )
-            } else {
-              this.extractRepresentationItem( item, owningLocalID )
-              const styledItemLocalID = this.materials.styledItemMap.get(item.localID)
-              if ( styledItemLocalID !== void 0 ) {
-                const styledItem =
-                  model.getElementByLocalID( styledItemLocalID ) as styled_item
-                this.extractStyledItem( styledItem, item )
+            try {
+              if ( item instanceof placement ) {
+                this.extractPlacement( item, mappedItem )
+                continue
               }
-            }
-          } catch ( ex ) {
-            // Recoverable: the item is skipped and the walk continues, so this
-            // is quiet for the same reason the stack-mismatch guard below is.
-            // A prefix extraction (parse-time preview channel) hits dangling
-            // records BY CONSTRUCTION, and an ungated stack per item turned an
-            // otherwise-healthy Arty load into four red console errors
-            // (conway#580).
-            if ( !this.quietRecoverableLogging ) {
-              if (ex instanceof Error) {
-                // Stack included for the same reason extractFaces includes it:
-                // this family's message is the same string for every occurrence
-                // ("Value in select must be populated" accounts for all 274 in
-                // the NIST AP242 set), so without a stack there is nothing to
-                // tell one occurrence from another or say WHICH select failed.
-                Logger.error( `Error processing representation item: \n\t${ex.name}\n\t${ex.message}\n\t${ex.stack}\n\texpressID: #${item.expressID}` )
+
+              if ( item instanceof styled_item ) {
+                this.extractStyledItemWithProcessing( item, itemOwningLocalID )
+                continue
+              }
+
+              if ( item instanceof mapped_item ) {
+                this.extractMappedItem( item, itemOwningLocalID )
               } else {
-                Logger.error(`Unknown exception processing representation item (${ex}) expressID: #${item.expressID}`)
+                this.extractRepresentationItem( item, itemOwningLocalID )
+                const styledItemLocalID = this.materials.styledItemMap.get(item.localID)
+                if ( styledItemLocalID !== void 0 ) {
+                  const styledItem =
+                    model.getElementByLocalID( styledItemLocalID ) as styled_item
+                  this.extractStyledItem( styledItem, item )
+                }
               }
-            }
-          } finally {
+            } catch ( ex ) {
+              // Recoverable: the item is skipped and the walk continues, so this
+              // is quiet for the same reason the stack-mismatch guard below is.
+              // A prefix extraction (parse-time preview channel) hits dangling
+              // records BY CONSTRUCTION, and an ungated stack per item turned an
+              // otherwise-healthy Arty load into four red console errors
+              // (conway#580).
+              if ( !this.quietRecoverableLogging ) {
+                if (ex instanceof Error) {
+                  // Stack included for the same reason extractFaces includes it:
+                  // this family's message is the same string for every occurrence
+                  // ("Value in select must be populated" accounts for all 274 in
+                  // the NIST AP242 set), so without a stack there is nothing to
+                  // tell one occurrence from another or say WHICH select failed.
+                  Logger.error( `Error processing representation item: \n\t${ex.name}\n\t${ex.message}\n\t${ex.stack}\n\texpressID: #${item.expressID}` )
+                } else {
+                  Logger.error(`Unknown exception processing representation item (${ex}) expressID: #${item.expressID}`)
+                }
+              }
+            } finally {
 
-            if ( verifySliceNeutrality && !( item instanceof placement ) &&
-                this.scene.stackLength !== depthBeforeItem &&
-                !this.quietRecoverableLogging ) {
-              Logger.error( `Representation item left transform state inside a sliced range expressID: #${item.expressID}` )
+              if ( itemCarriesOccurrence ) {
+                this.scene.popOccurrence()
+              }
+
+              if ( verifySliceNeutrality && !( item instanceof placement ) &&
+                  this.scene.stackLength !== depthBeforeItem &&
+                  !this.quietRecoverableLogging ) {
+                Logger.error( `Representation item left transform state inside a sliced range expressID: #${item.expressID}` )
+              }
             }
           }
+        } finally {
+
+          this.inTessellatedShapeRepresentation_ = enclosingTessellatedRepresentation
         }
 
         while ( this.scene.stackLength > entryTransformDepth ) {
@@ -5988,6 +7004,32 @@ export class AP214GeometryExtraction {
         if( ( this.scene.stackLength !== entryTransformDepth ||
             this.scene.currentParent !== currentParent ) && !this.quietRecoverableLogging ) {
           Logger.error( `Stack length mismatch after processing shape_representation  ${this.scene.currentParent} ${currentParent} expressID: #${representation.expressID}` )
+        }
+
+        if ( deferredItemsError !== void 0 ) {
+
+          if ( !isUnresolvedReferenceError( deferredItemsError ) ) {
+            throw deferredItemsError
+          }
+
+          // Skipped, not failed: the thunk's children ran, its transform
+          // state is unwound, and the only thing missing is the items this
+          // representation could not type. Returning normally is what makes
+          // the pump's `executed` count say so — the unit did run — and
+          // keeps a data defect out of the generic "Error processing demand
+          // unit" channel, which cannot name the entity.
+          //
+          // The message carries no error text: DanglingReferenceError spells
+          // its missing express ID into its own message, and that message is
+          // Logger's dedup key, so interpolating it would give every skipped
+          // representation an entry of count 1 (see Logger's class doc). The
+          // representation is on the entry instead, where repeats union it.
+          if ( !this.quietRecoverableLogging ) {
+            Logger.error(
+                'Skipping representation items with an unresolved or mistyped STEP reference',
+                representation.expressID,
+                DATA_DEFECT )
+          }
         }
       }
     }
@@ -6136,6 +7178,20 @@ export class AP214GeometryExtraction {
       // orient CDSR assembly edges semantically below.
       const productDefLocalIDByRep = new Map<number, number>()
 
+      // Representation → the PDS itself (conway#597). A plain (non-CDSR)
+      // shape_representation_relationship has no assembly occurrence to key
+      // on — its edge exists to bind a representation with no SDR of its
+      // own (a SolidWorks multibody advanced_brep_shape_representation) to
+      // the SDR-bound representation of the part it belongs to. This is
+      // what resolves that binding back to the part's own PDS, the same
+      // identity a directly-SDR'd part's geometry already carries
+      // (`AP214SceneGeometry.relatedElementLocalId` is documented as always
+      // a product_definition_shape localID) — separate from
+      // productDefLocalIDByRep because that map drills one level further,
+      // past the PDS to the product_definition, which the CDSR orientation
+      // check below needs but this does not.
+      const pdsLocalIDByRep = new Map<number, number>()
+
       for ( const sdr of model.types( shape_definition_representation ) ) {
         try {
           const usedRepresentation = sdr.used_representation
@@ -6146,6 +7202,11 @@ export class AP214GeometryExtraction {
           if ( usedRepresentation?.localID !== void 0 &&
               productDef instanceof product_definition ) {
             productDefLocalIDByRep.set( usedRepresentation.localID, productDef.localID )
+          }
+
+          if ( usedRepresentation?.localID !== void 0 &&
+              definition instanceof product_definition_shape ) {
+            pdsLocalIDByRep.set( usedRepresentation.localID, definition.localID )
           }
         } catch {
           // Malformed SDR reference — the rep just stays un-mapped and the
@@ -6260,14 +7321,117 @@ export class AP214GeometryExtraction {
         }
       }
 
-      const shapeRelationships = [...model.types(shape_representation_relationship)]     
+      const shapeRelationships = [...model.types(shape_representation_relationship)]
+
+      // conway#597: a plain (non-CDSR) shape_representation_relationship
+      // edge used to hand its OWN localID to the geometry it binds, which
+      // surfaces a SHAPE_REPRESENTATION_RELATIONSHIP express id at
+      // selection time instead of the owning part's PDS — Orbiter's own
+      // repro chains two such edges (#857 -> #886 -> #970), so a lookup on
+      // the immediate rep_1/rep_2 alone isn't enough. Build the undirected
+      // graph of these edges (CDSR-consumed ones excluded — those already
+      // carry a correct NAUO-derived identity from the loop above) and walk
+      // it breadth-first from whichever representation this edge starts
+      // from, stopping at the first SDR-bound representation reached.
+      const repAdjacency = new Map<number, number[]>()
+
+      for ( const relationship of shapeRelationships ) {
+
+        if ( shapeRepresentationRelationshipsSeen.has( relationship.localID ) ) {
+          continue
+        }
+
+        try {
+          const rep1LocalID = relationship.rep_1.localID
+          const rep2LocalID = relationship.rep_2.localID
+
+          let forward = repAdjacency.get( rep1LocalID )
+          if ( forward === void 0 ) {
+            forward = []
+            repAdjacency.set( rep1LocalID, forward )
+          }
+          forward.push( rep2LocalID )
+
+          let backward = repAdjacency.get( rep2LocalID )
+          if ( backward === void 0 ) {
+            backward = []
+            repAdjacency.set( rep2LocalID, backward )
+          }
+          backward.push( rep1LocalID )
+        } catch {
+          // Malformed relationship — no edge to add for it.
+        }
+      }
+
+      /**
+       * Resolve the PDS owning a representation, walking plain
+       * shape_representation_relationship edges outward when the
+       * representation has no SDR of its own. Breadth-first, so the
+       * nearest SDR-bound representation wins; if more than one distinct
+       * PDS is reachable at the same nearest distance, the mapping is
+       * genuinely ambiguous and this reports that (via `undefined`) rather
+       * than guessing one of them.
+       *
+       * @param startRepLocalID The representation to resolve from.
+       * @return {number | undefined} The owning PDS's localID, or
+       * `undefined` if none is reachable, or reachable ambiguously.
+       */
+      const resolvePdsLocalID = ( startRepLocalID: number ): number | undefined => {
+
+        const direct = pdsLocalIDByRep.get( startRepLocalID )
+
+        if ( direct !== void 0 ) {
+          return direct
+        }
+
+        const visited = new Set<number>( [ startRepLocalID ] )
+        let frontier = repAdjacency.get( startRepLocalID ) ?? []
+
+        while ( frontier.length > 0 ) {
+
+          const found = new Set<number>()
+          const next: number[] = []
+
+          for ( const repLocalID of frontier ) {
+
+            if ( visited.has( repLocalID ) ) {
+              continue
+            }
+            visited.add( repLocalID )
+
+            const pds = pdsLocalIDByRep.get( repLocalID )
+
+            if ( pds !== void 0 ) {
+              found.add( pds )
+              continue // Resolved on this branch — don't walk past it.
+            }
+
+            for ( const neighbor of repAdjacency.get( repLocalID ) ?? [] ) {
+              if ( !visited.has( neighbor ) ) {
+                next.push( neighbor )
+              }
+            }
+          }
+
+          if ( found.size === 1 ) {
+            return [ ...found ][0]
+          }
+
+          if ( found.size > 1 ) {
+            return void 0 // Ambiguous fan-out at this distance — don't guess.
+          }
+
+          frontier = next
+        }
+
+        return void 0
+      }
 
       for ( const shapeRelationship of shapeRelationships ) {
         if ( shapeRepresentationRelationshipsSeen.has( shapeRelationship.localID ) ) {
           continue
         }
-        const owningLocalID = shapeRelationship.localID
-        shapeRepresentationRelationshipsSeen.add( owningLocalID )
+        shapeRepresentationRelationshipsSeen.add( shapeRelationship.localID )
 
         /* Note, the rep_1 and rep_2 are swapped here compared to the
          * context_dependent_shape_representation case above. This is because
@@ -6279,10 +7443,53 @@ export class AP214GeometryExtraction {
         let targetShape
         let transform
         let isContinue
+        const owningLocalID = shapeRelationship.localID
 
         try {
           sourceShape = shapeRelationship.rep_2
-          targetShape = shapeRelationship.rep_1;
+          targetShape = shapeRelationship.rep_1
+
+          /* An SDR-bound representation is the shape OF a part; a plain
+           * relationship binding it to a representation with no SDR of its own
+           * is that part reaching its own detail geometry, so the SDR-bound
+           * side is the parent whichever way round the exporter wrote the
+           * arguments. BLSN_007 (Rhino 7 / ST-DEVELOPER) writes BOTH: three
+           * edges as (product rep, detail rep) and 308 as (detail rep, product
+           * rep) for the same kind of relation. Read literally, those 308 make
+           * the product's own representation a CHILD of 308 free wireframe
+           * representations, so it becomes 308 walk roots and every solid in
+           * the model is placed 308 times — 698,544 scene nodes for 2,268
+           * bodies, all of them duplicate placements of each other.
+           *
+           * Only reorient a relationship carrying no transformation. A
+           * transformation-bearing one places the child in the parent's frame,
+           * and reversing which side is the parent without evidence about what
+           * the exporter meant would move geometry; there is none of that here
+           * (the 308 are bare relationships), and moving geometry is a much
+           * worse failure than a duplicated placement.
+           *
+           * SINGLE HOP, DELIBERATELY. The test is `pdsLocalIDByRep` on each
+           * side — is THIS representation directly SDR-bound — not the
+           * transitive reachability `resolvePdsLocalID` (defined just above)
+           * computes over repAdjacency. So an inverted chain two or more edges long is left
+           * as written. No file we have exercises that shape (BLSN_007's 308
+           * are all one hop off the product representation), and a guard for
+           * a state nothing can be shown to produce is a speculative defense.
+           * Transitive orientation is also not a drop-in: past one hop BOTH
+           * sides usually reach some PDS, so "which side is SDR-bound" stops
+           * being a decision and becomes a distance comparison with its own
+           * ambiguity rules — the ones resolvePdsLocalID already refuses to
+           * guess at. If a real file ever needs it, that function is the
+           * machinery to build on, and it needs a fixture first.
+           */
+          if ( shapeRelationship.findVariant(
+              representation_relationship_with_transformation ) === void 0 &&
+              pdsLocalIDByRep.has( sourceShape.localID ) &&
+              !pdsLocalIDByRep.has( targetShape.localID ) ) {
+
+            sourceShape = shapeRelationship.rep_1
+            targetShape = shapeRelationship.rep_2
+          }
 
           [transform, isContinue] =
             this.doTransforms(shapeRelationship, sourceShape, targetShape, owningLocalID)
@@ -6294,6 +7501,58 @@ export class AP214GeometryExtraction {
 
         if (isContinue) {
           continue
+        }
+
+        // conway#597: `owningLocalID` above (the relationship's own
+        // localID) is the edge's identity for the walk, but it is NOT an
+        // occurrence-path segment — conway#628 removed that. A plain
+        // relationship binds a part to its own detail representation, so
+        // it names nothing selectable and the product-structure tree has no
+        // node for it; a multibody solid set is disambiguated by each
+        // body's OWN express id as the path's last segment instead (see
+        // makeThunk's child and item loops, and
+        // ap214_occurrence_geometry.test.ts). What conway#597 asks for is
+        // narrower and still stands: the express id a *pick* surfaces
+        // (relatedElementLocalId) should be the owning part's PDS, not the
+        // relationship's. Record that resolution separately, keyed by the
+        // representation whose OWN items (sourceShape's) will be
+        // attributed — makeThunk applies it only to item attribution,
+        // leaving occurrence-path threading untouched.
+        //
+        // Resolved from sourceShape, not targetShape (review finding):
+        // targetShape is only THIS edge's one neighbour, so resolving from
+        // it can never see a second edge into the same source with a
+        // different PDS at the same distance — the exact case the
+        // ambiguity refusal exists for. Resolving from sourceShape walks
+        // repAdjacency's full (already-built) neighbour set for it, so a
+        // source reached by two SDR-bound targets is judged once, together.
+        // Memoised per source so a source reached by several edges is
+        // resolved (and, on ambiguity, warned about) exactly once rather
+        // than once per edge with a later edge silently overwriting an
+        // earlier one's entry.
+        if ( !sourceOwnerResolution.has( sourceShape.localID ) ) {
+
+          const resolvedOwnerLocalID = resolvePdsLocalID( sourceShape.localID )
+
+          sourceOwnerResolution.set( sourceShape.localID, resolvedOwnerLocalID )
+
+          if ( resolvedOwnerLocalID !== void 0 ) {
+            ownerOverrideByRepLocalID.set( sourceShape.localID, resolvedOwnerLocalID )
+          } else {
+            // The express ID goes through Logger.warning's own parameter,
+            // not interpolated into the message: Logger dedups on message
+            // text, so baking a per-source express ID into the string would
+            // make every ambiguous source a distinct "first occurrence" and
+            // defeat that — the same fix as conway#592's placement
+            // diagnostic (this file, getAxis2Placement3D).
+            Logger.warning(
+                'Representation has no SDR-bound representation reachable ' +
+                '(absent, or ambiguously more than one at the same ' +
+                'distance); selection under it will surface a ' +
+                'SHAPE_REPRESENTATION_RELATIONSHIP\'s express id rather ' +
+                'than the owning part\'s.',
+                sourceShape.expressID )
+          }
         }
 
         const sourceID = sourceShape.localID
@@ -6312,14 +7571,14 @@ export class AP214GeometryExtraction {
         sourceNode.rep = sourceShape
         sourceNode.owningLocalID = owningLocalID
 
-        let targetNode = treeMap.get( targetID )       
+        let targetNode = treeMap.get( targetID )
         if ( targetNode === void 0 ) {
           targetNode = { parents: 0, children: [[sourceID, owningLocalID, transform]] }
           treeMap.set( targetID, targetNode )
         } else {
           targetNode.children ??= []
           targetNode.children.push( [sourceID, owningLocalID, transform] )
-        }        
+        }
       }
 
       const shapeDefinitions = model.types( shape_definition_representation )
@@ -6384,10 +7643,18 @@ export class AP214GeometryExtraction {
         }
       }
 
+      // tessellated_shape_representation is named explicitly even though it
+      // extends shape_representation: model.types reads each class's static
+      // `query`, which the generated shape_representation's cannot mention
+      // (test-models#62). Without it a TSR that is only the TARGET of a
+      // shape_representation_relationship — the AP242-correct binding for a
+      // tessellated part, e.g. #25121 in nist_ftc_08...-tg.stp — gets tree
+      // children but never a thunk, so its items are never walked.
       const shapeRepresentations = model.types(
         shape_representation,
         advanced_brep_shape_representation,
-        geometrically_bounded_wireframe_shape_representation)
+        geometrically_bounded_wireframe_shape_representation,
+        tessellated_shape_representation)
 
       for ( const shapeRepresentation of shapeRepresentations ) {
         let treeNode = treeMap.get( shapeRepresentation.localID )
@@ -6401,6 +7668,27 @@ export class AP214GeometryExtraction {
           continue        
         }
 
+        // conway#597's PDS resolution applies to a free root too, and a
+        // tessellated part is the case that needs it: the AP242 binding is a
+        // plain shape_representation_relationship whose rep_1 is the
+        // TESSELLATED_SHAPE_REPRESENTATION and whose rep_2 is the SDR-bound
+        // SHAPE_REPRESENTATION (#25121 in nist_ftc_08...-tg.stp), so the loop
+        // above registers the override for rep_2 — the edge's source — while
+        // the TSR carrying the geometry is the target and stays a free root.
+        // Without this its mesh reports the TSR's own express id instead of
+        // the owning part's PDS, and hangs off no product node in the tree.
+        // Silent on failure by design: a free root that reaches no SDR-bound
+        // representation is the ordinary standalone case, not the ambiguity
+        // the source-side loop warns about.
+        if ( !ownerOverrideByRepLocalID.has( shapeRepresentation.localID ) ) {
+
+          const resolvedOwnerLocalID = resolvePdsLocalID( shapeRepresentation.localID )
+
+          if ( resolvedOwnerLocalID !== void 0 ) {
+            ownerOverrideByRepLocalID.set( shapeRepresentation.localID, resolvedOwnerLocalID )
+          }
+        }
+
         const mappedTreeNode = treeNode
         const owningElementLocalID = shapeRepresentation.localID
         mappedTreeNode.thunk = makeThunk( shapeRepresentation, owningElementLocalID, mappedTreeNode )
@@ -6411,17 +7699,57 @@ export class AP214GeometryExtraction {
       // All thunks are set — capture remaining assembly-tree roots as
       // pending roots in the exact order the whole-model walk executed
       // them.
-      for ( const [sourceID, mappedNode] of treeMap.entries() ) {
+      for ( const mappedNode of treeMap.values() ) {
         if ( ( mappedNode.parents ?? 0 ) === 0 && mappedNode.thunk !== void 0 && mappedNode.processed !== true ) {
 
           let scaleTransform : NativeTransform4x4 | undefined = void 0
 
-          try {
-            const shapeRepresentation = this.model.getTypedElementByLocalID( sourceID, shape_representation )! as shape_representation
-            scaleTransform = this.rootUnitScaleTransform( shapeRepresentation )
-          } catch {
-            // Malformed unit context (prefix truncation) — no unit scale.
-            scaleTransform = void 0
+          // Read the representation off the NODE rather than looking it up
+          // again by local ID. Every `.thunk =` in this walk is paired with
+          // a `.rep =`, and `rep` is the object the edge was built from, so
+          // this is the same record with one hop less work.
+          //
+          // It is also the form that cannot go wrong. The lookup this
+          // replaces was `getTypedElementByLocalID( <this node's local
+          // ID>, shape_representation )!` — a typed lookup for the SUBTYPE,
+          // while a relationship endpoint (`rep_1`/`rep_2`) is declared
+          // `representation`. The `!` meant a refusal would arrive as
+          // `undefined`, `rootUnitScaleTransform` would throw on it, and
+          // the catch below — written for malformed unit contexts — would
+          // absorb it and emit the root in FILE units: a 1000x error on a
+          // millimetre file, silent, on visible geometry.
+          //
+          // That was not reachable, and the change is behaviour-neutral:
+          // measured on as1-assembly, ap214-two-representations-one-unit,
+          // supercap, driver board and Right_Hand, the lookup returned the
+          // same object as `rep` on every root, and a synthetic plain
+          // `REPRESENTATION` root reached this loop zero times. The reason
+          // is the selector: a node needs a `thunk` to get here, the SDR
+          // loop above only gives one to an `instanceof shape_representation`,
+          // and the relationship arms that could supply a non-shape node
+          // set `parents >= 1`, which `parents === 0` excludes. Removing
+          // the assertion keeps that from depending on three separate
+          // invariants holding in one place (conway#606 review, codex
+          // round 1).
+          // The `!== void 0` is TYPE-DRIVEN, not a reachable state: `rep` is
+          // optional on `MappedSceneNode`, so it has to be narrowed, but a
+          // node without one cannot reach here — the selector above requires
+          // a `thunk`, and all four `.thunk =` sites set `.rep =` on the next
+          // line of the same unconditional block. Skipping the scale is the
+          // inert branch, chosen over `!` so that if the pairing is ever
+          // broken the result is an unscaled root rather than a throw into
+          // the catch below, which would report it as a malformed unit
+          // context.
+          const rootRepresentation = mappedNode.rep
+
+          if ( rootRepresentation !== void 0 ) {
+            try {
+              scaleTransform = this.rootUnitScaleTransform( rootRepresentation )
+            } catch {
+              // Malformed unit context (prefix truncation) — no unit scale,
+              // and now the only thing that reaches this catch.
+              scaleTransform = void 0
+            }
           }
 
           pendingRoots.push( { node: mappedNode, scaleTransform } )
@@ -6435,6 +7763,51 @@ export class AP214GeometryExtraction {
       // children-then-items order the thunk body itself walks, so the
       // concatenated units reproduce the whole-model walk exactly.
       const units: ( () => void )[] = []
+
+      // Per unit, a deferred face-count estimate (ap214_demand_unit_cost.ts),
+      // parallel to `units`. Closures rather than numbers so planning stays
+      // as cheap as it was: only the preview channel asks, and only for the
+      // units it is about to consider.
+      const unitCosts: ( () => number )[] = []
+
+      const cost = new AP214DemandUnitCost()
+
+      const subtreeFaceCounts = new Map<MappedSceneNode, number>()
+
+      // Faces under a tree node and everything placed beneath it — the
+      // twin of subtreeItemCount, for a unit that runs a child whole.
+      const subtreeFaces = (
+          node: MappedSceneNode,
+          path: Set<MappedSceneNode> ): number => {
+
+        const memoized = subtreeFaceCounts.get( node )
+
+        if ( memoized !== void 0 ) {
+          return memoized
+        }
+
+        if ( path.has( node ) ) {
+          return 0
+        }
+
+        path.add( node )
+
+        let count = node.rep !== void 0 ? cost.representationFaces( node.rep ) : 0
+
+        for ( const [ childLocalID ] of node.children ?? [] ) {
+
+          const child = treeMap.get( childLocalID )
+
+          if ( child !== void 0 ) {
+            count += subtreeFaces( child, path )
+          }
+        }
+
+        path.delete( node )
+        subtreeFaceCounts.set( node, count )
+
+        return count
+      }
 
       // Recursive item count per tree node — the cost proxy that decides
       // whether descending into a child buys any granularity at all.
@@ -6514,7 +7887,7 @@ export class AP214GeometryExtraction {
       const expandUnits = (
           node: MappedSceneNode,
           path: Set<MappedSceneNode>,
-          wrap: ( slice: ThunkSlice ) => void ): void => {
+          wrap: ( slice: ThunkSlice, faces: () => number ) => void ): void => {
 
         const childCount = node.children?.length ?? 0
 
@@ -6536,7 +7909,10 @@ export class AP214GeometryExtraction {
               this.demandItemsPerUnit
 
           if ( !descend ) {
-            wrap( { childStart: child, childEnd: child + 1, includeItems: false } )
+            wrap(
+                { childStart: child, childEnd: child + 1, includeItems: false },
+                () => childNode !== void 0 ?
+                  subtreeFaces( childNode, new Set<MappedSceneNode>() ) : 0 )
             continue
           }
 
@@ -6544,7 +7920,7 @@ export class AP214GeometryExtraction {
 
           path.add( descendant )
 
-          expandUnits( descendant, path, ( childSlice ) => {
+          expandUnits( descendant, path, ( childSlice, faces ) => {
 
             const childThunk = makeThunk(
                 descendant.rep!, descendant.owningLocalID, descendant, childSlice )
@@ -6554,7 +7930,7 @@ export class AP214GeometryExtraction {
               childEnd: child + 1,
               includeItems: false,
               childThunk,
-            } )
+            }, faces )
           } )
 
           path.delete( descendant )
@@ -6562,13 +7938,20 @@ export class AP214GeometryExtraction {
 
         const itemRanges = node.rep !== void 0 ? itemUnitRanges( node.rep ) : void 0
 
+        const rep = node.rep
+
         if ( itemRanges === void 0 ) {
-          wrap( { childStart: 0, childEnd: 0, includeItems: true } )
+          wrap(
+              { childStart: 0, childEnd: 0, includeItems: true },
+              () => rep !== void 0 ? cost.representationFaces( rep ) : 0 )
           return
         }
 
         for ( const range of itemRanges ) {
-          wrap( { childStart: 0, childEnd: 0, includeItems: true, ...range } )
+          wrap(
+              { childStart: 0, childEnd: 0, includeItems: true, ...range },
+              () => rep !== void 0 ?
+                cost.representationFaces( rep, range.itemStart, range.itemEnd ) : 0 )
         }
       }
 
@@ -6580,20 +7963,60 @@ export class AP214GeometryExtraction {
 
         if ( rep === void 0 ) {
           units.push( () => node.thunk!( void 0, scaleTransform ) )
+          unitCosts.push( () => subtreeFaces( node, new Set<MappedSceneNode>() ) )
           continue
         }
 
-        expandUnits( node, new Set<MappedSceneNode>( [ node ] ), ( slice ) => {
+        expandUnits( node, new Set<MappedSceneNode>( [ node ] ), ( slice, faces ) => {
 
           const sliced = makeThunk( rep, node.owningLocalID, node, slice )
 
           units.push( () => sliced( void 0, scaleTransform ) )
+          unitCosts.push( faces )
         } )
       }
 
+      // The extent table's membership walk, here rather than on the first
+      // face (conway#773): it is preparation, every advanced face's
+      // tessellation reads it, and paid inside a unit it is a cost no
+      // per-unit estimate can see. Representations are still descended
+      // lazily, per first face. Only advanced faces read the table
+      // (extractAdvancedFace), so a model with none — a faceted export —
+      // skips the walk here, as it always has; the type index answers that
+      // without materializing a face. A preview prefix generation
+      // (eagerExtentWalk false) leaves it to the first face; see that flag.
+      //
+      // BEFORE the unit list is published, not after: `demandUnits_` being
+      // set is what tells prepareDemandExtraction the plan is done, so a
+      // walk that threw after it would latch the failure once and then let
+      // every later call run the plan anyway (codex on #774).
+      if ( this.eagerExtentWalk && model.typeCount( advanced_face ) > 0 ) {
+        this.collectRepresentationExtents()
+      }
+
       this.demandUnits_ = units
+      this.demandUnitCosts_ = unitCosts
     }
   }
+
+  /**
+   * Whether {@link prepareDemandExtraction} walks the extent table's
+   * membership up front (true, the durable extraction) or leaves it to the
+   * first advanced face that asks (false).
+   *
+   * False for the parse-time preview channel's throwaway prefix generations
+   * (ap214PreviewAdapter). Each of those builds its own plan over a longer
+   * prefix, about ten per parse, and the channel's cost gate passes over most
+   * of their units, so a walk in every plan was paid for faces no unit ever
+   * tessellated. Measured in Share's worker path after conway#774 moved the
+   * walk into the plan: DSA2's Parsing 3.24 -> 3.46 s and Arty_Z7's
+   * 1.62 -> 1.77 s (n=3 medians), with previews on and none on screen. A
+   * prefix generation that does run a unit pays the walk then, as it did
+   * before #774, and over its own prefix.
+   *
+   * Set before preparation.
+   */
+  public eagerExtentWalk = true
 
   /**
    * Items one demand unit carries, and equivalently the subtree size a
@@ -6610,8 +8033,22 @@ export class AP214GeometryExtraction {
   // Ordered pending execution units built by prepareDemandExtraction;
   // demandCursor_ tracks how many have run (the pump's progress).
   private demandUnits_?: ( () => void )[]
+  private demandUnitCosts_?: ( () => number )[]
+  private readonly demandUnitFaces_ = new Map<number, number>()
   private demandCursor_ = 0
   private demandMemoizationRestore_?: boolean
+
+  /**
+   * True once {@link prepareDemandExtraction} has run — the IFC
+   * extraction's getter of the same name, so a proxy can ask either format
+   * the same question (conway#748). Before it, {@link demandUnitCount} is 0
+   * because nothing has been planned, not because nothing is left.
+   *
+   * @return {boolean} Whether the units have been built.
+   */
+  public get isDemandExtractionPrepared(): boolean {
+    return this.demandUnits_ !== void 0
+  }
 
   /**
    * Total demand units (see prepareDemandExtraction).
@@ -6620,6 +8057,43 @@ export class AP214GeometryExtraction {
    */
   public get demandUnitCount(): number {
     return this.demandUnits_?.length ?? 0
+  }
+
+  /**
+   * Estimated faces under one demand unit (see AP214DemandUnitCost): what
+   * the parse-time preview channel weighs before running a unit it cannot
+   * preempt. Computed on first ask and memoized; reads record bytes only,
+   * so it never runs the unit or materializes its faces.
+   *
+   * @param ordinal The unit's ordinal.
+   * @return {number | undefined} The estimate, or undefined before
+   * preparation or past the unit list.
+   */
+  public demandUnitFaceEstimate( ordinal: number ): number | undefined {
+
+    const costs = this.demandUnitCosts_
+
+    if ( costs === void 0 || ordinal < 0 || ordinal >= costs.length ) {
+      return void 0
+    }
+
+    let faces = this.demandUnitFaces_.get( ordinal )
+
+    // A unit the cursor has passed has had its cost closure released
+    // (retireDemandUnits_), so an estimate first asked after that has
+    // nothing to compute from. The preview channel, the only caller,
+    // estimates a unit before it runs it, so the memo answers the one
+    // after-the-fact ask it makes (learnUnitCost_).
+    if ( faces === void 0 && ordinal < this.demandCursor_ ) {
+      return void 0
+    }
+
+    if ( faces === void 0 ) {
+      faces = costs[ ordinal ]()
+      this.demandUnitFaces_.set( ordinal, faces )
+    }
+
+    return faces
   }
 
   /**
@@ -6646,7 +8120,45 @@ export class AP214GeometryExtraction {
       return
     }
 
+    const from = this.demandCursor_
+
     this.demandCursor_ = Math.min( this.demandCursor_ + Math.max( count, 0 ), units.length )
+
+    this.retireDemandUnits_( from, this.demandCursor_ )
+  }
+
+  /**
+   * Release the closures of units the cursor has passed. Nothing runs a
+   * unit twice — the cursor only moves forward — but each closure captures
+   * the entities its plan walked (the representation, its items, the
+   * scene nodes under them), and every one of those keeps its descriptor
+   * and so its descriptor's view of the source. Held for the model's life,
+   * they kept a buffered open's whole source alive after
+   * `spillSourceToExternalStore` (bldrs-ai/Share#2139); its
+   * `invalidate(true)` drops only the model's own descriptor cache.
+   *
+   * Units the cursor has not reached keep their closures, so a spill
+   * mid-pump leaves them reading the entities they planned over until they
+   * run — through the views those entities already hold, the bytes the
+   * index was built from and the same ones the store holds, or, for a
+   * record one of them had not read yet, through the store
+   * (StepEntityBase.guaranteeVTable) — and the source goes once the pump
+   * drains.
+   *
+   * @param from First ordinal to retire.
+   * @param to One past the last.
+   */
+  private retireDemandUnits_( from: number, to: number ): void {
+
+    // Both are published together (prepareDemandExtraction), and only the
+    // two callers, which have already checked for a plan, reach here.
+    const units = this.demandUnits_!
+    const costs = this.demandUnitCosts_!
+
+    for ( let ordinal = from; ordinal < to; ++ordinal ) {
+      units[ ordinal ] = RETIRED_DEMAND_UNIT
+      costs[ ordinal ] = RETIRED_DEMAND_UNIT_COST
+    }
   }
 
   /**
@@ -6684,6 +8196,7 @@ export class AP214GeometryExtraction {
 
     const end = Math.min( this.demandCursor_ + Math.max( count, 1 ), units.length )
     const deadline = budgetMs !== void 0 ? Date.now() + budgetMs : void 0
+    const from = this.demandCursor_
     let executed = 0
 
     for ( ; this.demandCursor_ < end; ++this.demandCursor_ ) {
@@ -6722,6 +8235,10 @@ export class AP214GeometryExtraction {
         }
       }
     }
+
+    // The units the loop passed — run, thrown, or the last one before the
+    // deadline — are done with.
+    this.retireDemandUnits_( from, this.demandCursor_ )
 
     // Deferred face tessellation must land before geometry is read.
     this.finalizeStagedFaces()

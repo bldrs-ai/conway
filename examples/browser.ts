@@ -11,6 +11,7 @@ import ParsingBuffer from '../src/parsing/parsing_buffer'
 import { ParseResult } from '../src/step/parsing/step_parser'
 import StepEntityBase from '../src/step/step_entity_base'
 import Environment from '../src/utilities/environment'
+import { Ifc4x3IneligibleError } from '../src/ifc/ifc4x3_ifc4_compat'
 
 
 /**
@@ -53,8 +54,25 @@ const bufferInput = new ParsingBuffer(indexIfcBuffer)
 // eslint-disable-next-line no-unused-vars
 const [stepHeader, resultHeader] = parser.parseHeader(bufferInput)
 
-// Parse main data
-const [parseResult, model] = parser.parseDataToModel(bufferInput)
+// An IFC4X3 header takes the IFC4-compatible route (ifc4x3_ifc4_compat.ts)
+// inside parseDataToModelForHeader; an ineligible file is refused there with
+// Ifc4x3IneligibleError. This shipped `browser` bin parses directly via
+// `IfcStepParser`, bypassing the streaming-open surface, so the refusal is
+// handled here (codex review of bldrs-ai/conway#713, P1, round 5 audit of the
+// package's public surface).
+let parsed: ReturnType<typeof parser.parseDataToModelForHeader>
+
+try {
+  parsed = parser.parseDataToModelForHeader(stepHeader, bufferInput)
+} catch (error) {
+  if (!(error instanceof Ifc4x3IneligibleError)) {
+    throw error
+  }
+  Logger.error(error.message)
+  process.exit(1)
+}
+
+const [parseResult, model] = parsed
 
 // Check parse result
 switch (parseResult) {

@@ -1,0 +1,72 @@
+ISO-10303-21;
+HEADER;
+FILE_DESCRIPTION(('AP242 tessellated solid test fixture'),'2;1');
+FILE_NAME('ap242-tessellated-solid','2026-01-01T00:00:00',('test'),('bldrs'),'','','');
+FILE_SCHEMA(('AP242_MANAGED_MODEL_BASED_3D_ENGINEERING_MIM_LF { 1 0 10303 442 1 1 4 }'));
+ENDSEC;
+DATA;
+#1 = APPLICATION_PROTOCOL_DEFINITION('international standard','automotive_design',2010,#2);
+#2 = APPLICATION_CONTEXT('mechanical design');
+#10 = CARTESIAN_POINT('',(0.,0.,0.));
+#20 = DIRECTION('',(0.,0.,1.));
+#21 = DIRECTION('',(1.,0.,0.));
+#30 = AXIS2_PLACEMENT_3D('',#10,#20,#21);
+#100 = ( GEOMETRIC_REPRESENTATION_CONTEXT(3) GLOBAL_UNCERTAINTY_ASSIGNED_CONTEXT((#104)) GLOBAL_UNIT_ASSIGNED_CONTEXT((#101,#102,#103)) REPRESENTATION_CONTEXT('Context','3D') );
+#101 = ( LENGTH_UNIT() NAMED_UNIT(*) SI_UNIT(.MILLI.,.METRE.) );
+#102 = ( NAMED_UNIT(*) PLANE_ANGLE_UNIT() SI_UNIT($,.RADIAN.) );
+#103 = ( NAMED_UNIT(*) SI_UNIT($,.STERADIAN.) SOLID_ANGLE_UNIT() );
+#104 = UNCERTAINTY_MEASURE_WITH_UNIT(LENGTH_MEASURE(1.E-07),#101,'','');
+#201 = PRODUCT_CONTEXT('',#2,'mechanical');
+#202 = PRODUCT_DEFINITION_CONTEXT('part definition',#2,'design');
+#210 = PRODUCT('tessellated part','tessellated part','',(#201));
+#211 = PRODUCT_DEFINITION_FORMATION('','',#210);
+#212 = PRODUCT_DEFINITION('design','',#211,#202);
+#213 = PRODUCT_DEFINITION_SHAPE('','',#212);
+
+/* The AP242-correct binding: the SDR names the ordinary SHAPE_REPRESENTATION,
+   and a plain SHAPE_REPRESENTATION_RELATIONSHIP (#541) ties the tessellated
+   representation to it, TSR as rep_1 / SR as rep_2. */
+#400 = SHAPE_REPRESENTATION('tessellated part',(#30),#100);
+#401 = SHAPE_DEFINITION_REPRESENTATION(#213,#400);
+
+/* Eight coordinates, deliberately NOT in face order, so a face's pnindex is a
+   real indirection rather than the identity. Two unit squares:
+   z=0 (p1..p4, slots 6,2,4,7) and z=1 (q1..q4, slots 3,8,5,1). */
+#500 = COORDINATES_LIST('',8,((0.,1.,1.),(1.,0.,0.),(0.,0.,1.),(0.,1.,0.),
+  (1.,1.,1.),(0.,0.,0.),(1.,1.,0.),(1.,0.,1.)));
+#510 = PLANE('',#30);
+
+/* Strip face, per-vertex normals, geometric_link PRESENT (slot 4). The strip
+   (1,2,3,4) is two triangles that only agree with the declared +Z normals
+   under ALTERNATING winding: (1,2,3) then (3,2,4), not (2,3,4). */
+#520 = COMPLEX_TRIANGULATED_FACE('strip face',#500,4,
+  ((0.,0.,1.),(0.,0.,1.),(0.,0.,1.),(0.,0.,1.)),#510,(6,2,4,7),((1,2,3,4)),());
+
+/* Fan face, ONE normal for the whole face, geometric_link ABSENT ($) — the
+   pair with #520 pins slot 4 whether or not it is populated. */
+#521 = COMPLEX_TRIANGULATED_FACE('fan face',#500,4,((0.,0.,1.)),$,(3,8,5,1),(),
+  ((1,2,3,4)));
+
+#530 = TESSELLATED_SOLID('Body',(#520,#521),$);
+#540 = TESSELLATED_SHAPE_REPRESENTATION('tessellated part',(#530),#100);
+#541 = SHAPE_REPRESENTATION_RELATIONSHIP('','',#540,#400);
+
+/* Decoy 1 — the 'shape for associated data' idiom: a second, plain
+   SHAPE_REPRESENTATION holding the SAME solid, hung off a SHAPE_ASPECT. It
+   must not render, or the mesh is placed twice. */
+#600 = SHAPE_ASPECT('','',#213,.T.);
+#601 = PROPERTY_DEFINITION('','shape for associated data',#600);
+#602 = SHAPE_REPRESENTATION('',(#530),#100);
+#603 = SHAPE_DEFINITION_REPRESENTATION(#601,#602);
+
+/* Decoy 2 — the 'pmi validation property' idiom seen in ctc_04 / ftc_07 /
+   stc_06 / stc_08: a TESSELLATED_SHAPE_REPRESENTATION whose only item is a
+   bare COORDINATES_LIST. Gating on the TSR alone would render a stray 10mm
+   tetrahedron here. */
+#700 = COORDINATES_LIST('saved view world coordinates',4,((0.,0.,0.),
+  (10.,0.,0.),(0.,10.,0.),(0.,0.,10.)));
+#701 = TESSELLATED_SHAPE_REPRESENTATION('pmi validation',(#700),#100);
+#702 = PROPERTY_DEFINITION('pmi validation property','',#213);
+#703 = PROPERTY_DEFINITION_REPRESENTATION(#702,#701);
+ENDSEC;
+END-ISO-10303-21;

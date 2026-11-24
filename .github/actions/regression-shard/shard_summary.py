@@ -203,7 +203,7 @@ def main() -> None:
     parser.add_argument('--out', required=True)
     args = parser.parse_args()
 
-    corpus, names = parse_shard(args.shard_file)
+    corpus, names = parse_shard(args.shard_file, args.root)
     root = Path(args.root)
     scope = set(names)
 

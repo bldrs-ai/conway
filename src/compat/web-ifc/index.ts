@@ -31,12 +31,23 @@ export {
 // by the conway CLI and Share's status-bar/console output alike — see
 // Share design/new/load-log-format.md.
 export {
+  DemandPrepYieldLike,
   LoadLogAccumulator,
   ModelInfo,
   ProgressEventLike,
   formatBar,
+  formatDemandPrepLine,
   formatMb,
   formatModelLine,
   formatSeconds,
   stageLabel,
 } from '../../core/progress_log'
+
+// Conway extension (conway#757): what a store-backed open needs of its
+// store, per format — the table the factory's store opens and an
+// embedder's "hand the engine a store, or bytes?" decision both read.
+export {
+  StoreOpenRequirement,
+  storeOpenRequirement,
+  storeOpenRequirementOf,
+} from './store_open_support'

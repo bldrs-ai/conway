@@ -6,26 +6,63 @@ consumed by [Share](https://github.com/bldrs-ai/Share).
 
 ## Build and test
 
-Do not try and run `yarn setup` again **in the container's main clone** —
-it has already been run there by the environment setup. A **worktree you
-create yourself inherits none of that state**, so it needs setup run in
-it: `yarn submodule-update && yarn extract-wasm-dependencies` at minimum,
-or `yarn setup` if you want a full build. The symptom is
-`yarn build-codex-MT` failing on missing `glm` / `tinynurbs` (nested
-submodules under `dependencies/conway-geom/external/`, which is why the
-init is `--recursive`) or on the unextracted
-`dependencies/conway-geom/dependencies/wasm/dependencies.zip`. Two agents
-have read the "already been run" sentence in a worktree and hand-rolled
-those steps as if they were undocumented; they are not, they are `setup`'s
-own named pieces.
+Use `yarn setup` as the common entry point in local development, CI and
+cloud environments. It is safe to repeat in an existing checkout: dependency
+installation uses the frozen lockfile, submodules stay at their recorded
+revisions, TypeScript builds incrementally, and populated WASM is reused.
+Setup ends with compiled-output and WASM freshness checks; a mismatched
+geometry revision fails with instructions to rebuild. These are readiness
+checks, not a substitute for `yarn test` after code changes.
 
-To build, run `yarn build-codex-MT`. To test, run `yarn test`. If only
+Do not assume setup has already run based on the checkout's location.
+Missing `glm` / `tinynurbs` or `dependencies/wasm/dependencies.zip` means
+the setup prerequisites are incomplete; use the same entry point rather
+than hand-rolling its steps. Cloud tasks already have isolated checkouts;
+use those rather than creating a worktree for setup.
+
+Fresh WASM installs default to the latest green published release. Repeated
+setup reuses the installed bundle so it stays fast and preserves native
+builds. To explicitly refresh, run `yarn wasm-prebuilt --force`, then
+`yarn check-wasm-fresh`. To select a particular release, run
+`CONWAY_PREBUILT_WASM_VERSION=<version> yarn wasm-prebuilt --force`, then
+the same freshness check. A pin does not override compatibility with the
+checked-out conway-geom revision.
+
+To build, run `yarn build-codex-node`. To test, run `yarn test`. If only
 making changes to the TypeScript code in conway, you can run `yarn
 build-incremental`. If making changes to conway-geom, you need to run a
-full `yarn build-codex-MT`.
+full `yarn build-codex-node`. It builds both the single-thread variant
+(`ConwayGeomWasmNode`, which Jest loads) and `ConwayGeomWasmNodeMT` (which
+the CLI, regression runs and benchmarks load); `yarn build-codex-MT` builds
+only the second, so after it Jest would still be running the previous
+single-thread engine.
 
 Run `chmod +x` on `scripts/build-codex.sh` before trying to call `yarn
-build-codex-MT`.
+build-codex-node`.
+
+`yarn test` runs Jest on the **single-thread** wasm
+(`ConwayGeomWasmNode.js`): `jest.single-thread.setup.js` sets
+`FORCE_SINGLE_THREAD=true` inside each test context. The MT build spawns
+a pthread pool on every `initialize()` and never terminates it, so the full
+suite with coverage grew past the machine's memory (#724; real fix in #726).
+Everything outside Jest, the CLI, regression, Tier A goldens and every
+benchmark, still loads NodeMT, and `src/scripts/jest_wasm_thread_mode.test.ts`
+pins both halves. To run the suite on MT anyway:
+`FORCE_SINGLE_THREAD=false yarn test`. Because Jest loads the Node variant,
+`yarn check-wasm-fresh` (run by `precommit`) checks both `ConwayGeomWasmNode`
+and `ConwayGeomWasmNodeMT` and reports the worse of the two, naming Jest for a
+stale Node and the CLI/probes/benchmarks for a stale NodeMT (both if both). An
+absent target is not skipped: after `yarn build-MT` / `build-node-MT` (which
+`clean` Dist and restore only NodeMT) the unscoped check reports `missing`
+for `ConwayGeomWasmNode.js` (nonfatal, like a wholly empty Dist; `stale`
+outranks it), never `ok`, because the next `yarn test` could not import it.
+`yarn wasm-prebuilt` likewise skips only when BOTH `ConwayGeomWasmNode.js`
+and `ConwayGeomWasmNodeMT.js` are present, so it repopulates a Dist that
+holds just one (it replaces the whole Dist with the last published bundle).
+The debug probes (`scripts/debug/wasmFreshness.mjs`) gate on NodeMT alone via
+`inspect({targets: [GATED_TARGET]})`, so a stale Node, which only Jest loads, does not
+make them exit 3 after a NodeMT-only `build-codex-MT`. CI builds all
+four variants (`yarn build-GHA-all`), so it always tests a fresh Node.
 
 `yarn precommit` — what the husky hook runs — rebuilds before it lints and
 tests, and that ordering is load-bearing rather than tidy. Jest runs over
@@ -48,7 +85,7 @@ regression and visual-diff jobs are draft-gated here, on a draft PR that
 means the flip to ready. To force the gate on one, `git commit --amend
 --no-edit` — that is a `git commit`, so `pre-commit` fires.
 
-`yarn build-codex-MT` takes roughly 90 seconds. When iterating on
+`yarn build-codex-node` takes roughly three minutes (two variants, about 90 s each). When iterating on
 conway-geom, stage a set of edits and evaluate them in one build rather
 than rebuilding per edit.
 
@@ -333,12 +370,18 @@ Check `scripts/` before building tooling — see
 | CI tiering, cost rationale, rc/re-bless/LFS runbook | [design/new/ci-regression-cost.md](design/new/ci-regression-cost.md) |
 | STEP support: schemas, coverage, known gaps | [design/new/step-support.md](design/new/step-support.md) |
 | STEP product structure and metadata (the AP242 wrinkle, NIST) | [design/new/step-metadata-nist.md](design/new/step-metadata-nist.md) |
+| Side-by-side against SMLib (NVIDIA's open NURBS kernel, via `@classcad/smlibwasm`) and OCCT: scale wall, area/bbox fidelity, G2/G3 blend round trip, and whether SMLib can replace the borrowed OCCT ground truth — plan, graded predictions and first-run results: SMLib-JS's two size walls (V8 string limit, 4 GiB wasm32 heap reported as a geometry error), conway's RAM wall at ~12–13× file size, and the conway/SMLib reader defects the run found. Harness in `scripts/kernel_compare/` | [design/new/kernel-compare-smlib.md](design/new/kernel-compare-smlib.md) |
+| Why a STEP click selects the wrong thing (or everything): what an occurrence path is made of, the one decision the tree and the scene must agree on, and the inverted-relationship shape that re-places a whole model once per free representation | [design/new/step-nonproduct-semantics.md](design/new/step-nonproduct-semantics.md) |
 | Native GLB export from the CLI | [design/new/glb-native-export.md](design/new/glb-native-export.md) |
 | What the perf bench measures and why: peak vs retention, the three distinct native quantities, why `heapUsed + external` is not a stand-in for RSS, GC settling, the two-pass gc A/B the rc job runs and why a between-run comparison is invalid, and the rule for changing recorded fields | [design/new/perf-measurement.md](design/new/perf-measurement.md) |
 | Memory residency, streaming and federated loading | [design/new/memory-residency.md](design/new/memory-residency.md), [design/new/streaming-federated-loader.md](design/new/streaming-federated-loader.md) |
 | What a load is actually made of, and what parallelising it can and cannot buy: the measured phase decomposition (PSB/D3D/MB-Khaya), why the parse→geometry barrier is essential, the byte-identical sharded index build, and why #616's aggregate pager outranks all of it on D3D-shaped models | [design/new/parallel-load-pipeline.md](design/new/parallel-load-pipeline.md) |
+| Was the M3 complexity worth it, and what to build next: the first production D3D load (geometry 90% / parse 8%), the added-lines vs shipped-gain ledger, why parse parallelism caps at 1.09× on D3D-shaped models, the peak-heap wall at 9.8× file size that decides whether a 2–3 GB model opens at all, and what that peak is made of — JS/wasm split, the 1.2 GB of V8 objects attributed by allocation site and by clear-and-collect, and why a heap snapshot cannot be taken at that size | [design/new/load-performance-ledger.md](design/new/load-performance-ledger.md) |
+| How to measure browser memory on a real load — the `--enable-precise-memory-info` latch that makes every heap number a lie, why a heap snapshot OOMs above a few hundred MB, the two instruments that do work (sampling profiler for allocation site, `queryObjects` + `.clear()` for causal retention), and how to split V8 / ArrayBuffer / wasm / RSS | [design/new/browser-memory-analysis.md](design/new/browser-memory-analysis.md) |
 | emsdk version, wasm build environment | [design/new/web-build-environment.md](design/new/web-build-environment.md), [design/new/emsdk-upgrade-scalable-allocator.md](design/new/emsdk-upgrade-scalable-allocator.md) |
 | Where a model lands in world space: `COORDINATE_TO_ORIGIN`, why the recentre snaps to a grid, why two exports of one object used to land 76m apart, what a frame change costs in re-blessing and saved cameras | [design/new/coordination-frame.md](design/new/coordination-frame.md) |
+| Which memory machinery (scratch arena, geometry budget/residency, adaptive source-window residency) actually covers which geometry path — audited matrix for STEP and IFC, corrected site counts, the stated policy for new tessellation entry points, and D3D's measured per-path allocation profile in absolute counts (CSG composition 43.2 M allocator calls; the path conway#637 item 3 named, 2,464) | [design/new/geometry-memory-coverage.md](design/new/geometry-memory-coverage.md) |
+| What the AFTP allocation instrument can and cannot answer, and why every byte figure it once printed was retracted — allocation ownership, the `died`/`escaped` lifetime split that makes arena sizing answerable, the load-wide denominator, the report's columns and its five identities, the two `unowned` states and their opposite remedies, and the per-retraction now-measurable verdicts. **Read before quoting any byte or share number from it**: the denominator is not reproducible on small models, `escaped` does not mean "output", and D3D has not been re-run since the instrument gained any of this | [design/new/geometry-memory-coverage.md](design/new/geometry-memory-coverage.md) §"Verdict on each named retraction" onward |
 
 Add a row here when you write a doc future assistants should find — this
 table is the index, not the filesystem.

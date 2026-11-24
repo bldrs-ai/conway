@@ -128,10 +128,15 @@ describe( 'openStreamedIfcModel (Phase B3)', () => {
 
     const restored = deserializeIndexSidecarToColumns<number>( sidecar )
 
-    expect( sidecarMatchesSource(
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        restored as any, bytes.byteLength, hash ) ).toBe( true )
-    expect( restored.columns.count ).toBe( open.columns.firstInlineElement )
+    // No cast: the columns decode satisfies SidecarSourceIdentity directly
+    // (conway#541 — the repo used to go through `restored as any` here).
+    expect( sidecarMatchesSource( restored, bytes.byteLength, hash ) ).toBe( true )
+
+    // v2 carries the WHOLE index, so this is `count`, not
+    // `firstInlineElement` — and index.ifc has an inline range, so the two
+    // differ and this assertion is not the same one twice.
+    expect( restored.columns.count ).toBe( open.columns.count )
+    expect( open.columns.count ).toBeGreaterThan( open.columns.firstInlineElement )
   } )
 
   test( 'rejects a store whose length disagrees with the source', () => {
@@ -235,6 +240,48 @@ describe( 'openStreamedIfcModel (Phase B3)', () => {
       if ( refLocalID !== void 0 ) {
         expect( visited.has( refLocalID ) ).toBe( true )
       }
+    }
+  } )
+
+  // Share#2139: a walk over records that are already resident takes the
+  // provider's synchronous hit path, never one async ensure per record (that
+  // was 14.1 M async ensures for 851 store reads on a 309 MB IFC2X3 model),
+  // and visits exactly what the async walk visited.
+  test( 'ensureResidentClosureByLocalID over a resident closure issues no async ensures', async () => {
+
+    const store = new InMemoryStepByteStore( bytes )
+    const fromStore = await openStreamedIfcModelFromStore( store, { pool: 4 * 1024 } )
+    const model = fromStore.model!
+    const expressID = [ ...model.expressIDsOfTypes( IfcRoot ) ][ 0 ] as number
+    const localID = model.resolveExpressID( expressID ) as number
+
+    const first = await model.ensureResidentClosureByLocalID( localID )
+
+    expect( first.size ).toBeGreaterThan( 1 )
+
+    model.unpinLocalIDs( first )
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const provider = ( model as any ).bufferProvider_
+    const ensureResident = provider.ensureResident
+    let ensures = 0
+    let second = new Set< number >()
+
+    provider.ensureResident = ( ...args: [number, number] ) => {
+      ++ensures
+      return ensureResident.apply( provider, args )
+    }
+
+    try {
+
+      second = await model.ensureResidentClosureByLocalID( localID )
+
+      expect( [ ...second ].sort( ( a, b ) => a - b ) )
+          .toEqual( [ ...first ].sort( ( a, b ) => a - b ) )
+      expect( ensures ).toBe( 0 )
+    } finally {
+      provider.ensureResident = ensureResident
+      model.unpinLocalIDs( second )
     }
   } )
 

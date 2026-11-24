@@ -151,18 +151,27 @@ jobs:
           curl -fsSL -o /tmp/actionlint.tar.gz \
             "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
           tar -xzf /tmp/actionlint.tar.gz -C /tmp actionlint
-          # shellcheck and pyflakes integrations OFF, deliberately.
+          # shellcheck and pyflakes integrations OFF, deliberately:
           # actionlint shells out to whatever shellcheck the runner image
-          # ships, which nothing here pins - so a new shellcheck release
-          # can redden an unrelated PR, which is the exact failure the
-          # pinned ACTIONLINT_VERSION exists to prevent (pinning
-          # actionlint does not pin shellcheck). It already differs from
-          # a local 0.10.0: CI reported SC2013 against `for f in
-          # data/*.ifc`, a glob rather than the command substitution that
-          # check is about. A gate has to be deterministic, and the
-          # defect class this step is here for - duplicate keys, bad
-          # `needs`, unknown contexts, malformed expressions - is all
-          # actionlint's own, pinned, schema-driven checking.
+          # ships, which nothing here pins, so a new shellcheck release
+          # can redden an unrelated PR - the exact failure the pinned
+          # ACTIONLINT_VERSION prevents for actionlint itself, which
+          # pinning actionlint does not extend to shellcheck. A gate has
+          # to be deterministic. What remains is actionlint's own pinned,
+          # schema-driven checking, which is the defect class this step
+          # exists for: duplicate keys, bad `needs`, unknown contexts,
+          # malformed expressions.
+          #
+          # Correcting the record, since this step was first added with a
+          # wrong reason attached: the SC2013 that CI reported here was
+          # NOT a version-skew false positive. CI lints the pull_request
+          # MERGE ref, and #718 had already landed, so the merged tree
+          # contained main's `for listed in $(grep ...)` in the Tier A
+          # step - a real SC2013 that this branch alone did not have.
+          # Running shellcheck against the unmerged branch could not see
+          # it. The integration still stays off for the pinning reason
+          # above, but turning it back on would mean fixing that line,
+          # not arguing about versions.
           /tmp/actionlint -shellcheck= -pyflakes= -color
 
       - name: Validate regression shard lists
@@ -291,16 +300,66 @@ jobs:
           shopt -s nullglob
           status=0
           count=0
+          refused=0
           # Cover every in-repo quick-check model; deriving the list from
           # data/*.ifc (vs a hard-coded set) means a newly added model is gated
           # as soon as its golden is committed, with no edit here.
           for f in data/*.ifc; do
             count=$((count + 1))
             m=$(basename "$f" .ifc)
-            node --experimental-specifier-resolution=node \
-              ./compiled/src/ifc/ifc_regression_main.js -d "$f" "$OUT/$m"
+            # IFC4X3 fixtures come in two kinds (bldrs-ai/conway#280). One kind
+            # is eligible for the IFC4-compatible route (src/ifc/ifc4x3_ifc4_compat.ts),
+            # produces a digest, and is gated below like any other model. The
+            # other must be REFUSED: those are listed in
+            # data/ifc4x3_expected_refusals.txt and asserted refused here (no
+            # digest, output naming IFC4X3, non-zero exit). They are asserted
+            # rather than excluded, which keeps this loop's "derive the list
+            # from data/*.ifc" property and gives the regression binary's
+            # refusal its only end-to-end coverage; a silent skip would let it
+            # rot unnoticed.
+            # Output is captured to a file and echoed, rather than teed through
+            # process substitution: the grep below reads this log, and a tee
+            # subshell is not guaranteed to have flushed by then.
+            log="$OUT/$m.log"
+            # Captured via if/else (not `|| true` on the command itself) so
+            # `rc` holds the CHILD's real exit status rather than `true`'s: a
+            # bare `cmd || true` under this step's `-e` shell discards `cmd`'s
+            # status entirely, which is exactly the gap that let the 4X3
+            # refusal below regress to exiting 0 while this assertion kept
+            # passing (codex review of bldrs-ai/conway#713, P2 -- the
+            # `exit()`-with-no-argument defect e5696915 fixed for the gate
+            # itself, reintroduced one layer up in this assertion). The
+            # if/else still keeps `|| true`'s purpose: a non-zero child exit
+            # here must not abort the step.
+            if node --experimental-specifier-resolution=node \
+              ./compiled/src/ifc/ifc_regression_main.js -d "$f" "$OUT/$m" \
+              > "$log" 2>&1; then
+              rc=0
+            else
+              rc=$?
+            fi
+            cat "$log"
             cand="$OUT/$m.csv"
             golden="data/$m.csv"
+            if grep -v '^#' data/ifc4x3_expected_refusals.txt | grep -qxF "$m.ifc"; then
+              if ! grep -qiE "FILE_SCHEMA[^;]*IFC4X3" "$f"; then
+                echo "::error::$f is listed in data/ifc4x3_expected_refusals.txt but does not declare an IFC4X3 FILE_SCHEMA -- the refusal asserted here would not be the IFC4X3 gate's."
+                status=1
+              elif [ -f "$cand" ]; then
+                echo "::error::$f must be refused (data/ifc4x3_expected_refusals.txt) but produced a digest -- IFC4X3 eligibility admitted a file IFC4 cannot decode."
+                status=1
+              elif ! grep -q "IFC4X3" "$log"; then
+                echo "::error::$f produced no digest, but nothing in the output names IFC4X3 -- it failed for some other reason than the IFC4X3 refusal."
+                status=1
+              elif [ "$rc" -eq 0 ]; then
+                echo "::error::$f was refused (no digest; log names IFC4X3) but the regression binary exited 0 -- a refusal must exit non-zero so a caller/script can tell it apart from success."
+                status=1
+              else
+                echo "$f: refused as expected (IFC4X3 refusal, exit $rc)."
+                refused=$((refused + 1))
+              fi
+              continue
+            fi
             if [ ! -f "$cand" ]; then
               echo "::error::No digest produced for $f -- parsing or geometry extraction likely failed for this model (see log above)."
               status=1; continue
@@ -320,6 +379,24 @@ jobs:
             echo "::error::No data/*.ifc quick-check models found."
             status=1
           fi
+          # The refusal branch above is the regression binary's only end-to-end
+          # IFC4X3 refusal coverage. Removing the last fixture together with
+          # its list entry would run it zero times and still pass, so require
+          # at least one (codex review of bldrs-ai/conway#718, P2). Counted on
+          # the "refused as expected" outcome, not on listing, so a listed
+          # fixture that failed its assertions does not satisfy it either.
+          if [ "$refused" -eq 0 ]; then
+            echo "::error::No IFC4X3 refusal was asserted -- data/ifc4x3_expected_refusals.txt must list at least one data/*.ifc fixture that is refused."
+            status=1
+          fi
+          # A listed refusal whose fixture is gone would otherwise stop being
+          # asserted without anything failing.
+          for listed in $(grep -v '^#' data/ifc4x3_expected_refusals.txt); do
+            if [ ! -f "data/$listed" ]; then
+              echo "::error::data/ifc4x3_expected_refusals.txt lists $listed, which is not in data/."
+              status=1
+            fi
+          done
           exit $status
 
       - name: Upload Tier A digest candidates
@@ -615,19 +692,23 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - id: psb
+          # Codes, not filenames: leading capitals plus size in MB. This
+          # repo is public and the matrix is committed in it. The mapping
+          # to real paths lives in regression/shard_codes.txt inside
+          # bldrs-ai/test-models-private.
+          - id: PSB900
             concurrency: '1'
-          - id: d3d
+          - id: D3D224
             concurrency: '1'
-          - id: ilna
+          - id: ILNA250
             concurrency: '1'
-          - id: dowa
+          - id: DOWA418
             concurrency: '1'
-          - id: orbiter
+          - id: O10
             concurrency: '1'
-          - id: blsn
+          - id: BLSN282
             concurrency: '1'
-          - id: hospital
+          - id: AHMAC555
             concurrency: '1'
     name: regression-shard-private ${{ matrix.id }}
     steps:
@@ -938,6 +1019,15 @@ jobs:
                     'regression: ' + ', '.join(left))
           EOF
 
+      # --export-timeout matches rc-regression's rather than taking the
+      # script's 600 s default. The default exists to preserve this job's
+      # historical 10 minutes, but 600 s is not a cap this job can afford:
+      # rc has 120 minutes for --max 60, so one hung export costs it ~2.5%
+      # of its budget, while this job has 30 minutes for --max 24, where
+      # the same hang costs ~45% and two end the job. Same runner class as
+      # rc (4 vCPU) with more RAM (16 GB vs 8), the same renderer and the
+      # same threshold, so rc's 180 s carries over. conway#792 is the case
+      # it guards: a GLB writer that hit bad_alloc and never exited.
       - name: Render before/after pairs
         run: |
           sed "s|^|$PWD/test-models/|" changed_models.txt > abs_models.txt
@@ -945,7 +1035,8 @@ jobs:
             --models abs_models.txt \
             --base engines/base --cand engines/cand \
             --out vdout --max 24 \
-            --diff-threshold 0.0005
+            --diff-threshold 0.0005 \
+            --export-timeout 180
 
       - name: Publish images to assets branch
         id: assets

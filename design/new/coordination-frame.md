@@ -153,6 +153,81 @@ exactly this reason, and
 `src/compat/web-ifc/geometry_shard_coordination.test.ts` asserts that
 span rather than assuming it.
 
+## Reading the applied frame back
+
+`GetCoordinationMatrix` cannot answer "where is this model really".
+It is pinned at identity on purpose: consumers stamp what it returns
+onto the assembled model, so a truthful return there would apply the
+recentre a second time on top of placements that already carry it. That
+left no way to invert the recentre at all — no measurement in source
+coordinates, no georeferenced permalink, no round-tripping export
+(Share#1634).
+
+`GetAppliedCoordinationMatrix(modelID)` is the explicit answer. Write
+`A` for what it returns. Every emitted `flatTransformation` was composed
+as
+
+```
+flatTransformation = A * placement [ * translate(geomCentre) ]
+```
+
+— `placement` the entity's native world placement in authored space, and
+the optional per-leaf `translate(geomCentre)` the IFC path's vertex-buffer
+recentre, which the AP214 path omits. Both sit to the right of `A`, so
+for any uploaded vertex
+
+```
+rendered = A * world       world = inverse(A) * rendered
+```
+
+with `world` in the model's authored space: the file's units, Z-up,
+un-recentred. Inverting the returned matrix is the whole of it, because
+`A` carries all three factors:
+
+```
+A = scale(linearScalingFactor) * NormalizeMat * translate(-anchor)
+```
+
+innermost first — the recentre in source units and pre-rotation, then
+the Z-up → Y-up change of basis, then the scale to metres. A consumer
+therefore needs to know neither the file's unit scale nor the engine's
+axis convention.
+
+Two traps the accessor's doc comment states and the tests pin:
+
+- **"No offset" is not "identity".** A near-origin model under
+  `COORDINATE_TO_ORIGIN` returns a frame whose *translation* is exactly
+  zero — model-zero, above — but whose rotation and scale are still the
+  `NormalizeMat` and unit scale the placements were composed under.
+  Skipping the inverse on that model reads every point in the wrong axis
+  convention. Identity is returned only when nothing was composed *and*
+  nothing was handed in: recentring off, a shard with no supplied frame,
+  or no geometry emitted yet on a model nobody supplied a frame to.
+- **A supplied frame reports before it is applied.**
+  `SetCoordinationFrame` stores its matrix at call time, so
+  `GetAppliedCoordinationMatrix` returns it immediately — before the
+  worker has composed a single placement under it. That is the reading
+  M3's pool wants (which frame *will* this worker apply), and it is
+  sound because a supplied frame is final: the setter refuses to replace
+  a frame the model derived for itself, and refuses one at all after the
+  first batch. The STEP arm has no such case — it implements no
+  `setCoordinationFrame`.
+- **Every walk composes under the same frame, not just the first.** More
+  than one classic walk of a live model is legal (`StreamAllMeshes` and
+  then `LoadAllGeometry`), and each has its own local. Those locals seed
+  from the persisted frame, because the derivation guard — correctly —
+  stops a second walk re-anchoring, and seeding identity there made it
+  emit raw source coordinates while the accessor went on reporting the
+  real frame (conway#703). Accessor and emission agreeing is what makes
+  the inverse above true of any placement, not just one from the first
+  walk.
+- **The durable walk is the authority.** A deferred open that adopted its
+  preview channel's frame reports that adopted frame from the moment it
+  opens — truthfully, since the preview payloads were composed under it —
+  and the value can change once, at the first durable batch, if the
+  revalidation above rejects it. From derivation or validation onward it
+  is fixed for the life of the model.
+
 ## What is pinned, and where
 
 | Property | Test |
@@ -161,6 +236,9 @@ span rather than assuming it.
 | Near-origin model keeps authored coordinates; georeferenced model still recentres; classic and streamed opens agree | `src/compat/web-ifc/coordination_export_order.test.ts` |
 | The cross-format claim — `index.ifc` and `index.step` render in the same world box | Share: `src/Containers/indexStepLogo.spec.ts` |
 | A supplied frame is applied exactly, a different one moves the model, and N shards under one frame union to the single instance's placements | `src/compat/web-ifc/geometry_shard_coordination.test.ts` |
+| `inverse(GetAppliedCoordinationMatrix)` maps a rendered point back to the fixture's authored LV95 coordinates; zero translation but non-identity frame near the origin; exact identity with recentring off; stable across batches; classic and deferred agree | `src/compat/web-ifc/coordination_baked_geometry.test.ts` |
+| A second classic walk of one live model composes under the frame the first derived, and its placements still invert to the authored coordinates (conway#703) | `src/compat/web-ifc/coordination_baked_geometry.test.ts` |
+| The same classic/deferred agreement, and the same second-walk rule, on the AP214 arm | `src/compat/web-ifc/ap214_streamed_open.test.ts` |
 
 The cross-format claim is pinned Share-side rather than here because
 through this surface the AP214 arm reports its placements at the origin

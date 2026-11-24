@@ -1,3 +1,0 @@
-# corpus: private
-# Headline. ~900 MB IFC, sweep-shaped load (design/new/memory-residency.md).
-PSB.ifc

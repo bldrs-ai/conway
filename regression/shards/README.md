@@ -7,7 +7,7 @@ files in its list, so a 900 MB headline model fits on the 14 GB disk.
 | Shard | Job | Runs on | Why |
 |---|---|---|---|
 | `coverage-1` … `coverage-3` | `regression-shard` | every ready PR, merge, rc | Small/fast public models for schema and exporter spread. Lists union to [`../smoke_models.txt`](../smoke_models.txt). ~180 MB of LFS, cached. |
-| `psb`, `d3d`, `ilna`, `dowa`, `orbiter`, `blsn`, `hospital` | `regression-shard-private` | **merge, rc, opt-in dispatch** | One private headline model each. A few-minute load gets its own machine so a regression there cannot hide behind a short coverage batch. ~2.6 GB of LFS, **uncached**. |
+| `PSB900`, `D3D224`, `ILNA250`, `DOWA418`, `O10`, `BLSN282`, `AHMAC555` | `regression-shard-private` | **merge, rc, opt-in dispatch** | One private headline model each. A few-minute load gets its own machine so a regression there cannot hide behind a short coverage batch. ~2.6 GB of LFS, **uncached**. |
 
 ## Why the headline shards are not on pull requests
 
@@ -20,10 +20,11 @@ ran the public smoke subset only.
 Running them per *landed change* instead keeps the coverage and pays for
 it once per merge. The trade is that a headline regression is caught at
 merge rather than at review. If that turns out to be too late, the
-cheap half is `orbiter`: 10 MB of the 2.6 GB, and it is the long-running
+cheap half is `O10`: 10 MB of the 2.6 GB, and it is the long-running
 geometry case (coil spring / helical thread), so it could come back to
-the PR path for ~0.4% of the cost. The expensive ones are `psb`
-(900 MB), `hospital` (555 MB) and `dowa` (418 MB).
+the PR path for ~0.4% of the cost. The expensive ones are `PSB900`,
+`AHMAC555` and `DOWA418` — the code carries the size, which is why it
+is in the code.
 
 Private shards need `TEST_MODELS_PRIVATE_TOKEN`. `resolve-models` fails
 loudly if it is missing on a run that executes them; a fork never pushes
@@ -65,19 +66,32 @@ to debug a private-model regression from a run, which is why it was
 left open. Note these runs are now merge/rc only, so the rows are not
 produced on pull requests at all.
 
-On the basenames specifically, because an earlier draft of this file got
-it wrong and used it to argue the exposure was pre-existing: four exact
-filenames were already public at `main` before sharding — `PSB.ifc`,
-`D3D.ifc`, `Orbiter_v1.1_Gear_7.5.step` and `BLSN_007.stp`, in design
-docs and `scripts/debug/README.md`. Three were **not**:
-`DOWA_AR_DW_4.ifc` (only the bare label "DOWA" appeared),
-`ILNA 3D_SIA2040.ifc` (only "ILNA") and
-`Autodesk_Hospital_Metric_Architectural_Central.ifc` (nowhere, in any
-form). Those three are first published by `regression/shards/*.txt`, and
-they appear nowhere else in the change. If any of them must not be
-public, the shard list is the one file to change — the argument "it was
-already public" does not cover them.
+## Codes, not filenames
 
+A private shard list names a **code**: its leading capitals plus its
+size in MB (`PSB900`, `AHMAC555`, `O10`). The code to path mapping is
+`regression/shard_codes.txt` **in `bldrs-ai/test-models-private`**, so
+only a run holding `TEST_MODELS_PRIVATE_TOKEN` can resolve it, and no
+private filename is committed to this public repo.
+
+This replaces an earlier draft of this file, which published the seven
+filenames and argued the exposure was pre-existing. That argument was
+only true for four of them — `PSB`, `D3D`, `Orbiter` and `BLSN` have
+their exact filenames on `main` in design docs and
+`scripts/debug/README.md`. For the other three it was false: `DOWA` and
+`ILNA` appear on `main` only as bare labels, and nothing on `main`
+mentioned the hospital model in any form. Codes avoid having to make
+that argument at all.
+
+What a code does not hide is the bare label, where `main` already
+publishes one. The point is the filename.
+
+`shard_list.py check` enforces the shape in `build`, which has no corpus
+to resolve against: every entry in a private list must look like a code,
+and a single-entry list must hold the code it is named after (the file
+name is the shard id and the matrix entry). A code the manifest cannot
+map fails its shard at run time with a message naming the code and the
+manifest path — it cannot silently digest nothing.
 This is what moved the headline shards off the PR path: the cache is
 not available to them, and the uncached traffic was too much to pay per
 push. Do not solve it by caching private bytes in a public repo.

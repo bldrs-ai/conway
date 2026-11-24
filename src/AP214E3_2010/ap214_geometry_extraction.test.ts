@@ -173,7 +173,21 @@ describe('AP214 Geometry Extraction', () => {
     // amplification budget subdividing against that residual. The removed
     // 3816 indices (1272 triangles) are that wasted subdivision, not lost
     // curvature.
-    const testParameter:number = 150828
+    //
+    // Lowered again, 150828 -> 14388, by conway-geom#190: the gear's involute
+    // flanks are trimmed b-spline ribbons, and they are now triangulated by a
+    // monotone sweep over their own boundary rather than ear-clipped and then
+    // refined. Ear clipping had no interior vertices to work with, so it filled
+    // each flank with slivers and `tesselate` spent its budget subdividing
+    // them; the sweep triangulates the same boundary directly. So this is a
+    // 10.5x drop in triangles for the same surface, and the checks that say so
+    // rather than assuming it: the model still reports 82 faces with 0
+    // unreached and 0 degenerate, the mesh is watertight on BOTH sides of the
+    // change (unpaired half-edges 0 -> 0, matched on exact world position),
+    // and a paired render moves 7.9% of pixels with the silhouette and every
+    // tooth unchanged - shading on the flanks, not geometry. Geometry memory
+    // falls 1.955 -> 0.278 MB.
+    const testParameter:number = 14388
     expect(getGearMeshSize()).toBe(testParameter)
 
   })

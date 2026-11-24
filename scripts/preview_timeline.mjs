@@ -14,6 +14,17 @@
  * `stop()` then prints the deferral split, which is the diagnosis when the
  * answer is "nothing happened for eight seconds".
  *
+ * `--buffered` opens the resident bytes with OpenModelStreamed instead of
+ * the windowed store — the open Share makes for a STEP file, whose
+ * store-backed open does not exist yet — so the same timeline can be read for
+ * an AP214 model. `--pump` then drains the durable batch pump to its first
+ * mesh, and reports when that landed: the number a preview has to beat to be
+ * worth anything.
+ *
+ * `--finish-parse` / `--no-finish-parse` turn the parse-end tick
+ * (PREVIEW_FINISH_PARSE, conway#773) on or off for the run, whatever the
+ * build's default is, so one build can be timed both ways.
+ *
  * `--no-preview` opens with ON_PREVIEW_MESH unset, which is the control: the
  * channel ticks inline on parse progress and pages source through the
  * windowed provider on every attempt, INCLUDING the ones that go on to
@@ -27,10 +38,14 @@ import { performance } from 'node:perf_hooks'
 
 const argv = process.argv.slice(2)
 const noPreview = argv.includes('--no-preview')
+const buffered = argv.includes('--buffered')
+const pump = argv.includes('--pump')
+const finishParse = argv.includes('--finish-parse')
+const noFinishParse = argv.includes('--no-finish-parse')
 const filePath = argv.find((a) => !a.startsWith('--'))
 
 if (!filePath) {
-  console.error('usage: preview_timeline.mjs <file.ifc>')
+  console.error('usage: preview_timeline.mjs <file> [--buffered] [--pump] [--no-preview]')
   process.exit(2)
 }
 
@@ -52,6 +67,12 @@ class FileStore {
 }
 
 const { IfcAPI, LogLevel } = await import('../compiled/src/compat/web-ifc/ifc_api.js')
+
+if (finishParse || noFinishParse) {
+  const { PREVIEW_FINISH_PARSE } =
+    await import('../compiled/src/compat/web-ifc/streamed_preview_channel.js')
+  PREVIEW_FINISH_PARSE.enabled = finishParse
+}
 
 const api = new IfcAPI()
 await api.Init()
@@ -101,7 +122,9 @@ console.log(
   `file=${filePath} sizeMB=${sizeMB.toFixed(1)}` +
   `${noPreview ? ' preview=OFF (control)' : ''}`)
 
-const modelID = await api.OpenModelStream(store, SETTINGS)
+const modelID = buffered ?
+  await api.OpenModelStreamed(fs.readFileSync(filePath), SETTINGS) :
+  await api.OpenModelStream(store, SETTINGS)
 const openMs = performance.now() - t0
 
 if (modelID < 0) {
@@ -122,6 +145,26 @@ console.log(
     `first preview mesh: ${firstPreviewMs.toFixed(0)}ms, at ` +
     `${(100 * firstPreviewAtBytes / store.byteLength).toFixed(1)}% of the file`)
 console.log(`preview meshes total ${previewMeshes}, open ${openMs.toFixed(0)}ms`)
+
+if (pump) {
+  let firstDurableMs = -1
+
+  for (;;) {
+    const {remaining} = await api.ExtractGeometryBatchAsync(modelID, 16, () => {
+      if (firstDurableMs < 0) {
+        firstDurableMs = performance.now() - t0
+      }
+    })
+
+    if (firstDurableMs >= 0 || remaining === 0) {
+      break
+    }
+  }
+
+  console.log(firstDurableMs < 0 ?
+    'first durable mesh: NEVER' :
+    `first durable mesh: ${firstDurableMs.toFixed(0)}ms`)
+}
 
 api.CloseModel(modelID)
 store.close()

@@ -1,8 +1,12 @@
+/* eslint-disable no-magic-numbers */
 import {describe, expect, test} from '@jest/globals'
 
 import fs from 'fs'
 import ParsingBuffer from '../parsing/parsing_buffer'
-import ModelFormatDetector, { ModelFormatType } from './model_format_detector'
+import ModelFormatDetector, {
+  ModelFormatType,
+  describeUnrecognizedModel,
+} from './model_format_detector'
 
 
 const indexIfcBuffer: Buffer =
@@ -141,4 +145,67 @@ describe('Model Format Detector', () => {
   })
 
 
+})
+
+describe('describeUnrecognizedModel (conway#741)', () => {
+
+  const header = indexIfcBuffer.toString('latin1')
+
+  /**
+   * @param text Latin-1 text.
+   * @return {Uint8Array} Its bytes.
+   */
+  const latin1 = (text: string) =>
+    Uint8Array.from(text, (character) => character.charCodeAt(0) & 0xff)
+
+  /**
+   * @param text Text to encode as UTF-16LE with a BOM.
+   * @return {Uint8Array} Its bytes.
+   */
+  const utf16le = (text: string) => {
+    const out = new Uint8Array(2 + (text.length * 2))
+    out[0] = 0xff
+    out[1] = 0xfe
+    for (let where = 0; where < text.length; ++where) {
+      out[2 + (where * 2)] = text.charCodeAt(where) & 0xff
+    }
+    return out
+  }
+
+  test.each([
+    ['empty', new Uint8Array(0), 'empty file'],
+    ['whitespace only', latin1(' \r\n\t '), 'empty file'],
+    ['zip', latin1('PK\x03\x04'), 'zip archive (such as .ifczip), not STEP text'],
+    ['gzip', Uint8Array.of(0x1f, 0x8b, 8, 0), 'gzip-compressed, not STEP text'],
+    ['UTF-16LE with BOM', utf16le(header), 'UTF-16 text; STEP files must be 8-bit text'],
+    ['XML', latin1('<?xml version="1.0"?><ifcXML/>'), 'XML or HTML, not STEP text'],
+    ['not STEP', nativeHDBuffer, 'no ISO-10303-21 header'],
+    [
+      'no FILE_SCHEMA',
+      latin1(header.replace(/FILE_SCHEMA\(\('[^']*'\)\);/, '')),
+      'no FILE_SCHEMA in header',
+    ],
+    [
+      'unknown schema',
+      latin1(header.replace(/FILE_SCHEMA\(\('[^']*'\)\)/, "FILE_SCHEMA(('STRUCTURAL_FRAME_SCHEMA'))")),
+      'unrecognized FILE_SCHEMA STRUCTURAL_FRAME_SCHEMA',
+    ],
+  ])('%s', (_label, data, reason) => {
+
+    // Every case is one detect() rejects; the description adds a reason
+    // without changing that.
+    expect(ModelFormatDetector.detect(new ParsingBuffer(data))).toBe(void 0)
+    expect(describeUnrecognizedModel(data)).toBe(reason)
+  })
+
+  test('a header syntax error names the byte, and the schema when it parsed', () => {
+
+    // An edition-3 ANCHOR section after a complete header: FILE_SCHEMA is
+    // known, but the header parse fails where DATA was expected.
+    const data = latin1(header.replace('ENDSEC;\n\nDATA;', 'ENDSEC;\nANCHOR;\nENDSEC;\nDATA;'))
+
+    expect(ModelFormatDetector.detect(new ParsingBuffer(data))).toBe(void 0)
+    expect(describeUnrecognizedModel(data))
+        .toMatch(/^STEP header syntax error at byte \d+ \(FILE_SCHEMA IFC4\)$/)
+  })
 })

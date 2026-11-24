@@ -89,9 +89,35 @@ const DEFAULT_MAX_RESIDENT_CHUNKS = 16
  * is the memory cost of the policy and it is deliberate: a thrashing model
  * trades transient garbage (D3D churned 47 GB of 4 MiB buffers) for bounded
  * retention.
+ *
+ * The ceiling: 160 MiB, 40 of the default 4 MiB chunks, so growth goes
+ * 16 -> 32 -> 40 (issue #786). #785 shipped 256 MiB. Since #787 (the IFC
+ * product pump skips its per-product closure walk over a store that reads
+ * synchronously) the rest of the growth is outside the product loop:
+ * extraction prep and the aggregate pager. Measured in headless Chromium
+ * with Share's source-mode bench (windowed open over the OPFS sync access
+ * handle, a fresh profile per load, median geometry stage), at 64 / 128 /
+ * 160 / 192 / 256 MiB:
+ *
+ *  - D3D (aggregate-heavy) is the one model that needs growth: 79.7 /
+ *    58.0 / 52.5 / 50.4 / 50.2 s, final window 62 / 126 / 158 / 190 /
+ *    198 MB. 160 MiB is the smallest ceiling within 5% of 256 (+4.5%, six
+ *    runs each, run-to-run spread ~5 s); 128 is 13% slower and 64, no
+ *    growth at all, 55% (three runs each, against the same rounds at 256).
+ *  - A 309 MB ARCHICAD 22 IFC2X3 model grew to 253 MB at 256 MiB for no
+ *    time (13.8 s; 13.6 s at 160 MiB, where it stays at 61 MB: most of its
+ *    re-reads, p50 distance 44 chunks, are beyond the ceiling).
+ *  - A 243 MB ARCHICAD model: 231 MB at 256, 128 MB at 160, geometry
+ *    14.1 / 14.2 s.
+ *  - PSB never grows (61 MB at every ceiling).
+ *
+ * That the 309 MB model no longer grows at all is the ghost list's bound
+ * (`ceiling - cap`, see rememberEvicted_) at work: a re-read beyond the
+ * ceiling counts as compulsory, and the lower ceiling puts most of its
+ * re-reads there.
  */
-// eslint-disable-next-line no-magic-numbers -- byte-size arithmetic (256MiB)
-const ADAPTIVE_MAX_RESIDENT_BYTES = 256 * 1024 * 1024
+// eslint-disable-next-line no-magic-numbers -- byte-size arithmetic (160MiB)
+const ADAPTIVE_MAX_RESIDENT_BYTES = 160 * 1024 * 1024
 
 /* Chunk requests per policy evaluation. Small enough to react inside a
  * load (D3D issues 4.5M requests, so ~1,100 evaluations), large enough
@@ -106,7 +132,18 @@ const ADAPTIVE_EVAL_REQUESTS = 4096
 /* Capacity misses in one interval that justify doubling — and the share of
  * that interval's misses they must be. The fraction is what keeps a model
  * that is simply reading a lot of new file (all-compulsory misses) from
- * growing on volume alone. */
+ * growing on volume alone.
+ *
+ * An interval is closed only once it holds at least
+ * ADAPTIVE_GROWTH_CAPACITY_MISSES loads; until then its counts carry into
+ * the next 4,096 requests. An interval with fewer loads than that could
+ * never meet the trigger, so closing it only threw its evidence away, and
+ * on a load whose misses are sparse in its requests that was all of them:
+ * a 309 MB faceted-brep IFC2X3 export issued 14.1 M requests for 851 loads
+ * (one per ~16,600 requests, against D3D's one per ~400), 773 of them
+ * re-reads, and 0 of its 3,448 intervals met the trigger, so its window
+ * never left 16 chunks (bldrs-ai/Share#2139). A forward sweep still never
+ * grows: carrying counts over adds loads, never capacity misses. */
 const ADAPTIVE_GROWTH_CAPACITY_MISSES = 8
 const ADAPTIVE_GROWTH_MISS_FRACTION = 0.5
 
@@ -167,6 +204,62 @@ export interface StepExternalByteStore {
    * (byteOffset 0) of exactly `length` bytes.
    */
   read( offset: number, length: number ): Promise< Uint8Array >
+
+  /**
+   * Optional: read `length` bytes starting at `offset` **synchronously**.
+   *
+   * A store that offers this lets {@link WindowedStepBufferProvider} fault
+   * a missing window in on a synchronous read instead of throwing
+   * {@link StepBufferNotResidentError}. That is what lets a schema whose
+   * extraction has no asynchronous closure pager — AP214, whose assembly
+   * walk and property extraction read records synchronously all over the
+   * model — open windowed at all (conway#757): every read that misses pages
+   * its window in on the spot, under the same LRU cap and residency policy
+   * an `ensureResident` load runs under.
+   *
+   * Offer it only where the read really is synchronous and cheap: an OPFS
+   * `FileSystemSyncAccessHandle` or `FileReaderSync` in a worker, or
+   * `fs.readSync` in Node. A main-thread `Blob` cannot, and a store that
+   * cannot must leave this undefined rather than block on a promise.
+   *
+   * Same contract as {@link read}: exactly `length` bytes, as a standalone
+   * array (byteOffset 0) the provider may keep.
+   *
+   * @param offset Absolute offset of the first byte to read.
+   * @param length Number of bytes to read.
+   * @return {Uint8Array} The bytes.
+   */
+  readSync?( offset: number, length: number ): Uint8Array
+}
+
+/**
+ * Can this store be read synchronously (see
+ * {@link StepExternalByteStore.readSync})?
+ *
+ * @param store The store.
+ * @return {boolean} True when it offers `readSync`.
+ */
+export function storeReadsSynchronously( store: StepExternalByteStore ): boolean {
+  return typeof store.readSync === 'function'
+}
+
+/**
+ * A windowed open refused because its store cannot read synchronously, and
+ * the schema's reads need it (AP214 — see
+ * {@link StepExternalByteStore.readSync}). Not a defect of the file: the
+ * same bytes open buffered. Typed so an open can report "use a buffer"
+ * rather than "failed" (load status `STORE_NOT_SYNCHRONOUS`).
+ */
+export class StoreNotSynchronousError extends Error {
+
+  /** Construct this. */
+  constructor() {
+    super(
+        'A windowed STEP (AP214) open needs a store that reads synchronously ' +
+        '(StepExternalByteStore.readSync): its extraction reads records ' +
+        'synchronously and has no closure pager. Open it buffered instead.' )
+    this.name = 'StoreNotSynchronousError'
+  }
 }
 
 /**
@@ -180,8 +273,25 @@ export class InMemoryStepByteStore implements StepExternalByteStore {
    * Construct this around a byte array (not copied).
    *
    * @param bytes_ The backing bytes.
+   * @param synchronous Also offer {@link readSync}, so a windowed provider
+   * over this store faults misses in rather than throwing (default off).
    */
-  constructor( private readonly bytes_: Uint8Array ) {}
+  constructor( private readonly bytes_: Uint8Array, synchronous: boolean = false ) {
+
+    // Opt-in, so the many tests that build a windowed model over this store
+    // keep asserting that an unpaged synchronous read throws: with
+    // `readSync` present the provider would fault it in instead.
+    if ( synchronous ) {
+      this.readSync = ( offset: number, length: number ) =>
+        this.bytes_.slice( offset, offset + length )
+    }
+  }
+
+  /**
+   * Synchronous read, present only when constructed with `synchronous`
+   * (see {@link StepExternalByteStore.readSync}).
+   */
+  public readonly readSync?: ( offset: number, length: number ) => Uint8Array
 
   /**
    * Total size of the stored byte sequence.
@@ -240,6 +350,40 @@ export class StepBufferNotResidentError extends Error {
 }
 
 /**
+ * Thrown by {@link StepBufferProvider.acquire} when the store's synchronous
+ * read of a missing window fails: an I/O error, not bad file data (an OPFS
+ * handle that went away, a short read).
+ *
+ * A subclass of {@link StepBufferNotResidentError} on purpose. Extraction's
+ * catches tell "this field is malformed, degrade" from "these bytes could
+ * not be had" by that one type: they swallow everything else as bad data
+ * and re-throw it. A failed read is the second kind, and before a windowed
+ * IFC pump faulted its windows in through `readSync` (conway#786) it only
+ * ever surfaced as a rejected prefetch ("Error paging product"). As a plain
+ * Error it would be swallowed as malformed data and leave a product
+ * silently partial; as this, it reaches the pump's per-product catch, which
+ * logs it and moves on (conway#526).
+ */
+export class StepSourceReadError extends StepBufferNotResidentError {
+
+  /**
+   * @param address Absolute start of the window that failed to read.
+   * @param length Length of that window.
+   * @param sourceError What the store threw.
+   */
+  constructor(
+      address: number,
+      length: number,
+      public readonly sourceError: unknown ) {
+    super( address, length )
+    this.message =
+      `STEP source read of [${address}, ${address + length}) failed: ` +
+      `${sourceError instanceof Error ? sourceError.message : String( sourceError )}`
+    this.name = 'StepSourceReadError'
+  }
+}
+
+/**
  * Residency provider for a model's source bytes.
  */
 export interface StepBufferProvider {
@@ -270,6 +414,22 @@ export interface StepBufferProvider {
   ensureResident( address: number, length: number ): Promise< void >
 
   /**
+   * Read a byte range once, without making it resident: the bytes come
+   * from the covering chunks when every one is resident or already
+   * loading, and straight from the store otherwise — no window is paged
+   * in, cached, evicted or moved in LRU order, and the residency policy
+   * does not see the read. For sparse sweeps
+   * that need a few hundred bytes from each of many windows (conway#755),
+   * where paging each window in would read the whole file.
+   *
+   * @param address Absolute start of the range.
+   * @param length Length of the range.
+   * @return {Promise< Uint8Array >} Exactly the range's bytes, as a view
+   * the caller may hold but must not write to.
+   */
+  readSpan( address: number, length: number ): Promise< Uint8Array >
+
+  /**
    * Hold a range against LRU eviction until a matching
    * {@link unpinRange}. No-op on a fully-resident source. Refcounted.
    *
@@ -285,6 +445,36 @@ export interface StepBufferProvider {
    * @param length Length of the range.
    */
   unpinRange?( address: number, length: number ): void
+
+  /**
+   * Evict unpinned chunks until residency is within the cap. No-op on a
+   * fully-resident source.
+   */
+  trimToCap?(): void
+
+  /**
+   * Optional: does a synchronous {@link acquire} page a missing range in
+   * itself rather than throw (a windowed provider over a store with
+   * `readSync`)? Absent reads as false.
+   */
+  readonly faultsInSynchronously?: boolean
+
+  /**
+   * Optional: when every chunk covering the range is already resident, do
+   * exactly the bookkeeping {@link ensureResident} does for an all-hit
+   * request (LRU touch, residency-policy request, trim to cap) synchronously
+   * and return true; otherwise change nothing and return false, so the
+   * caller falls back to `ensureResident`.
+   *
+   * The point is the allocation, not the bookkeeping: a closure walk calls
+   * `ensureResident` once per record, and on a windowed source nearly every
+   * one of those is a hit that still costs an async frame and a promise.
+   *
+   * @param address Absolute start of the range.
+   * @param length Length of the range.
+   * @return {boolean} True when the range was resident (and is now touched).
+   */
+  touchIfResident?( address: number, length: number ): boolean
 }
 
 /**
@@ -337,6 +527,17 @@ export class ResidentStepBufferProvider implements StepBufferProvider {
   public ensureResident(): Promise< void > {
     return Promise.resolve()
   }
+
+  /**
+   * A view of the range over the resident buffer.
+   *
+   * @param address Absolute start of the range.
+   * @param length Length of the range.
+   * @return {Promise< Uint8Array >} The range's bytes.
+   */
+  public readSpan( address: number, length: number ): Promise< Uint8Array > {
+    return Promise.resolve( this.buffer_.subarray( address, address + length ) )
+  }
 }
 
 /**
@@ -372,8 +573,10 @@ export class WindowedStepBufferProvider implements StepBufferProvider {
   /**
    * Chunk indices evicted recently, insertion-ordered (Set iteration order
    * is insertion order, so the front is the oldest) and bounded by the
-   * current cap. A load of a chunk in here is a capacity miss: a window
-   * twice this size would have held it. Empty when adaptation is off.
+   * headroom left under the adaptive ceiling (`ceiling - cap`). A load of a
+   * chunk in here is a capacity miss: a window the policy may still grow to
+   * would have held it. Empty when adaptation is off. See
+   * {@link rememberEvicted_} for why that is the bound.
    */
   private readonly ghostChunks_ = new Set< number >()
 
@@ -386,8 +589,22 @@ export class WindowedStepBufferProvider implements StepBufferProvider {
   /** Of those reads, the ones a larger window would have avoided. */
   private intervalCapacityMisses_ = 0
 
-  /** Resident chunks by chunk index; Map order doubles as LRU order. */
+  /**
+   * Resident chunks by chunk index. Insertion order is NOT recency; the
+   * LRU order lives in {@link lastUse_} (see {@link touch_}).
+   */
   private readonly chunks_ = new Map< number, Uint8Array >()
+
+  /**
+   * Per-chunk last-use stamp, indexed by chunk index and sized from the
+   * store at construction. A resident chunk's stamp is its recency;
+   * {@link oldestUnpinned_} picks the eviction victim from it. It never
+   * grows: a chunk index outside it has no stamp and is evicted first.
+   */
+  private readonly lastUse_: Float64Array
+
+  /** Monotonic source of {@link lastUse_} stamps; every stamp is unique. */
+  private useClock_ = 0
 
   /** In-flight chunk loads, de-duplicated by chunk index. */
   private readonly loading_ = new Map< number, Promise< Uint8Array > >()
@@ -400,6 +617,17 @@ export class WindowedStepBufferProvider implements StepBufferProvider {
    * caller's continuation, which can interleave with this one).
    */
   private readonly ensurePins_ = new Map< number, number >()
+
+  /**
+   * Tests only: the window a provider gets when its constructor is given
+   * neither a chunk size nor a cap, as an explicit (non-adaptive) cap. The
+   * IFC store-backed open builds its provider that way
+   * (IfcApiProxyIfc.parseColumnarFromStore), so this is how a test runs a
+   * whole open, the extraction during it included, at windows small enough
+   * to evict and fault in; swapping the provider after the open would mix
+   * windows of two sizes. Leave unset outside tests.
+   */
+  public static defaultWindowForTests?: { chunkBytes: number, maxResidentChunks: number }
 
   /**
    * Construct this over an external byte store.
@@ -415,16 +643,22 @@ export class WindowedStepBufferProvider implements StepBufferProvider {
    * either reading.
    *
    * @param store_ The store holding the source bytes.
-   * @param chunkBytes Chunk size in bytes (default 4MiB).
-   * @param maxResidentChunks LRU residency cap in chunks (default 16).
-   * @param adaptive Whether the cap may grow on measured thrash; defaults
+   * @param chunkBytesArg Chunk size in bytes (default 4MiB).
+   * @param maxResidentChunksArg LRU residency cap in chunks (default 16).
+   * @param adaptiveArg Whether the cap may grow on measured thrash; defaults
    * to true exactly when `maxResidentChunks` was left to the default.
    */
   constructor(
       private readonly store_: StepExternalByteStore,
-      chunkBytes: number = DEFAULT_CHUNK_BYTES,
-      maxResidentChunks?: number,
-      adaptive: boolean = maxResidentChunks === void 0 ) {
+      chunkBytesArg?: number,
+      maxResidentChunksArg?: number,
+      adaptiveArg?: boolean ) {
+
+    const forTests = chunkBytesArg === void 0 && maxResidentChunksArg === void 0 ?
+      WindowedStepBufferProvider.defaultWindowForTests : void 0
+    const chunkBytes = chunkBytesArg ?? forTests?.chunkBytes ?? DEFAULT_CHUNK_BYTES
+    const maxResidentChunks = maxResidentChunksArg ?? forTests?.maxResidentChunks
+    const adaptive = adaptiveArg ?? maxResidentChunks === void 0
 
     if ( chunkBytes <= 0 || !Number.isInteger( chunkBytes ) ) {
       throw new Error( `Invalid chunkBytes ${chunkBytes}` )
@@ -435,6 +669,8 @@ export class WindowedStepBufferProvider implements StepBufferProvider {
 
     this.chunkBytes_        = chunkBytes
     this.maxResidentChunks_ = startingCap
+    this.lastUse_           =
+      new Float64Array( Math.max( 1, Math.ceil( store_.byteLength / chunkBytes ) ) )
 
     if ( !adaptive ) {
 
@@ -511,12 +747,76 @@ export class WindowedStepBufferProvider implements StepBufferProvider {
   /**
    * Touch a chunk for LRU recency.
    *
+   * Recency is a stamp write, not a Map delete + re-insert. `acquire`
+   * calls this on every read (9.64 M times loading an 860 MB IFC), and
+   * the delete/set pair leaves tombstones whose rehashes grow with the
+   * window: measured 0.83 s of `touch_` at the default 16 chunks but
+   * 4.97 s at a file-sized 216-chunk window, which made a larger window
+   * slower (Share#2139). Eviction order is unchanged; see
+   * {@link oldestUnpinned_}.
+   *
+   * A write to an index outside the stamp array (a negative or
+   * past-the-end chunk, which only an address outside the store produces)
+   * is a silent typed-array no-op; that is intended, see
+   * {@link oldestUnpinned_}.
+   *
    * @param chunkIndex The chunk to touch.
+   */
+  private touch_( chunkIndex: number ): void {
+
+    this.lastUse_[ chunkIndex ] = ++this.useClock_
+  }
+
+  /**
+   * Add a chunk to the window, as most-recently used.
+   *
+   * A chunk already resident keeps its recency: that is the Map `set`
+   * semantics this replaced (an in-flight async load landing after a
+   * synchronous fault-in of the same chunk replaces the bytes without
+   * moving the entry).
+   *
+   * @param chunkIndex The chunk.
    * @param chunk The chunk bytes.
    */
-  private touch_( chunkIndex: number, chunk: Uint8Array ): void {
-    this.chunks_.delete( chunkIndex )
+  private insert_( chunkIndex: number, chunk: Uint8Array ): void {
+
+    if ( !this.chunks_.has( chunkIndex ) ) {
+      this.touch_( chunkIndex )
+    }
+
     this.chunks_.set( chunkIndex, chunk )
+  }
+
+  /**
+   * The least-recently-used resident chunk that no pin protects.
+   *
+   * A linear scan: evictions are rare next to touches (about 772 per
+   * large load) and the window is at most a few dozen chunks.
+   *
+   * @return {number | undefined} The victim, or undefined when every
+   * resident chunk is pinned.
+   */
+  private oldestUnpinned_(): number | undefined {
+
+    let victim: number | undefined
+    let victimStamp = Infinity
+
+    for ( const candidate of this.chunks_.keys() ) {
+
+      // Only an address outside the store gives a chunk index with no
+      // stamp slot. Main kept such a chunk in LRU order; here it reads as
+      // stamp 0 (real stamps start at 1: the clock pre-increments) and is
+      // simply evicted first, which bounds memory and never strands a
+      // window slot.
+      const stamp = this.lastUse_[ candidate ] ?? 0
+
+      if ( stamp < victimStamp && ( this.ensurePins_.get( candidate ) ?? 0 ) <= 0 ) {
+        victim      = candidate
+        victimStamp = stamp
+      }
+    }
+
+    return victim
   }
 
   /**
@@ -539,13 +839,10 @@ export class WindowedStepBufferProvider implements StepBufferProvider {
 
     if ( firstChunk === lastChunk ) {
 
-      const chunk = this.chunks_.get( firstChunk )
+      const chunk = this.chunks_.get( firstChunk ) ??
+        this.faultInSync_( firstChunk, address, length )
 
-      if ( chunk === void 0 ) {
-        throw new StepBufferNotResidentError( address, length )
-      }
-
-      this.touch_( firstChunk, chunk )
+      this.touch_( firstChunk )
 
       return { buffer: chunk, offset: firstChunk * chunkBytes }
     }
@@ -557,13 +854,10 @@ export class WindowedStepBufferProvider implements StepBufferProvider {
 
     for ( let chunkIndex = firstChunk; chunkIndex <= lastChunk; ++chunkIndex ) {
 
-      const chunk = this.chunks_.get( chunkIndex )
+      const chunk = this.chunks_.get( chunkIndex ) ??
+        this.faultInSync_( chunkIndex, address, length )
 
-      if ( chunk === void 0 ) {
-        throw new StepBufferNotResidentError( address, length )
-      }
-
-      this.touch_( chunkIndex, chunk )
+      this.touch_( chunkIndex )
 
       const chunkBase  = chunkIndex * chunkBytes
       const copyFrom   = Math.max( address, chunkBase )
@@ -577,6 +871,228 @@ export class WindowedStepBufferProvider implements StepBufferProvider {
     }
 
     return { buffer: merged, offset: address }
+  }
+
+  /**
+   * Page one missing chunk in synchronously, for {@link acquire} — or throw
+   * {@link StepBufferNotResidentError} when the store cannot read
+   * synchronously, which is the provider's contract for every store that
+   * has no `readSync` (see {@link StepExternalByteStore.readSync}).
+   *
+   * The chunk goes through the same bookkeeping an `ensureResident` load
+   * does: the residency policy sees it as a load (so a thrashing
+   * synchronous walk grows the window exactly as an async one would), and
+   * the window is trimmed back to its cap afterwards, sparing pinned
+   * chunks. The chunk just read is the most recently used, so the trim
+   * reaches it only when every other resident chunk is pinned; it is
+   * returned to the caller either way, and a view of it stays valid after
+   * an eviction, as every evicted chunk's views do.
+   *
+   * A load already in flight for the chunk is not waited for (nothing
+   * synchronous can wait for it). The chunk is read again here, and
+   * whichever copy lands second replaces the first in the window; the
+   * bytes are the same, and views of either stay valid.
+   *
+   * @param chunkIndex The missing chunk.
+   * @param address Absolute start of the range being acquired (for the
+   * error).
+   * @param length Length of that range (for the error).
+   * @throws { StepBufferNotResidentError } When the store has no
+   * synchronous read.
+   * @throws { StepSourceReadError } When the store's synchronous read
+   * throws.
+   * @return {Uint8Array} The chunk, now resident.
+   */
+  private faultInSync_( chunkIndex: number, address: number, length: number ): Uint8Array {
+
+    const readSync = this.store_.readSync
+
+    if ( readSync === void 0 ) {
+      throw new StepBufferNotResidentError( address, length )
+    }
+
+    const chunkBytes  = this.chunkBytes_
+    const chunkBase   = chunkIndex * chunkBytes
+    const chunkLength = Math.min( chunkBytes, this.store_.byteLength - chunkBase )
+
+    this.notePolicyRequest_( chunkIndex, true )
+
+    let bytes: Uint8Array
+
+    try {
+      bytes = readSync.call( this.store_, chunkBase, chunkLength )
+    } catch ( error ) {
+      throw new StepSourceReadError( chunkBase, chunkLength, error )
+    }
+
+    const chunk = tagBufferBase( bytes, chunkBase )
+
+    ++this.syncFaults_
+
+    this.insert_( chunkIndex, chunk )
+
+    // If every other resident chunk is pinned, this trim evicts the chunk
+    // just faulted in. It stays evicted: the caller still holds its bytes
+    // and the next acquire re-faults it. (The pre-stamp code's touch_ then
+    // re-inserted it, leaving the window at cap + 1.)
+    this.trimToCap()
+
+    return chunk
+  }
+
+  /** Windows {@link faultInSync_} has paged in (telemetry). */
+  private syncFaults_ = 0
+
+  /**
+   * How many windows synchronous reads have faulted in (telemetry/tests):
+   * 0 on a store without `readSync`, and on any load whose reads were all
+   * paged ahead of time.
+   *
+   * @return {number} The count.
+   */
+  public get syncFaultCount(): number {
+    return this.syncFaults_
+  }
+
+  /**
+   * Can a synchronous read on this provider page a missing window in
+   * itself (its store offers `readSync`)?
+   *
+   * @return {boolean} True when misses fault in rather than throw.
+   */
+  public get faultsInSynchronously(): boolean {
+    return this.store_.readSync !== void 0
+  }
+
+  /**
+   * Read a byte range without paging it in — see
+   * {@link StepBufferProvider.readSpan}.
+   *
+   * @param address Absolute start of the range.
+   * @param length Length of the range.
+   * @return {Promise< Uint8Array >} The range's bytes.
+   */
+  public async readSpan( address: number, length: number ): Promise< Uint8Array > {
+
+    const chunkBytes = this.chunkBytes_
+    const firstChunk = Math.floor( address / chunkBytes )
+    const lastChunk  = Math.floor( ( address + Math.max( length, 1 ) - 1 ) / chunkBytes )
+
+    // Take each covering chunk, or the load already in flight for it,
+    // synchronously, so an eviction or a load landing during the awaits
+    // below cannot change what is read: an evicted chunk's bytes stay
+    // valid for as long as we hold them. Neither path touches LRU order.
+    const covering: ( Uint8Array | Promise< Uint8Array > )[] = []
+
+    for ( let chunkIndex = firstChunk; chunkIndex <= lastChunk; ++chunkIndex ) {
+
+      const chunk = this.chunks_.get( chunkIndex ) ?? this.loading_.get( chunkIndex )
+
+      if ( chunk === void 0 ) {
+        return await this.store_.read( address, length )
+      }
+
+      covering.push( chunk )
+    }
+
+    if ( covering.length === 1 ) {
+
+      const start = address - firstChunk * chunkBytes
+
+      return ( await covering[ 0 ] ).subarray( start, start + length )
+    }
+
+    const merged = new Uint8Array( length )
+
+    for ( let i = 0; i < covering.length; ++i ) {
+
+      const chunk     = await covering[ i ]
+      const chunkBase = ( firstChunk + i ) * chunkBytes
+      const copyFrom  = Math.max( address, chunkBase )
+      const copyTo    = Math.min( address + length, chunkBase + chunk.byteLength )
+
+      merged.set( chunk.subarray( copyFrom - chunkBase, copyTo - chunkBase ), copyFrom - address )
+    }
+
+    return merged
+  }
+
+  /**
+   * Evict least-recently-used chunks until residency is back within the
+   * cap, sparing pinned ones — the eviction {@link ensureResident} runs
+   * after a load. For a caller that pinned more than the cap and has just
+   * unpinned it (a recursive read's closure), which would otherwise stay
+   * over budget until the next ensure.
+   */
+  public trimToCap(): void {
+
+    if ( this.chunks_.size <= this.maxResidentChunks_ ) {
+      return
+    }
+
+    while ( this.chunks_.size > this.maxResidentChunks_ ) {
+
+      const candidate = this.oldestUnpinned_()
+
+      if ( candidate === void 0 ) {
+        break
+      }
+
+      this.chunks_.delete( candidate )
+      this.rememberEvicted_( candidate )
+    }
+  }
+
+  /**
+   * The all-hit half of {@link ensureResident}, synchronously — see
+   * {@link StepBufferProvider.touchIfResident}.
+   *
+   * Same effects, in the same order, as an `ensureResident` whose every
+   * chunk is resident: each chunk is touched and fed to the policy as a
+   * non-load request, then the window is trimmed with this range pinned.
+   * (`ensureResident` reaches its trim without awaiting anything when it
+   * issued no load, so the async path does this all in one tick too; what
+   * is saved is the async frame and promise per call.)
+   *
+   * @param address Absolute start of the range.
+   * @param length Length of the range.
+   * @return {boolean} True when every covering chunk was resident.
+   */
+  public touchIfResident( address: number, length: number ): boolean {
+
+    const chunkBytes = this.chunkBytes_
+    const firstChunk = Math.floor( address / chunkBytes )
+    const lastChunk  = Math.floor( ( address + Math.max( length, 1 ) - 1 ) / chunkBytes )
+
+    for ( let chunkIndex = firstChunk; chunkIndex <= lastChunk; ++chunkIndex ) {
+
+      if ( !this.chunks_.has( chunkIndex ) ) {
+        return false
+      }
+    }
+
+    for ( let chunkIndex = firstChunk; chunkIndex <= lastChunk; ++chunkIndex ) {
+
+      this.touch_( chunkIndex )
+      this.notePolicyRequest_( chunkIndex, false )
+    }
+
+    // `ensureResident` trims with its own range pinned; only pay for the
+    // pins when there is something to trim.
+    if ( this.chunks_.size > this.maxResidentChunks_ ) {
+
+      for ( let chunkIndex = firstChunk; chunkIndex <= lastChunk; ++chunkIndex ) {
+        this.addPin_( chunkIndex, 1 )
+      }
+
+      this.trimToCap()
+
+      for ( let chunkIndex = firstChunk; chunkIndex <= lastChunk; ++chunkIndex ) {
+        this.addPin_( chunkIndex, -1 )
+      }
+    }
+
+    return true
   }
 
   /**
@@ -611,7 +1127,7 @@ export class WindowedStepBufferProvider implements StepBufferProvider {
 
         if ( resident !== void 0 ) {
 
-          this.touch_( chunkIndex, resident )
+          this.touch_( chunkIndex )
           this.notePolicyRequest_( chunkIndex, false )
           continue
         }
@@ -629,7 +1145,7 @@ export class WindowedStepBufferProvider implements StepBufferProvider {
 
             tagBufferBase( chunk, chunkBase )
 
-            this.chunks_.set( chunkIndex, chunk )
+            this.insert_( chunkIndex, chunk )
             this.loading_.delete( chunkIndex )
 
             return chunk
@@ -651,22 +1167,7 @@ export class WindowedStepBufferProvider implements StepBufferProvider {
 
       // Evict beyond the cap, oldest first, sparing pinned chunks
       // (this call's own range is pinned above).
-      if ( this.chunks_.size > this.maxResidentChunks_ ) {
-
-        for ( const candidate of this.chunks_.keys() ) {
-
-          if ( this.chunks_.size <= this.maxResidentChunks_ ) {
-            break
-          }
-
-          if ( ( this.ensurePins_.get( candidate ) ?? 0 ) > 0 ) {
-            continue
-          }
-
-          this.chunks_.delete( candidate )
-          this.rememberEvicted_( candidate )
-        }
-      }
+      this.trimToCap()
 
     } finally {
 
@@ -725,9 +1226,33 @@ export class WindowedStepBufferProvider implements StepBufferProvider {
 
   /**
    * Record that a chunk left the window, so a later load of it can be
-   * recognised as a capacity miss rather than a first touch. The ghost
-   * list is the size of the cache, which is what makes a ghost hit mean
-   * "a window twice this size would have held it".
+   * recognised as a capacity miss rather than a first touch.
+   *
+   * The list holds the last `ceiling - cap` evictions, so a ghost hit
+   * means "a window the policy is allowed to reach would have held it".
+   * Why that bound: under LRU at cap c, a chunk is evicted once c distinct
+   * chunks have been used since its last use, and every further distinct
+   * chunk used before it comes back is a miss, hence an eviction. So a
+   * chunk still among the last g evictions when it is re-read has a reuse
+   * distance below c + g, and g = ceiling - c makes that "below the
+   * ceiling". (The converse is not exact: re-misses of chunks already
+   * counted also evict, so a re-read just under the ceiling can fall off.
+   * The test errs towards not growing.) The bound shrinks as the cap grows
+   * and is zero at the ceiling, where the list is dropped.
+   *
+   * It used to be the cap ("a window twice this size would have"), which
+   * misses every re-read whose reuse distance is beyond twice the cap: on a
+   * 309 MB faceted-brep IFC2X3 export the re-reads' distances were p10 17,
+   * p50 44, p90 77 chunks against a cap of 16, so 457 of its 773 re-reads
+   * fell off the list and counted as compulsory (bldrs-ai/Share#2139). A
+   * bound of the ceiling itself (tried first) over-reaches the other way:
+   * at cap 16 a hit then means a distance below 16 + 64 = 80, so a cycle of
+   * 65-80 chunks grew the window to the ceiling and still missed on nearly
+   * every request. A working set beyond the ceiling now reads as compulsory
+   * and does not grow, which is right: no window the policy may reach holds
+   * it. The list is at most `ceiling - cap` entries (24 at the defaults:
+   * a 160 MiB ceiling over 4 MiB chunks, from a 16-chunk start; 60 under
+   * #785's 256 MiB).
    *
    * @param chunkIndex The evicted chunk.
    */
@@ -747,8 +1272,19 @@ export class WindowedStepBufferProvider implements StepBufferProvider {
     }
 
     this.ghostChunks_.add( chunkIndex )
+    this.trimGhosts_()
+  }
 
-    while ( this.ghostChunks_.size > this.maxResidentChunks_ ) {
+  /**
+   * Hold the ghost list to `ceiling - cap` entries, oldest out first (see
+   * {@link rememberEvicted_}). Called after each eviction and when the cap
+   * grows, since growth shrinks the bound.
+   */
+  private trimGhosts_(): void {
+
+    const bound = this.adaptiveCapChunks_ - this.maxResidentChunks_
+
+    while ( this.ghostChunks_.size > bound ) {
 
       const oldest = this.ghostChunks_.values().next()
 
@@ -789,7 +1325,11 @@ export class WindowedStepBufferProvider implements StepBufferProvider {
       }
     }
 
-    if ( this.intervalRequests_ < ADAPTIVE_EVAL_REQUESTS ) {
+    // Not enough loads yet to meet the trigger either way: keep
+    // accumulating rather than discard the interval (see
+    // ADAPTIVE_GROWTH_CAPACITY_MISSES).
+    if ( this.intervalRequests_ < ADAPTIVE_EVAL_REQUESTS ||
+         this.intervalLoads_ < ADAPTIVE_GROWTH_CAPACITY_MISSES ) {
       return
     }
 
@@ -799,6 +1339,7 @@ export class WindowedStepBufferProvider implements StepBufferProvider {
 
       this.maxResidentChunks_ =
         Math.min( this.adaptiveCapChunks_, this.maxResidentChunks_ * 2 )
+      this.trimGhosts_()
     }
 
     this.intervalRequests_       = 0

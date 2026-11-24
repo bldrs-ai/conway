@@ -1,0 +1,6 @@
+# corpus: private
+# Headline STEP. Small on disk, long-running geometry
+# (coil spring / helical thread - design/new and scripts/debug/README.md).
+# Code, not a filename: this repo is public. The mapping lives in
+# regression/shard_codes.txt in bldrs-ai/test-models-private.
+O10

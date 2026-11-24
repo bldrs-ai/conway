@@ -1,6 +1,7 @@
 # Public coverage models for PR-time digest CI. The workflow splits this
 # list across regression/shards/coverage-{1,2,3}.txt (keep those in sync).
-# Headline private models (PSB, D3D, ILNA, DOWA, Orbiter, BLSN, Hospital)
+# Headline private models (shard codes PSB900, D3D224, ILNA250, DOWA418,
+# O10, BLSN282, AHMAC555)
 # each get their own shard — see regression/shards/README.md.
 #
 # One model filename per line (basename with extension, matched against the

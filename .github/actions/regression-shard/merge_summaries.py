@@ -20,7 +20,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from shard_list import parse_shard  # noqa: E402 - needs the path above
+from shard_list import shard_entries  # noqa: E402 - needs the path above
 
 # GitHub rejects an issue-comment body over 65536 characters. Leave room
 # for the truncation notice itself.
@@ -35,7 +35,7 @@ def shard_order(shard_dir: Path) -> list[tuple[str, str]]:
     the matrix. `shard_list.py check` is what keeps the two in step.
     """
     shards = sorted(
-        (path.stem, parse_shard(str(path))[0])
+        (path.stem, shard_entries(str(path))[0])
         for path in shard_dir.glob('*.txt'))
     coverage = [s for s in shards if s[0].startswith('coverage-')]
     return coverage + [s for s in shards if s not in coverage]

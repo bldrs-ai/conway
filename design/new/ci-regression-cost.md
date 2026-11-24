@@ -23,7 +23,7 @@ full sweep only at a blessed release point.
 |---|---|---|---|
 | **A — fixtures** | every PR + merge | unit tests + `data/` geometry goldens (in `build`) | **hard** — a mismatch fails `build` |
 | **B — PR shards** | every ready PR + merge | three public coverage shards on free `ubuntu-24.04` (union = `regression/smoke_models.txt`, `regression/shards/`) | **hard on failures** — a model that fails to parse/extract blocks; digest *changes* are informational. Visual-diff is public coverage only |
-| **B′ — headline shards** | merge, `rc-*`, opt-in dispatch | one shard each for the private headline models PSB, D3D, ILNA, DOWA, Orbiter, BLSN, Hospital (`regression-shard-private`) | **hard on failures**. Off the PR path because they cannot be cached: ~2.6 GB of private LFS per run |
+| **B′ — headline shards** | merge, `rc-*`, opt-in dispatch | one shard each for the private headline models `PSB900`, `D3D224`, `ILNA250`, `DOWA418`, `O10`, `BLSN282`, `AHMAC555` (`regression-shard-private`; codes, not filenames) | **hard on failures**. Off the PR path because they cannot be cached: ~2.6 GB of private LFS per run |
 | **C — full corpus + perf** | `rc-*` tag | full public+private digest regression (`rc-regression.yml`) **and** the `perf-three-*` headless-three benchmarks (in `build.yml`) | **hard on failures**; digest churn lands in a reviewable baseline PR |
 
 Private shards are a separate job gated on `github.event_name !=
@@ -192,6 +192,36 @@ shipped). That churn is baseline drift, not a PR regression — which is why:
 changed-set again means "this PR moved geometry." That happens as part of the
 rc pass (below) — merging its baseline PRs *is* the bless.
 
+**The baseline PR carries its own visual diff** (since 2026-11-18). A
+baseline PR bundles every conway change since the last bless, so the per-PR
+comments don't add up to it: they render only the smoke subset, against the
+published engine of their day. `rc-regression.yml` therefore renders exactly
+the models whose committed digests the baseline PR changes, with no drift
+between its two sides:
+
+- **before:** the engine that produced the committed baseline. Each bless
+  records it in `regression/test_models/engine.txt` (`conway <ref> @ <sha>`),
+  committed with the digests, so it survives any merge style. Baselines
+  blessed before that file existed fall back to the latest such line in a
+  bless commit message on `main`, trusted only if no per-model digest CSV
+  changed after that commit. Auto-publish makes the engine installable as
+  `@bldrs-ai/conway@<version>-g<shorthash>`. If any step comes up empty,
+  the comment says so instead of picking another engine.
+- **after:** the rc's own build, the one whose digests are being blessed.
+
+The same renderer and threshold as the per-PR job (`scripts/visual_diff_report.cjs`,
+up to 60 models), one comment on the baseline PR, images on a
+`visual-diff-assets` branch *in the target repo*, so private renders stay in
+the private repo. It overlaps the per-PR diffs on purpose: a second check,
+and one whose rows correspond to the diff being merged. It can't fail the
+rc: every step is `continue-on-error` and the render is capped at 30 min.
+Each model's two exports run side by side, each killed after 3 min (a model
+that loads in about a minute and has not exported in three is hung, as in
+conway#792); measured cost is about 2-3x the model's digest-pass load time.
+Private images are linked through `github.com/<repo>/raw/…`, which needs a
+signed-in member, and are never uploaded as a conway run artifact; the
+public target's `rc-visual-diff-*` artifact holds its PNGs too.
+
 **Perf baselines are artifact-anchored, not committed.** The `perf-three-*`
 jobs diff against the most recent prior `perf-three-{public,private}-<run_id>`
 snapshot artifact (see `.github/actions/perf-delta`) — after a blessed rc,
@@ -231,7 +261,9 @@ On that tag push:
    here), and opens a **baseline PR in each test-models repo**. That PR's diff
    *is* the release's regression report.
 4. **Review the two baseline PRs and merge** — that blesses the baselines to
-   this release. From then on, per-PR smoke diffs are drift-free.
+   this release. Each PR has a visual diff comment: last-blessed engine
+   against this rc, one row per changed model (see "Baselines and drift").
+   From then on, per-PR smoke diffs are drift-free.
 
 Fixing one broken model costs one fix cycle plus one rc re-run (the batch is
 ~minutes) — no per-model retest machinery, which isn't worth building at this

@@ -7,7 +7,7 @@
 // preview hands over to is already pinned to classic parity.
 import * as fs from 'fs'
 
-import { beforeAll, describe, expect, jest, test } from '@jest/globals'
+import { afterAll, beforeAll, describe, expect, jest, test } from '@jest/globals'
 
 import { ConwayGeometry } from '../../../dependencies/conway-geom'
 import IfcStepParser from '../../ifc/ifc_step_parser'
@@ -23,6 +23,7 @@ import { buildIndexStreaming } from '../../step/parsing/streaming_index_builder'
 import { FlatMesh, IfcAPI } from './ifc_api'
 import {
   ifcPreviewAdapter,
+  PREVIEW_PARSE_SHARE,
   PreviewMeshPayload,
   StreamedPreviewChannel,
 } from './streamed_preview_channel'
@@ -92,7 +93,22 @@ function classicInstances( modelID: number ):
   return instances
 }
 
+// These tests pin what the channel does with its units (deferral, retry,
+// preemption, plates), on the real clock. The share-of-parse bound
+// (PREVIEW_PARSE_SHARE) is read off that clock too, so on a slow runner it
+// cut ticks these tests count on: conway#777's first CI run failed "a
+// grid-placed product blocked on a reference array is retried" with 2 of 3
+// retries, and a 0.01 share reproduces that here along with six more. The
+// bound has its own tests on a stubbed clock
+// (streamed_preview_channel_share.test.ts); here it is lifted.
+const parseShare = PREVIEW_PARSE_SHARE.share
+
+afterAll( () => {
+  PREVIEW_PARSE_SHARE.share = parseShare
+} )
+
 beforeAll( async () => {
+  PREVIEW_PARSE_SHARE.share = Infinity
   api = new IfcAPI()
   await api.Init()
 
@@ -681,11 +697,10 @@ describe( 'StreamedPreviewChannel', () => {
 
   test( 'a grid-placed product blocked on a reference array is retried', () => {
 
-    // The resident twin of the store channel's conway#546 test — the two
-    // channels carry independent copies of the deferral catch
-    // (streamed_preview_channel.ts:322 against store_preview_channel.ts:498),
-    // so a classification fix has to be demonstrated on both or half of it
-    // is untested.
+    // The resident twin of the windowed channel's conway#546 test. Since
+    // conway#775 both opens share one deferral catch (ifcPreviewGeneration);
+    // the windowed adapter adds a second classification point, its
+    // residency step, so the fix is still demonstrated on both.
     //
     // data/grid_placement_tail_axes.ifc writes the reference-array hops of
     // a grid placement chain after the products that need them:

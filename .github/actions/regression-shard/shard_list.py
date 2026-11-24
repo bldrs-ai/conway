@@ -11,8 +11,28 @@ import sys
 from pathlib import Path
 
 
-def parse_shard(path: str) -> tuple[str, list[str]]:
-    """Return (corpus, basenames) from a shard list file."""
+# A private shard list names CODES, never filenames: leading capitals
+# plus the model's size in MB (PSB900, AHMAC555, O10). Conway is public,
+# and a shard list is committed here, so a filename in one is published
+# for good. Four of the seven were already public on main in design docs
+# before sharding existed; three were not, and this is what keeps them
+# that way.
+CODE_RE = re.compile(r'^[A-Z][A-Z0-9]*[0-9]$')
+
+# The code -> path mapping lives in the PRIVATE corpus, which only a run
+# holding TEST_MODELS_PRIVATE_TOKEN has checked out. Versioned beside the
+# models it names, so a corpus reshuffle updates the two together.
+MANIFEST = 'regression/shard_codes.txt'
+
+
+def shard_entries(path: str) -> tuple[str, list[str]]:
+    """Return (corpus, raw entries) from a shard list file.
+
+    Raw: a public list's entries are basenames, a private list's are
+    codes. Use this where only the corpus or the unresolved entries are
+    wanted (`check` runs in `build`, which has no corpus to resolve
+    against); use parse_shard where real basenames are needed.
+    """
     corpus = 'public'
     names: list[str] = []
     with open(path, encoding='utf-8') as fh:
@@ -29,6 +49,80 @@ def parse_shard(path: str) -> tuple[str, list[str]]:
     if corpus not in ('public', 'private'):
         raise SystemExit(f'{path}: unknown corpus {corpus!r}')
     return corpus, names
+
+
+def load_codes(root: Path) -> dict[str, str]:
+    """{code: path relative to the corpus root} from the private manifest."""
+    manifest = root / MANIFEST
+    if not manifest.is_file():
+        raise SystemExit(
+            f'{manifest} not found. Private shard lists name codes rather '
+            'than filenames, so the private corpus carries the mapping: '
+            f'add {MANIFEST} to bldrs-ai/test-models-private with one '
+            '"<CODE> <path>" line per headline model (e.g. '
+            '"PSB900  ifc/<file>"). Without it a private shard cannot '
+            'know which model it is for.')
+    mapping: dict[str, str] = {}
+    lines = manifest.read_text(encoding='utf-8').splitlines()
+    for lineno, line in enumerate(lines, 1):
+        text = line.split('#', 1)[0].strip()
+        if not text:
+            continue
+        parts = text.split(None, 1)
+        if len(parts) != 2:
+            raise SystemExit(
+                f'{MANIFEST}:{lineno}: expected "<CODE> <path>", got '
+                f'{line.strip()!r}')
+        code, rel = parts[0], parts[1].strip()
+        if not CODE_RE.match(code):
+            raise SystemExit(
+                f'{MANIFEST}:{lineno}: {code!r} is not a shard code '
+                '(leading capitals then a size, e.g. PSB900)')
+        if code in mapping:
+            raise SystemExit(f'{MANIFEST}:{lineno}: duplicate code {code!r}')
+        mapping[code] = rel
+    return mapping
+
+
+def resolve_private(root: Path, codes: list[str]) -> list[tuple[str, str]]:
+    """[(code, relative path)] for each code, or exit naming what is missing.
+
+    Path-valued, unlike the public basename search: the manifest says
+    exactly which file a code means, so a private shard cannot pick up a
+    second file that happens to share a basename.
+    """
+    mapping = load_codes(root)
+    missing = [c for c in codes if c not in mapping]
+    if missing:
+        raise SystemExit(
+            f'{root / MANIFEST} has no entry for: '
+            + ', '.join(sorted(missing)))
+    resolved: list[tuple[str, str]] = []
+    for code in codes:
+        rel = mapping[code]
+        if not (root / rel).is_file():
+            raise SystemExit(
+                f'{MANIFEST} maps {code} to {rel!r}, which is not in the '
+                'corpus checkout')
+        resolved.append((code, rel))
+    return resolved
+
+
+def parse_shard(path: str, root: str | None = None) -> tuple[str, list[str]]:
+    """Return (corpus, real basenames) from a shard list file.
+
+    A private list's codes are resolved through the corpus manifest, so
+    `root` is required for one.
+    """
+    corpus, entries = shard_entries(path)
+    if corpus == 'public':
+        return corpus, entries
+    if root is None:
+        raise SystemExit(
+            f'{path} is a private shard, so resolving its codes needs the '
+            'corpus root')
+    return corpus, [Path(rel).name for _, rel in
+                    resolve_private(Path(root), entries)]
 
 
 def exclude_regex(names: list[str]) -> str:
@@ -85,17 +179,17 @@ def is_lfs_stub(path: Path) -> bool:
 
 
 def cmd_regex(args: argparse.Namespace) -> None:
-    _, names = parse_shard(args.shard)
+    _, names = parse_shard(args.shard, args.root)
     print(exclude_regex(names), end='')
 
 
 def cmd_corpus(args: argparse.Namespace) -> None:
-    corpus, _ = parse_shard(args.shard)
+    corpus, _ = shard_entries(args.shard)
     print(corpus, end='')
 
 
 def cmd_names(args: argparse.Namespace) -> None:
-    _, names = parse_shard(args.shard)
+    _, names = parse_shard(args.shard, args.root)
     print('\n'.join(names))
 
 
@@ -141,7 +235,7 @@ def cmd_check(args: argparse.Namespace) -> None:
     corpora: dict[str, str] = {}
     for path in files:
         stem = path.stem
-        corpus, names = parse_shard(str(path))
+        corpus, names = shard_entries(str(path))
         corpora[stem] = corpus
         seen: set[str] = set()
         for name in names:
@@ -153,6 +247,24 @@ def cmd_check(args: argparse.Namespace) -> None:
                     f'{name!r} is listed in both {owner[name]} and {stem}')
             else:
                 owner[name] = stem
+        if corpus == 'private':
+            # No corpus to resolve against in `build`, so check the shape:
+            # a filename here would be published for good, and a code that
+            # the manifest cannot map fails the shard at run time with a
+            # message naming it.
+            for name in sorted(seen):
+                if not CODE_RE.match(name):
+                    errors.append(
+                        f'{path.name}: {name!r} is not a shard code. A '
+                        'private list names codes (leading capitals then a '
+                        'size, e.g. PSB900), never filenames - this repo is '
+                        'public and a committed filename stays published.')
+            if len(seen) == 1 and stem not in seen:
+                only = next(iter(seen))
+                errors.append(
+                    f'{path.name}: holds code {only!r} but is named after '
+                    f'{stem!r}; the file name is the shard id and the matrix '
+                    'entry, so the two must agree.')
         if stem.startswith('coverage-'):
             if corpus != 'public':
                 errors.append(
@@ -332,9 +444,12 @@ def _matrix_errors(workflow: Path, corpora: dict[str, str]) -> list[str]:
 
 
 def cmd_pull(args: argparse.Namespace) -> None:
-    _, names = parse_shard(args.shard)
+    corpus, entries = shard_entries(args.shard)
     root = Path(args.root)
-    paths = find_paths(root, names)
+    if corpus == 'private':
+        paths = [rel for _, rel in resolve_private(root, entries)]
+    else:
+        paths = find_paths(root, entries)
     stubs = [rel for rel in paths if is_lfs_stub(root / rel)]
     print(f'{len(paths)} shard models, {len(stubs)} LFS stubs to pull')
     if not stubs:
@@ -356,6 +471,8 @@ def main() -> None:
 
     p_regex = sub.add_parser('regex')
     p_regex.add_argument('shard')
+    p_regex.add_argument('root', nargs='?',
+                         help='corpus root; required for a private shard')
     p_regex.set_defaults(func=cmd_regex)
 
     p_corpus = sub.add_parser('corpus')
@@ -364,6 +481,8 @@ def main() -> None:
 
     p_names = sub.add_parser('names')
     p_names.add_argument('shard')
+    p_names.add_argument('root', nargs='?',
+                         help='corpus root; required for a private shard')
     p_names.set_defaults(func=cmd_names)
 
     p_pull = sub.add_parser('pull')

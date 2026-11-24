@@ -1,0 +1,35 @@
+ISO-10303-21;
+HEADER;
+FILE_DESCRIPTION((
+'conway#592/#591 behavioral fixture: an ADVANCED_FACE whose one boundary
+EDGE_CURVE is a closed CIRCLE (edge_start === edge_end, a vertex-to-itself
+closed edge per isWholeCurveEdge) placed by a degenerate AXIS2_PLACEMENT_3D
+(a zero-length ref_direction) - GetAxis2Placement3D normalises that to a
+NaN basis (conway#592), and the whole-curve-trim recovery (conway#492)
+resamples the SAME bad placement untrimmed, which the conway#591 finite
+check must reject rather than accept.'
+),'2;1');
+FILE_NAME('ap214-degenerate-placement-whole-curve','2026-01-01T00:00:00',(
+    'test'),('bldrs'),'','','');
+FILE_SCHEMA(('AUTOMOTIVE_DESIGN { 1 0 10303 214 1 1 1 1 }'));
+ENDSEC;
+DATA;
+#238=SPHERICAL_SURFACE('',#54598,0.9);
+#6222=FACE_OUTER_BOUND('',#9128,.T.);
+#9128=EDGE_LOOP('',(#41053));
+#18104=CIRCLE('',#54599,0.9);
+#22121=VERTEX_POINT('',#87937);
+#28750=EDGE_CURVE('',#22121,#22121,#18104,.T.);
+#41053=ORIENTED_EDGE('',*,*,#28750,.T.);
+#50626=ADVANCED_FACE('',(#6222),#238,.T.);
+#54598=AXIS2_PLACEMENT_3D('',#87936,#63430,#63431);
+#54599=AXIS2_PLACEMENT_3D('',#87939,#63432,#63433);
+#63430=DIRECTION('center_axis',(1.,0.,0.));
+#63431=DIRECTION('ref_axis',(0.,-1.,0.));
+#63432=DIRECTION('center_axis',(0.,0.,1.));
+#63433=DIRECTION('ref_axis',(0.,0.,0.));
+#87936=CARTESIAN_POINT('Origin',(0.,0.,0.));
+#87937=CARTESIAN_POINT('',(0.9,0.,0.));
+#87939=CARTESIAN_POINT('Origin',(0.,0.,0.));
+ENDSEC;
+END-ISO-10303-21;

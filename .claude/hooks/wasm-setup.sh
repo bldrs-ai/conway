@@ -58,15 +58,25 @@ if [ -f "$EMSDK_DIR/emsdk_env.sh" ]; then
   fi
 fi
 
-# 3. conway-geom WASM build (MT node target — what tests load at runtime).
-WASM_OUT="$REPO/dependencies/conway-geom/Dist/ConwayGeomWasmNodeMT.js"
-if [ ! -f "$WASM_OUT" ] || ! stamped "wasm-emsdk-$EMSDK_VERSION"; then
-  log "building conway-geom WASM (ConwayGeomWasmNodeMT) — first run ~2–4 min"
+# 3. conway-geom WASM build. BOTH node targets, not just MT: the suite
+# loads the single-threaded ConwayGeomWasmNode.js as well, and building
+# only MT leaves it missing. That failure is loud but misleading --
+# `Cannot find module '../Dist/ConwayGeomWasmNode.js'` repeated across
+# ~85 suites, which reads like a broken checkout rather than a half-built
+# engine. The MT-only build here predates that, and the stamp made it
+# stick: a tree stamped on the old target skipped the rebuild and kept
+# failing. Hence both artifacts in the guard and a target-specific stamp,
+# so adding a target invalidates it.
+WASM_MT="$REPO/dependencies/conway-geom/Dist/ConwayGeomWasmNodeMT.js"
+WASM_ST="$REPO/dependencies/conway-geom/Dist/ConwayGeomWasmNode.js"
+if [ ! -f "$WASM_MT" ] || [ ! -f "$WASM_ST" ] \
+   || ! stamped "wasm-node-emsdk-$EMSDK_VERSION"; then
+  log "building conway-geom WASM (ConwayGeomWasmNode + MT) — first run ~4–8 min"
   chmod +x "$REPO/scripts/build-codex.sh"
-  yarn build-codex-MT
-  stamp "wasm-emsdk-$EMSDK_VERSION"
+  yarn build-codex-node
+  stamp "wasm-node-emsdk-$EMSDK_VERSION"
 else
-  log "WASM artifact present, skipping conway-geom build"
+  log "WASM artifacts present, skipping conway-geom build"
 fi
 
 log "ready — yarn test / geometry can now run"

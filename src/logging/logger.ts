@@ -26,11 +26,40 @@ const LOG_LEVEL_BY_NAME: Record<LogLevelName, LogLevel> = {
   'error': LogLevel.ERROR,
 }
 
+/**
+ * Machine-readable classification for a log entry, so a consumer can act on
+ * a family of diagnostics without matching their prose.
+ *
+ * `dataDefect` is the one kind so far: the file said something the schema
+ * cannot resolve — a dangling or mistyped STEP reference — so conway skipped
+ * the entity rather than throwing (bldrs-ai/ops#28, conway#708). It is a
+ * statement about the INPUT, not about conway, which is the distinction it
+ * exists to carry: Share tags these `data_defect` and keeps them out of
+ * engine-bug triage (bldrs-ai/Share#1863), and derives the user-facing
+ * severity itself per the T0 policy in Share#1815 (displays despite skips →
+ * warning, builds nothing → error).
+ *
+ * Deliberately a separate field rather than a message prefix. Entries are
+ * already structured and already reach embedders whole, through
+ * {@link LoggingProxy} and {@link Logger.getLogs}; a prefix would instead
+ * put the marker inside the string that {@link Logger.log} dedups on, where
+ * a future rewording silently breaks every consumer. The `level` is left to
+ * each call site for the same reason — moving these entries to `warning`
+ * would rewrite the regression corpus's errors.csv without telling anyone
+ * anything new.
+ */
+export type LogCategoryName = 'dataDefect'
+
+/** {@link LogCategoryName}'s data-defect value, so call sites don't spell it. */
+export const DATA_DEFECT: LogCategoryName = 'dataDefect'
+
 export interface LogEntry {
     level: LogLevelName
     message: string
     count: number
     expressIDs:Set<string>
+    /** Machine-readable kind; absent for an unclassified entry. */
+    category?: LogCategoryName
 }
 
 
@@ -82,6 +111,10 @@ export default class Logger {
   private static logs: LogEntry[] = []
   private static proxies: LoggingProxy[] = []
   private static statistics: Map<number, Statistics> = new Map<number, Statistics>()
+  /** The statistics that warnings/errors are counted against (conway#740). */
+  private static activeStatistics: Statistics | undefined
+  /** The id of the open in progress, between beginOpen and endOpen. */
+  private static openingModelID: number | undefined
   private static threshold: LogLevel = LogLevel.INFO
   private static sink: LogSink = defaultSink
 
@@ -92,8 +125,11 @@ export default class Logger {
   public static initializeWasmCallbacks() {
     const environment = Environment.environmentType
 
-    if (environment === EnvironmentType.BROWSER) {
-      const globalScope = window;
+    if (environment === EnvironmentType.BROWSER ||
+        environment === EnvironmentType.WORKER) {
+      // `globalThis`, not `window`: a worker has no `window`, and the wasm
+      // glue looks the callbacks up on `globalThis` first (conway#540).
+      const globalScope = globalThis;
       (globalScope as any).logInfo = Logger.info;
       (globalScope as any).logWarning = Logger.warning;
       (globalScope as any).logError = Logger.error
@@ -148,10 +184,22 @@ export default class Logger {
    *
    * @param message - log message
    * @param level - log level
+   * @param category - machine-readable kind, part of the entry's identity
+   *   (see {@link LogCategoryName})
    * @return {number} log index
    */
-  private static findLogIndex(message: string, level: LogLevelName): number {
-    return Logger.logs.findIndex((log) => log.message === message && log.level === level)
+  private static findLogIndex(
+      message: string, level: LogLevelName, category?: LogCategoryName): number {
+
+    // The category is part of the dedup identity, not a property a later
+    // call can attach. `warning`/`error` are public and a call site is free
+    // to log the same text with and without a category, so folding the two
+    // together would let an ordinary engine error be RETROACTIVELY marked as
+    // a data defect by an unrelated later call — and their counts summed
+    // under whichever marker won. Share#1863 triages on that marker, so the
+    // two have to stay two entries (codex round 1 on conway#708).
+    return Logger.logs.findIndex((log) =>
+      log.message === message && log.level === level && log.category === category)
   }
 
   /**
@@ -160,9 +208,15 @@ export default class Logger {
    * @param message - log message
    * @param expressID - record this entry is about, kept out of the message
    *   text so repeats dedupe into one entry (see the class doc)
+   * @param category - machine-readable kind for consumers that act on a
+   *   family of diagnostics rather than reading them (see
+   *   {@link LogCategoryName})
    */
   private static log(
-      level: LogLevelName, message: string, expressID?: number | string ): void {
+      level: LogLevelName,
+      message: string,
+      expressID?: number | string,
+      category?: LogCategoryName ): void {
 
     // Two ways to attach a record to an entry. The parameter is the one to
     // use; the ' expressID: ' suffix is the older in-message form, kept
@@ -175,7 +229,7 @@ export default class Logger {
       String( expressID ) :
       message.split(' expressID: ')[1] // Extract the expressID
 
-    const index = Logger.findLogIndex(baseMessage, level)
+    const index = Logger.findLogIndex(baseMessage, level, category)
     let logEntry: LogEntry
     let firstOccurrence = false
 
@@ -185,6 +239,10 @@ export default class Logger {
         Logger.logs[index].expressIDs = Logger.logs[index].expressIDs || new Set<string>()
         Logger.logs[index].expressIDs.add(data)
       }
+      // Note what is NOT here: the category is never written to an existing
+      // entry. It is part of the identity findLogIndex matched on, so this
+      // entry already carries it — and assigning it would be the retroactive
+      // re-marking that identity exists to prevent.
       logEntry = Logger.logs[index]
     } else {
       firstOccurrence = true
@@ -193,8 +251,16 @@ export default class Logger {
         message: baseMessage,
         count: 1,
         expressIDs: data ? new Set([data]) : new Set(),
+        category,
       }
       Logger.logs.push(logEntry)
+    }
+
+    // Per-load counts (conway#740), on every occurrence and independent of
+    // the buffer above, which is global, deduplicated and cleared by
+    // StreamAllMeshes before an embedder gets to read it.
+    if (level === 'error' || level === 'warning') {
+      Logger.activeStatistics?.countDiagnostic(level, baseMessage, category)
     }
 
     // Echo only the first occurrence of each distinct entry — repeats keep
@@ -220,8 +286,12 @@ export default class Logger {
     const compressedLogs: LogEntry[] = []
 
     Logger.logs.forEach((log) => {
+      // Same identity findLogIndex uses, category included — this runs
+      // inside getErrors()/getDataDefects(), so merging on message+level
+      // alone would put back together exactly the entries the dedup
+      // identity keeps apart, and hand the survivor one arbitrary marker.
       const existingLog = compressedLogs.find((l) =>
-        l.message === log.message && l.level === log.level)
+        l.message === log.message && l.level === log.level && l.category === log.category)
       if (existingLog !== void 0) {
         existingLog.count += log.count
         if (log.expressIDs !== void 0) {
@@ -294,10 +364,126 @@ export default class Logger {
    */
   public static createStatistics(modelID: number): Statistics {
     const statistics: Statistics = new Statistics()
+    const previous = Logger.statistics.get(modelID)
 
-    this.statistics.set(modelID, statistics)
+    // An open replaces its own statistics part-way: IfcAPI begins the load
+    // (beginOpen), then the proxy it constructs creates its own object, and
+    // a streamed open that falls back to the classic one creates a third.
+    // Diagnostics logged before each replacement belong to the same load,
+    // so carry their counts across — but only within one open, so that an
+    // unrelated later load reusing the id (ids restart at 0 per IfcAPI,
+    // while this map is module-level) starts from zero.
+    if (Logger.openingModelID === modelID &&
+        previous !== void 0 && previous === Logger.activeStatistics) {
+      statistics.inheritDiagnostics(previous)
+    }
+
+    Logger.statistics.set(modelID, statistics)
+    Logger.activeStatistics = statistics
 
     return statistics
+  }
+
+  /**
+   * Start a load's diagnostic window (conway#740): give `modelID` fresh
+   * statistics and route every warning/error logged from now on into its
+   * counts, until another load's statistics are created. Called by the
+   * web-ifc compat OpenModel* entry points; paired with {@link endOpen}.
+   *
+   * The window closes at {@link endOpen}. A deferred (demand) open does its
+   * geometry later, in ExtractGeometryBatch* / StreamAllMeshes* calls; those
+   * re-enter this load's routing through {@link withStatistics}, so
+   * deferred models pumped one after another each keep their own counts.
+   *
+   * **Limit: the open window itself is a module-global singleton**
+   * (`openingModelID`, `activeStatistics`). Two *overlapping* asynchronous
+   * opens (for example `Promise.all` over `OpenModelStreamed`) therefore
+   * cross-attribute: the later beginOpen overwrites the earlier's routing,
+   * and either endOpen can close the other's window. Nothing in-tree
+   * overlaps opens on one Logger: Share serialises loads (CadView's
+   * `onViewerInFlightRef` dedupes, and replays a different model after the
+   * in-flight one ends), and conway's regression harness and the m3 pump
+   * scripts run each file in its own child process or worker, each with its
+   * own Logger. A per-open diagnostic context would fix it; see the
+   * follow-up issue linked from the PR #743 review thread.
+   *
+   * @param modelID The id the open is attempted under.
+   * @return {Statistics} The load's statistics.
+   */
+  public static beginOpen(modelID: number): Statistics {
+    Logger.openingModelID = void 0
+
+    const statistics = Logger.createStatistics(modelID)
+
+    Logger.openingModelID = modelID
+
+    return statistics
+  }
+
+  /**
+   * Run `fn` with warnings/errors counted against `modelID`'s statistics
+   * (conway#740), then put the previous routing back. This is what keeps a
+   * deferred model's pump-time diagnostics on that model when another load
+   * has since begun, and what stops unrelated calls (an invalid
+   * `GetGeometry`, a `CloseModel`) from being counted against whichever load
+   * started last: outside beginOpen..endOpen and a scope like this one,
+   * nothing is counted.
+   *
+   * An async `fn` holds the routing until its promise settles. Two scopes
+   * that overlap in time (two models pumped concurrently) can still
+   * misattribute one another's messages, because Logger cannot see which
+   * caller a message came from; sequential use, which is how Share pumps,
+   * is exact.
+   *
+   * @param modelID The model whose statistics should receive the counts.
+   * @param fn The work to run.
+   * @return {T} Whatever `fn` returns (a promise stays a promise).
+   */
+  public static withStatistics<T>(modelID: number, fn: () => T): T {
+    const previous = Logger.activeStatistics
+
+    Logger.activeStatistics = Logger.statistics.get(modelID)
+
+    const restore = () => {
+      Logger.activeStatistics = previous
+    }
+
+    let result: T
+
+    try {
+      result = fn()
+    } catch (e) {
+      restore()
+      throw e
+    }
+
+    if (result instanceof Promise) {
+      return result.finally(restore) as T
+    }
+
+    restore()
+
+    return result
+  }
+
+  /**
+   * End the open phase begun by {@link beginOpen}. The load's window closes
+   * with it: later diagnostics are counted only inside
+   * {@link withStatistics}, which the pump and whole-model entry points use.
+   * Also stops later createStatistics calls for the same id from inheriting
+   * the open's counts.
+   *
+   * @param modelID The id passed to beginOpen.
+   */
+  public static endOpen(modelID: number): void {
+    if (Logger.openingModelID === modelID) {
+      Logger.openingModelID = void 0
+    }
+
+    if (Logger.activeStatistics !== void 0 &&
+        Logger.activeStatistics === Logger.statistics.get(modelID)) {
+      Logger.activeStatistics = void 0
+    }
   }
 
   /**
@@ -334,21 +520,44 @@ export default class Logger {
   }
 
   /**
+   * Compresses the logs if they haven't been compressed, then returns just
+   * the entries conway classified as data defects — bad input rather than
+   * an engine failure (see {@link LogCategoryName}).
    *
-   * @param message - log message
-   * @param expressID - record this entry is about
+   * Each entry's `count` is how many entities that one defect skipped and
+   * `expressIDs` names them, so "what did this load drop, and where do I go
+   * look" is answerable without parsing any message text.
+   *
+   * @return {LogEntry[]} The data-defect entries, at whatever level each
+   * call site logged at.
    */
-  public static warning(message: string, expressID?: number | string): void {
-    Logger.log('warning', message, expressID)
+  public static getDataDefects(): LogEntry[] {
+
+    Logger.compressLogs()
+
+    return this.logs.filter( ( where ) => where.category === DATA_DEFECT )
   }
 
   /**
    *
    * @param message - log message
    * @param expressID - record this entry is about
+   * @param category - machine-readable kind (see {@link LogCategoryName})
    */
-  public static error(message: string, expressID?: number | string): void {
-    Logger.log('error', message, expressID)
+  public static warning(
+      message: string, expressID?: number | string, category?: LogCategoryName): void {
+    Logger.log('warning', message, expressID, category)
+  }
+
+  /**
+   *
+   * @param message - log message
+   * @param expressID - record this entry is about
+   * @param category - machine-readable kind (see {@link LogCategoryName})
+   */
+  public static error(
+      message: string, expressID?: number | string, category?: LogCategoryName): void {
+    Logger.log('error', message, expressID, category)
   }
 
   /**

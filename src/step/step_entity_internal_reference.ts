@@ -14,6 +14,13 @@ export default interface StepEntityInternalReference< EntityTypeIDs extends numb
   buffer?: Uint8Array
   vtable?: Uint32Array
   visitedMulti?: boolean
+  /**
+   * Set for a record whose trailing attributes must never be decoded as
+   * its type's attributes (an IFC4X3 record translated to an IFC4 type —
+   * ifc4x3_ifc4_translation.ts). Fields at or past this index read as `$`.
+   * See StepModelBase.setFieldMasks.
+   */
+  maskedFieldCount?: number
   multiMapping?: StepEntityInternalReference<EntityTypeIDs>[]
   multiEntity?: StepEntityBase< EntityTypeIDs >[]
 }

@@ -1,16 +1,20 @@
 import { ConwayGeometry, FileHandlerFunction as FileHandlerCallback,
   setModulePrefix,
  } from '../../index'
+// Not re-exported from the package index: an internal platform check
+// (conway#540), not public API.
+import { isWebPlatform } from '../../../dependencies/conway-geom'
 import {versionString} from '../../version/version'
 import Logger, { LogLevel as ConwayLogLevel } from '../../logging/logger'
 import { ProgressCallback } from '../../core/progress'
-import { ModelInfo } from '../../core/progress_log'
+import { DemandPrepYieldLike, ModelInfo } from '../../core/progress_log'
 import {
   WasmHeapArrayConstructor, wasmHeapView,
 } from '../../core/wasm_heap'
 import Environment from '../../utilities/environment'
 import * as glmatrix from 'gl-matrix'
 import { StepExternalByteStore } from '../../step/step_buffer_provider'
+import type { SourceHashAlgorithm } from '../../step/parsing/source_hash'
 import { IfcApiModelPassthrough } from './ifc_api_model_passthrough'
 import { IfcApiModelPassthroughFactory } from './ifc_api_model_passthrough_factory'
 import { Properties } from './properties'
@@ -69,6 +73,69 @@ export interface Loadersettings {
   DEFER_GEOMETRY?: boolean
 
   /**
+   * Conway extension (DEFER_GEOMETRY only; conway#638): the caller declares
+   * that IT owns the pumped mesh stream, so conway keeps no reference to it.
+   *
+   * Default (absent/false) is the historical behaviour, unchanged: every
+   * `PlacedGeometry` the pump builds is filed into the model's cumulative
+   * per-entity `meshMap` and its `vectorFlatMesh` spine as well as being
+   * handed to the mesh callback, so a later whole-model ask can be served
+   * out of that cache. On a D3D-scale model that cache is the largest single
+   * bucket of JS heap a load holds — 475 MB of `FlatMesh`/`PlacedGeometry`
+   * measured — and a consumer that assembles each batch as it lands (Share's
+   * incremental batched builder) never reads it.
+   *
+   * With this set, the pump delivers each delta `FlatMesh` to the callback
+   * and drops it. **The callback is the only delivery**: whatever the
+   * consumer does not copy or keep is gone.
+   *
+   * **This drops JS pointer spines, never native geometry.** The natives
+   * behind the delivered placements are owned by the model's geometry store
+   * and are freed only by `GEOMETRY_BUDGET_MB` eviction or
+   * `ReleaseModelGeometry`, neither of which this setting touches. The
+   * copy-window guarantee above — everything pump call N delivered stays
+   * resident until call N+1 begins — therefore holds exactly as it does
+   * without this flag.
+   *
+   * **A late whole-model ask still works, until the natives are gone.**
+   * `StreamAllMeshes`, `LoadAllGeometry` and `GetFlatMesh` on such a model
+   * re-walk the live scene rather than replaying a cache, which costs a walk
+   * but returns the same placements the pump delivered.
+   *
+   * **What a budget does to that ask.** The re-walk reads the geometry store,
+   * and `GEOMETRY_BUDGET_MB` eviction deletes from it, so an evicted
+   * placement is not recovered by the re-walk — it is simply absent from
+   * what the ask returns. Partial loss is served with a warning naming the
+   * count of unresolved instances; total loss — nothing resolved at all —
+   * throws a descriptive error naming this contract, as does a whole-model
+   * ask after `ReleaseModelGeometry`. What never happens is a silent empty
+   * model. A consumer that needs every placement should copy at delivery
+   * from the pump, which is what the budget's own contract already says.
+   *
+   * **Scope: on a windowed source the ask is async
+   * ({@link StreamAllMeshesAsync}).** The synchronous whole-model entry
+   * points drain through the synchronous pump, which refuses an external
+   * source outright — *"ExtractGeometryBatch is synchronous and cannot page
+   * a windowed source"*. That predates this setting, is identical with and
+   * without it, and is unchanged: `StreamAllMeshes` on a model opened with
+   * `OpenModelStream` still throws. `StreamAllMeshesAsync` (conway#660) is
+   * the entry point that serves such a model — it drains through
+   * `ExtractGeometryBatchAsync`, which pages each batch's product closures
+   * in, and then serves the identical re-walk with the identical accounting.
+   * Share pumps the async pump over a store, so that is the entry point a
+   * windowed Share load reaches for.
+   *
+   * The re-walk itself is unaffected by windowing either way: it resolves
+   * scene nodes against the model's geometry STORE, never against the byte
+   * source, so what a fully drained windowed model can serve is exactly what
+   * a fully drained resident one can. Paging is a property of the drain.
+   *
+   * Ignored on a non-deferred open, which has no pump and no accumulation to
+   * suppress.
+   */
+  STREAMING_CONSUMER?: boolean
+
+  /**
    * Conway extension (OpenModelStreamed + DEFER_GEOMETRY only; demand/tiled
    * rendering slice A2): receive PREVIEW mesh payloads while the parse is
    * still running — self-contained (geometry copied out of the wasm heap),
@@ -82,16 +149,44 @@ export interface Loadersettings {
 
   /**
    * Conway extension (DEFER_GEOMETRY only; M3's budgeted arena): cap the
-   * native geometry a model keeps resident, in MB. At each pump batch the
-   * least-recently-used assets are evicted until the live set fits.
-   * Unset — the default — keeps everything, which is what every consumer
-   * did before this existed.
+   * native geometry a model keeps resident, in MB. At the START of each pump
+   * batch the least-recently-used assets are evicted until the live set
+   * fits. Unset — the default — keeps everything, which is what every
+   * consumer did before this existed.
    *
    * **This changes a contract, so it is opt-in.** An evicted asset is gone
    * from `GetGeometry` until something re-extracts it, which is safe for a
    * consumer that copies payloads at delivery (the invariant Share#1640
    * asserts) and unsafe for one that keeps geometry IDs and fetches them
    * lazily later.
+   *
+   * **What "at delivery" means, precisely.** Everything pump call N
+   * delivered stays resident until pump call N+1 BEGINS, so the copy window
+   * is the whole gap between calls — an embedder may return from the pump,
+   * yield to the event loop, and only then read back the batch's geometry.
+   * Eviction ran at the tail of the pump until Sentry SHARE-1NK, which made
+   * that window a lie: a batch bigger than the whole budget was evicted by
+   * its own call, and the copy that followed hit a freed handle. The price
+   * of the guarantee is that the live set may transiently exceed the budget
+   * by one batch.
+   *
+   * **The trailing batch is the consumer's job, not the engine's.** The
+   * "by one batch" overshoot above is normally transient — pump call N+1's
+   * head eviction trims whatever call N left over budget. But nothing forces
+   * a call N+1: a consumer whose loop stops the moment `remaining` reaches 0
+   * never makes that call, so if the FINAL batch pushed `liveBytes` over
+   * budget, that overshoot is permanent, not transient — it persists for the
+   * model's lifetime. Evicting at the tail of that last call instead is not
+   * a fix: it would reintroduce the SHARE-1NK bug above for exactly that
+   * batch, since the embedder's copy happens after the call returns and
+   * there is still no in-engine signal for "the embedder is done copying."
+   * The trim is therefore on the consumer: pump once more after `remaining`
+   * reaches 0 (it extracts nothing and costs only the eviction pass) or call
+   * `SetGeometryBudget` directly. Share's own loop already does the former —
+   * its stop condition is `remaining === 0 && extracted === 0`, not
+   * `remaining === 0` alone, which guarantees exactly one such zero-work
+   * call. See {@link ExtractGeometryBatch}'s doc for the same contract from
+   * the pump-signature side.
    *
    * Budgeted on each native's `getAllocationSize` — vertices, triangles,
    * edges, the triangle-edge structures and the float vertex mirror. That is
@@ -105,6 +200,84 @@ export interface Loadersettings {
    * the budget proportionally rather than equal it.
    */
   GEOMETRY_BUDGET_MB?: number
+
+  /**
+   * Conway extension (OpenModelFromIndex only): verify the sidecar's
+   * source hash by re-reading the whole store (`true`), or by reading only
+   * its sampled blocks (`'sampled'`, about 0.5 MB on any size of file —
+   * conway#758; see `index_sidecar.ts#sampledSourceSpans` for what that
+   * catches and misses), rather than checking its byte length alone. A
+   * sidecar that recorded no sampled digest gets the full check under
+   * `'sampled'`, never none.
+   *
+   * Default off, and that default is the design rather than a shortcut.
+   * The distribution case — a coordinator that folded the hash into its
+   * own parse handing the index to workers addressing the same store —
+   * would pay a second full read *per worker* to re-derive a digest the
+   * coordinator already took over those exact bytes, which is the N-way
+   * I/O a shared index exists to remove. Turn it on for the revisit case,
+   * where a persisted sidecar may describe a file that has since changed.
+   * See `index_sidecar.ts` §"The trust gate" for what each gate does and
+   * does not establish.
+   */
+  VERIFY_INDEX_SOURCE_HASH?: boolean | 'sampled'
+
+  /**
+   * Conway extension (every IFC and STEP open; conway#756, #757): record the FNV-1a of the
+   * exact bytes the model's index is built from, so {@link
+   * IfcAPI.ExportIndexSidecar} can write a sidecar whose hash describes the
+   * bytes that were parsed. The streaming opens fold it into the parse's
+   * own pass; the classic resident opens hash the parsed buffer after the
+   * parse (reported outside `parseTime`). `OpenModelFromIndex` needs no
+   * flag — it adopts the sidecar's hash.
+   *
+   * **Default off, because it is not free:** ~1.3 s on a 902 MB model, about
+   * 12 % of the bare index build (conway#760 round 2), paid by every open
+   * whether or not it is ever exported. Turn it on for the models an
+   * embedder may evict and reopen from a sidecar. Without it,
+   * `ExportIndexSidecar` refuses (returns `undefined`) rather than hash
+   * the source as it stands later, which could bind the index to bytes it
+   * does not describe.
+   */
+  RECORD_SOURCE_HASH?: boolean
+
+  /**
+   * Conway extension (with {@link RECORD_SOURCE_HASH}; bldrs-ai/Share#2092):
+   * which whole-source digest the open records, and so which one an
+   * exported sidecar carries in its `hashAlgorithm` slot.
+   *
+   *  - `'fnv1a32'` (default): FNV-1a, a per-byte JS loop folded into the
+   *    parse's reads — ~1 s of V8 CPU on a 902 MB model, far more where the
+   *    JIT does not keep it optimised (the Firefox engine worker).
+   *  - `'sha256Blocks'`: native SHA-256 (`crypto.subtle.digest`) of each
+   *    4 MiB block, chained. The parse's thread only hands each block to
+   *    the digest; no JS loop touches the bytes.
+   *
+   * What each entry point records when `'sha256Blocks'` is asked for, the
+   * same for IFC and STEP (AP214/AP203/AP242):
+   *
+   * | Entry point | Records |
+   * |---|---|
+   * | `OpenModelStreamed` (streamed columnar parse) | block digest |
+   * | `OpenModelStreamed` → classic fallback after a failed streamed open (`fromAsync`) | block digest |
+   * | `OpenModelAsync` | block digest |
+   * | `OpenModelStream` (windowed over a store) | block digest |
+   * | `OpenModel` (synchronous: cannot await a native digest) | FNV-1a |
+   * | `OpenModelFromIndex` | the sidecar's own digest and id, adopted |
+   *
+   * With no WebCrypto every parsing entry point records FNV-1a. The
+   * sidecar's `hashAlgorithm` is always the digest actually computed.
+   *
+   * A sidecar's verify (`VERIFY_INDEX_SOURCE_HASH: true`) always runs the
+   * algorithm the sidecar names, whatever this is set to, so sidecars of
+   * either kind already persisted keep verifying. An id-2 sidecar with no
+   * WebCrypto here is `INDEX_STALE` under `true`; `'sampled'` still
+   * verifies it (the sampled digest is FNV under both) and `false` checks
+   * its length, as for any sidecar. A conway that predates
+   * `'sha256Blocks'` refuses such a sidecar (stale, or a decode error
+   * without a verify) and parses — it never accepts it unverified.
+   */
+  SOURCE_HASH_ALGORITHM?: SourceHashAlgorithm
 }
 
 /* MB as the API's unit, bytes as the engine's: the budget is a number a
@@ -281,9 +454,12 @@ export class IfcAPI {
     // prefix makes conway-geom import the engine module from the
     // directory it is actually served from, so import.meta.url — and
     // therefore the worker script URL — is correct. Web wasm paths are
-    // site-root-relative by convention; no-op outside isolated windows.
-    if (typeof window !== 'undefined' &&
-        (window as { crossOriginIsolated?: boolean }).crossOriginIsolated === true) {
+    // site-root-relative by convention; no-op outside isolated web contexts.
+    // Isolation is read off globalThis and the platform from conway-geom,
+    // not `window`, so an isolated Web Worker takes the same branch as an
+    // isolated window (conway#540).
+    if (isWebPlatform() &&
+        (globalThis as { crossOriginIsolated?: boolean }).crossOriginIsolated === true) {
       setModulePrefix(webWasmDirectory(this.wasmPath))
     }
     const locateFileHandler: LocateFileHandlerFn = (path, prefix) => {
@@ -323,12 +499,20 @@ export class IfcAPI {
 
     const modelIdResult = this.globalModelIDCounter
 
-    const result =
-      IfcApiModelPassthroughFactory.from(
-          modelIdResult,
-          data,
-          this.wasmModule,
-          settings)
+    // conway#740: this load's diagnostic window — see Logger.beginOpen.
+    Logger.beginOpen( modelIdResult )
+
+    let result: IfcApiModelPassthrough | undefined
+
+    try {
+      result = IfcApiModelPassthroughFactory.from(
+            modelIdResult,
+            data,
+            this.wasmModule,
+            settings)
+    } finally {
+      Logger.endOpen( modelIdResult )
+    }
 
     if ( result === void 0 ) {
       return -1
@@ -360,12 +544,20 @@ export class IfcAPI {
     // failed open burns an ID, which is harmless (IDs are only keys).
     const modelIdResult = this.globalModelIDCounter++
 
-    const result =
-      await IfcApiModelPassthroughFactory.fromAsync(
-          modelIdResult,
-          data,
-          this.wasmModule,
-          settings)
+    // conway#740: this load's diagnostic window — see Logger.beginOpen.
+    Logger.beginOpen( modelIdResult )
+
+    let result: IfcApiModelPassthrough | undefined
+
+    try {
+      result = await IfcApiModelPassthroughFactory.fromAsync(
+            modelIdResult,
+            data,
+            this.wasmModule,
+            settings)
+    } finally {
+      Logger.endOpen( modelIdResult )
+    }
 
     if ( result === void 0 ) {
       return -1
@@ -400,12 +592,20 @@ export class IfcAPI {
     // Reserve the ID before the first await — see OpenModelAsync.
     const modelIdResult = this.globalModelIDCounter++
 
-    const result =
-      await IfcApiModelPassthroughFactory.fromStreamed(
-          modelIdResult,
-          data,
-          this.wasmModule,
-          settings)
+    // conway#740: this load's diagnostic window — see Logger.beginOpen.
+    Logger.beginOpen( modelIdResult )
+
+    let result: IfcApiModelPassthrough | undefined
+
+    try {
+      result = await IfcApiModelPassthroughFactory.fromStreamed(
+            modelIdResult,
+            data,
+            this.wasmModule,
+            settings)
+    } finally {
+      Logger.endOpen( modelIdResult )
+    }
 
     if ( result === void 0 ) {
       return -1
@@ -425,8 +625,13 @@ export class IfcAPI {
    * {@link ExtractGeometryBatchAsync} so product closures can be
    * paged in.
    *
-   * IFC only; other formats return -1 (caller should fall back to
-   * buffering + OpenModelStreamed).
+   * IFC and STEP (AP214, and the AP203/AP242 files that open through
+   * it — conway#757). Other formats return -1, as does a STEP over a store
+   * with no `readSync` (`StepExternalByteStore.readSync`): AP214's
+   * extraction reads records synchronously, so a windowed STEP model faults
+   * its windows in synchronously and needs a store that can. That -1
+   * records load status `STORE_NOT_SYNCHRONOUS`. Either way the caller
+   * falls back to buffering + OpenModelStreamed.
    *
    * @param store External store holding the source bytes (OPFS File).
    * @param settings settings for loading the model
@@ -438,12 +643,20 @@ export class IfcAPI {
 
     const modelIdResult = this.globalModelIDCounter++
 
-    const result =
-      await IfcApiModelPassthroughFactory.fromStore(
-          modelIdResult,
-          store,
-          this.wasmModule,
-          settings)
+    // conway#740: this load's diagnostic window — see Logger.beginOpen.
+    Logger.beginOpen( modelIdResult )
+
+    let result: IfcApiModelPassthrough | undefined
+
+    try {
+      result = await IfcApiModelPassthroughFactory.fromStore(
+            modelIdResult,
+            store,
+            this.wasmModule,
+            settings)
+    } finally {
+      Logger.endOpen( modelIdResult )
+    }
 
     if ( result === void 0 ) {
       return -1
@@ -452,6 +665,150 @@ export class IfcAPI {
     this.models.set( modelIdResult, result )
 
     return modelIdResult
+  }
+
+  /**
+   * Index-first open (conway extension; feature-detect with
+   * `typeof api.OpenModelFromIndex === 'function'`). Consumes a **prebuilt
+   * entity index** — a sidecar from `serializeIndexSidecarFromColumns` —
+   * instead of building one, and keeps the model windowed over `store`
+   * exactly as {@link OpenModelStream} does. Everything downstream is
+   * identical; only the parse is gone.
+   *
+   * This is what makes a geometry worker pool pay. Every worker used to
+   * `OpenModelStream` and parse the whole file itself: on PSB in Chrome
+   * that measured 3.0× *slower* overall than no pool at all, with the main
+   * thread's own untouched parse going 15.8 s → 27.7 s under the
+   * contention (conway#541). One parse, N consumers of its index, is the
+   * precondition rather than an optimisation.
+   *
+   * IFC and STEP, inheriting the store path's coverage and its
+   * synchronous-store requirement for STEP; a sidecar stamped for another
+   * schema than the store's format is refused as `INDEX_STALE` (conway#757).
+   * Returns **-1** on any failure — including a sidecar that does not match the store — so
+   * the caller falls back to `OpenModelStream` **explicitly**. There is no
+   * internal cold-parse fallback: taking one silently would spend the
+   * whole cost the call exists to avoid and make a stale index invisible.
+   *
+   * A sidecar that does not match the store (wrong length, or — under
+   * `VERIFY_INDEX_SOURCE_HASH` — wrong hash) records load status
+   * **`INDEX_STALE`** on the statistics of the id the open was attempted
+   * under (`globalModelIDCounter` before the call), with the mismatch as
+   * the failure reason (conway#756). That is the "parse instead" signal;
+   * any other status is a failure of something other than the sidecar.
+   *
+   * The sidecar usually comes from {@link ExportIndexSidecar} on an earlier
+   * engine's open of the same source. Pass `VERIFY_INDEX_SOURCE_HASH: true`
+   * when it was persisted (an evicted model reopened later), since the
+   * length check alone does not see a same-length rewrite.
+   *
+   * @param store External store holding the source bytes (OPFS File).
+   * @param sidecar The serialised index.
+   * @param settings settings for loading the model
+   * @return {Promise<number>} model ID, or -1 on failure
+   */
+  async OpenModelFromIndex(
+      store: StepExternalByteStore,
+      sidecar: Uint8Array,
+      settings?: Loadersettings ): Promise<number> {
+
+    const modelIdResult = this.globalModelIDCounter++
+
+    // conway#740: this load's diagnostic window — see Logger.beginOpen.
+    Logger.beginOpen( modelIdResult )
+
+    let result: IfcApiModelPassthrough | undefined
+
+    try {
+      result = await IfcApiModelPassthroughFactory.fromIndex(
+            modelIdResult,
+            store,
+            sidecar,
+            this.wasmModule,
+            settings)
+    } finally {
+      Logger.endOpen( modelIdResult )
+    }
+
+    if ( result === void 0 ) {
+      return -1
+    }
+
+    this.models.set( modelIdResult, result )
+
+    return modelIdResult
+  }
+
+  /**
+   * Serialise an open model's entity index to a v2 index sidecar (conway
+   * extension, conway#756; feature-detect with
+   * `typeof api.ExportIndexSidecar === 'function'`), so a later engine —
+   * after this one is terminated to free the model — can come back with
+   * {@link OpenModelFromIndex} instead of re-parsing the source.
+   *
+   * Works on every IFC and STEP (AP214-family) open: resident
+   * (`OpenModel`, `OpenModelAsync`, `OpenModelStreamed`), windowed from
+   * birth (`OpenModelStream`), spilled (`SpillModelSource`), and
+   * index-first itself. The sidecar is stamped with the schema whose type
+   * enumeration its index uses (v3, conway#757), and an index-first open
+   * refuses one stamped for another. The sidecar is
+   * byte-identical to one serialised off a fresh parse's own columns, and
+   * a model opened from it reads back the same express IDs, spatial tree
+   * and properties (`ifc_index_sidecar_export.test.ts`).
+   *
+   * **Open the model with `RECORD_SOURCE_HASH: true`**, or this refuses.
+   * It reads no source bytes: the sidecar's hash is the one the open
+   * recorded, folded into the parse's own pass, so it is the digest of the
+   * bytes the index describes rather than of whatever the source holds now
+   * (a buffer mutated after open, a different store spilled to) — a
+   * verified reopen over changed bytes is then refused as `INDEX_STALE`.
+   * The export itself is a serialise: a few memcpys of the index columns
+   * (~0.1 s for a 9 M-row index).
+   *
+   * Returns `undefined` — with a warning naming why — for an unknown model
+   * id, a model opened without `RECORD_SOURCE_HASH`, a model of a format
+   * with no sidecar (glTF, OBJ, …), or an IFC4X3 model (the IFC4-compatible route's field masks
+   * have no slot, and the index-first open refuses IFC4X3 headers). The
+   * embedder's fallback for any of those is the parse it would have done
+   * anyway.
+   *
+   * @param modelID handle of an open model
+   * @return {Promise<Uint8Array | undefined>} The sidecar bytes, or
+   * undefined when this model cannot be exported.
+   */
+  async ExportIndexSidecar( modelID: number ): Promise<Uint8Array | undefined> {
+
+    const result = this.models.get( modelID )
+
+    if ( result === void 0 ) {
+      Logger.warning( `[ExportIndexSidecar]: no open model ${modelID}` )
+      return
+    }
+
+    if ( result.exportIndexSidecar === void 0 ) {
+      Logger.warning(
+          `[ExportIndexSidecar]: model ${modelID} has no index sidecar ` +
+          '(the sidecar covers IFC and STEP models)' )
+      return
+    }
+
+    try {
+
+      const exported = await result.exportIndexSidecar()
+
+      Logger.info(
+          `[ExportIndexSidecar]: model ${modelID}: ` +
+          `${exported.sidecar.byteLength} bytes for a ` +
+          `${exported.sourceByteLength}-byte source (serialise ` +
+          `${exported.serializeMs} ms)` )
+
+      return exported.sidecar
+    } catch ( error ) {
+
+      Logger.warning(
+          `[ExportIndexSidecar]: model ${modelID}: ` +
+          `${error instanceof Error ? error.message : String( error )}` )
+    }
   }
 
   /**
@@ -804,6 +1161,15 @@ export class IfcAPI {
   }
 
   /**
+   * The CLASSIC web-ifc coordination matrix, which this surface
+   * deliberately keeps at identity: consumers stamp the value they read
+   * here onto the assembled model, and a non-identity return would apply
+   * the recentre a SECOND time on top of the placements that already
+   * carry it.
+   *
+   * It is therefore NOT the answer to "what offset did the engine
+   * apply?" — that is {@link GetAppliedCoordinationMatrix}, and it is
+   * what you want for measurements, georeferenced permalinks and export.
    *
    * @param modelID
    * @return {Array<number>}
@@ -823,16 +1189,90 @@ export class IfcAPI {
   }
 
   /**
-   * Conway extension: the coordination frame the open ACTUALLY applied
-   * to emitted placements (the COORDINATE_TO_ORIGIN recenter), identity
-   * when none ran. GetCoordinationMatrix keeps its classic identity
-   * contract (consumers stamp it onto assembled models); this is the
-   * explicit report of the real offset so embedders can map rendered
-   * points back to source-world coordinates (Share#1634 acceptance).
+   * Conway extension: the coordination frame this open ACTUALLY composed
+   * into the placements it emitted — the full float64 column-major mat4,
+   * not {@link GetCoordinationMatrix}'s classic identity (Share#1634).
+   *
+   * **The frame contract.** Write `A` for what this returns. Every
+   * `flatTransformation` the model emits was composed as
+   *
+   * ```
+   *   flatTransformation = A * placement [ * translate(geomCentre) ]
+   * ```
+   *
+   * `placement` is the entity's native world placement in the file's own
+   * authored space — source units, Z-up, un-recentred. The optional
+   * `translate(geomCentre)` is the per-leaf offset the IFC path bakes out
+   * of the shared vertex buffer so the uploaded float32 positions stay
+   * local; the AP214/STEP path omits it (its vertices stay in local
+   * source space and `placement` carries the whole world transform). Both
+   * factors sit to the RIGHT of `A`, which is why neither one is needed
+   * below.
+   *
+   * So for any vertex `v` a consumer uploads and renders,
+   *
+   * ```
+   *   rendered = flatTransformation * v = A * world
+   *   world    = inverse(A) * rendered            <- the inverse you want
+   * ```
+   *
+   * where `world` is the point in the model's AUTHORED world space: the
+   * coordinates the file declares, in the file's units, Z-up. Inverting
+   * the returned matrix is the whole of it — nothing else about the model
+   * is required — because `A` carries all three factors the recentre
+   * composed, in this order (see `deriveCoordinationF64`):
+   *
+   * ```
+   *   A = scale(linearScalingFactor) * NormalizeMat * translate(-anchor)
+   * ```
+   *
+   * innermost first: the recentre translation, in SOURCE units and before
+   * any rotation; then `NormalizeMat`, the Z-up -> Y-up change of basis;
+   * then the scale to metres. `inverse(A)` therefore undoes the unit
+   * scale and the axis convention as well as the offset, so a consumer
+   * recovers authored coordinates without knowing either.
+   *
+   * **When it is identity.** When nothing has been composed AND nothing
+   * has been handed in: an open without COORDINATE_TO_ORIGIN, a shard
+   * (`SetGeometryShard` suppresses deriving) with no frame supplied, a
+   * model that has emitted no geometry yet and been given no frame, and
+   * an unknown `modelID` or a passthrough that does not implement it.
+   *
+   * Two things are NOT in that list, and both are load-bearing:
+   *
+   *  - A frame handed in by {@link SetCoordinationFrame} is reported
+   *    **immediately**, before a single placement has been composed under
+   *    it. That is what the M3 derive-once-then-distribute workflow needs
+   *    — a worker is asked for the frame it is going to apply, not the
+   *    frame it has finished applying — and it is safe to report early
+   *    precisely because a supplied frame is final: the setter refuses to
+   *    replace a frame the model derived for itself, and refuses to
+   *    accept one at all after the first batch. So "identity" never means
+   *    "ask again later"; on a model you supplied, the answer is right
+   *    from the moment you supplied it.
+   *  - A near-origin model under COORDINATE_TO_ORIGIN returns a frame
+   *    whose TRANSLATION is exactly zero — no recentre was needed, that
+   *    is the model-zero rule in `COORDINATION_SNAP_M` — but whose
+   *    rotation and scale are still the `NormalizeMat` and unit scale the
+   *    placements were composed under. Do not shortcut on "no offset
+   *    applied"; invert the matrix.
+   *
+   * **Preview-adopted vs. durable.** A deferred open that adopted its
+   * parse-time preview channel's frame reports that adopted frame from
+   * the moment the model opens — truthfully, since the preview payloads
+   * were composed under it. The durable walk is the authority, and it
+   * revalidates that adoption against its own first geometry, so the
+   * value can change ONCE, at the first durable batch, if the adopted
+   * frame is rejected. From the frame's derivation (or validation)
+   * onward it is fixed for the life of the model: later batches place
+   * under the same frame, and {@link SetCoordinationFrame} refuses to
+   * replace a frame the model already derived.
+   *
    * Feature-detect: typeof api.GetAppliedCoordinationMatrix.
    *
    * @param modelID
-   * @return {Array<number>} column-major mat4
+   * @return {Array<number>} column-major mat4, a fresh array the caller
+   * owns
    */
   GetAppliedCoordinationMatrix(modelID: number): Array<number> {
 
@@ -910,8 +1350,13 @@ export class IfcAPI {
    * opened with `OpenModelStreamed(data, {DEFER_GEOMETRY: true})`,
    * extract the next `batchSize` products and emit this batch's meshes —
    * the incremental twin of StreamAllMeshes. Feature-detect with
-   * `typeof api.ExtractGeometryBatch === 'function'`; call repeatedly
-   * until `remaining` is 0.
+   * `typeof api.ExtractGeometryBatch === 'function'`; call repeatedly until
+   * `remaining === 0 && extracted === 0` — one call PAST `remaining` alone
+   * first reaching 0. That extra call extracts nothing, but it still runs
+   * the geometry budget's head eviction (see `GEOMETRY_BUDGET_MB`), which is
+   * the only thing that trims an overshoot the final real batch left over
+   * budget; stopping at `remaining === 0` alone can leave that overshoot
+   * resident for the model's lifetime.
    *
    * DELTA CONTRACT: an entity may be emitted again in a LATER call with
    * a FlatMesh containing only its NEW placed instances (shared/mapped
@@ -940,6 +1385,13 @@ export class IfcAPI {
    * Same contract as the setting: an evicted asset is gone from GetGeometry
    * until something re-extracts it, which is safe for a consumer that copies
    * payloads at delivery and unsafe for one that fetches lazily later.
+   *
+   * Same trailing-batch caveat as the setting, too: this eviction pass runs
+   * against the live set as it stands right now, so it does not by itself
+   * guarantee a LATER pump call won't push `liveBytes` back over budget.
+   * Calling this explicitly after a demand pump's `remaining` reaches 0 is
+   * exactly the "pump once more" trim `GEOMETRY_BUDGET_MB` describes — a
+   * direct call here is equivalent to that trailing zero-work pump call.
    *
    * @param modelID handle retrieved by an open
    * @param megabytes the ceiling, in MB of native allocation (see
@@ -1001,6 +1453,37 @@ export class IfcAPI {
   }
 
   /**
+   * Conway extension (M3): what building this model's demand worklists
+   * cost — the prep window that sits inside the FIRST ExtractGeometryBatch
+   * call, measured directly instead of inferred by differencing two pump
+   * calls (conway#682).
+   *
+   * The distinction the fields carry is what a worker pool needs. Every
+   * worker runs `candidatesMs` in full over the whole model, because a
+   * shard narrows what is BUILT and not what is walked — that is the
+   * replicated term, and `keptProducts` against `candidateProducts` is how
+   * much of the walk this worker had a use for. `keysMs` is its opposite:
+   * the dispatch-key pass runs only when a shard is claimed, so an
+   * unsharded reference never performs it and cannot be the denominator
+   * for it.
+   *
+   * Wall time, and on a windowed source (`windowed: true`) the build awaits
+   * paging, so the number contains I/O rather than only compute.
+   *
+   * Render it with `formatDemandPrepLine` from `core/progress_log`, which
+   * is the canonical text form the CLI, the console and Share share.
+   *
+   * @param modelID handle from a DEFER_GEOMETRY open
+   * @return {DemandPrepYieldLike | undefined} the build's cost, or
+   * undefined for unknown models, for passthroughs with no demand
+   * worklists (AP214/STEP), and for a deferred model that has not pumped
+   * yet — the build is lazy, so there is nothing to report until it runs
+   */
+  GetDemandPrepYield( modelID: number ): DemandPrepYieldLike | undefined {
+    return this.models.get(modelID)?.demandPrepYield
+  }
+
+  /**
    * Conway extension (M3): supply the recentre frame a deferred model
    * applies, instead of letting it derive one from its own first geometry.
    *
@@ -1014,6 +1497,11 @@ export class IfcAPI {
    * Typical use: the coordinator opens once (its parse-time preview channel
    * derives a frame), reads it back with {@link GetAppliedCoordinationMatrix}, and
    * passes it to every worker before their first batch.
+   *
+   * A frame supplied here is readable back from
+   * {@link GetAppliedCoordinationMatrix} straight away, before the worker
+   * has composed anything under it — which is what lets a coordinator
+   * confirm every worker took the frame without first pumping each one.
    *
    * @param modelID handle from a DEFER_GEOMETRY open
    * @param matrix column-major mat4 of 16 finite numbers, or omitted to drop
@@ -1045,7 +1533,77 @@ export class IfcAPI {
       return {extracted: 0, remaining: 0}
     }
 
-    return result.extractGeometryBatch(batchSize, meshCallback)
+    const start = performance.now()
+    const extract = result.extractGeometryBatch.bind(result)
+    const pumped = Logger.withStatistics(
+        modelID, () => extract(batchSize, meshCallback))
+
+    this.recordPumpStatistics_(modelID, result, pumped, performance.now() - start)
+
+    return pumped
+  }
+
+  /**
+   * Refresh the products-with-geometry count after a whole-model ask
+   * (conway#740), which on a deferred model may itself have drained the
+   * pump.
+   *
+   * Geometry time is deliberately NOT added here. `getGeometryTime()` covers
+   * explicit pumping (ExtractGeometryBatch*) plus a classic open's own
+   * extraction. Whether a whole-model call drained pending work is not
+   * observable through the passthrough (the products-with-geometry count
+   * is no proxy for it: a model whose products all lack geometry drains
+   * fully and leaves it at 0), so a drain through StreamAllMeshes* /
+   * LoadAllGeometry leaves the time at the open's value. See conway#745.
+   *
+   * @param modelID The model.
+   * @param result Its passthrough.
+   */
+  private refreshProductsWithGeometry_(
+      modelID: number, result: IfcApiModelPassthrough ): void {
+
+    const withGeometry = result.getProductsWithGeometryCount?.()
+
+    if (withGeometry !== void 0) {
+      Logger.getStatistics(modelID)?.setProductsWithGeometryCount(withGeometry)
+    }
+  }
+
+  /**
+   * Fold one demand-pump call into the model's statistics (conway#740).
+   *
+   * A deferred open reports `geometryTimeInMs: 0` because no geometry has
+   * run yet, so without this `getGeometryTime()` stays 0 on the demand path
+   * however long the pump takes. Each call that did work adds its wall time
+   * — the time spent inside the pump, not the embedder's own time between
+   * calls — and the products-with-geometry count is refreshed, so both are
+   * final once `remaining` reaches 0. A call that finds nothing to do (a
+   * fully-extracted model, or the drained tail call) adds nothing.
+   *
+   * @param modelID The pumped model.
+   * @param result Its passthrough.
+   * @param pumped What the call returned.
+   * @param milliseconds Wall time the call took.
+   */
+  private recordPumpStatistics_(
+      modelID: number,
+      result: IfcApiModelPassthrough,
+      pumped: {extracted: number, remaining: number},
+      milliseconds: number ): void {
+
+    const statistics = Logger.getStatistics(modelID)
+
+    if (statistics === void 0 || (pumped.extracted === 0 && pumped.remaining === 0)) {
+      return
+    }
+
+    statistics.addGeometryTime(milliseconds)
+
+    const withGeometry = result.getProductsWithGeometryCount?.()
+
+    if (withGeometry !== void 0) {
+      statistics.setProductsWithGeometryCount(withGeometry)
+    }
   }
 
   /**
@@ -1069,14 +1627,22 @@ export class IfcAPI {
     const result = this.models.get(modelID)
 
     if (result?.extractGeometryBatchAsync !== void 0) {
-      return result.extractGeometryBatchAsync(batchSize, meshCallback)
+
+      const start = performance.now()
+      const extractAsync = result.extractGeometryBatchAsync.bind(result)
+      const pumped = await Logger.withStatistics(
+        modelID, () => extractAsync(batchSize, meshCallback))
+
+      this.recordPumpStatistics_(modelID, result, pumped, performance.now() - start)
+
+      return pumped
     }
 
     if (result?.extractGeometryBatch === void 0) {
       return {extracted: 0, remaining: 0}
     }
 
-    return result.extractGeometryBatch(batchSize, meshCallback)
+    return this.ExtractGeometryBatch(modelID, batchSize, meshCallback)
   }
 
   /**
@@ -1129,7 +1695,65 @@ export class IfcAPI {
 
     if (result !== void 0) {
 
-      result.streamAllMeshes(meshCallback)
+      Logger.withStatistics(modelID, () => result.streamAllMeshes(meshCallback))
+      this.refreshProductsWithGeometry_(modelID, result)
+    }
+
+    Logger.displayLogs()
+    Logger.clearLogs()
+    Logger.printStatistics(modelID)
+  }
+
+  /**
+   * Conway extension (conway#660): async twin of {@link StreamAllMeshes},
+   * and the ONLY whole-model ask a **windowed** deferred model can answer.
+   *
+   * `StreamAllMeshes` drains a deferred model through the synchronous pump,
+   * which refuses an external source — *"ExtractGeometryBatch is synchronous
+   * and cannot page a windowed source"* — so on a model opened with
+   * {@link OpenModelStream} it throws before serving anything. This drains
+   * through {@link ExtractGeometryBatchAsync} instead, paging each batch's
+   * product closures in, and then serves exactly what the sync entry point
+   * would have served on the same model: the same placements, the same
+   * `STREAMING_CONSUMER` re-walk, the same budget accounting (partial loss
+   * warns with the unresolved count, total loss throws), and the same loud
+   * throw once `ReleaseModelGeometry` has freed the natives.
+   *
+   * **What it does not do is recover geometry.** The re-walk that serves the
+   * ask reads the model's geometry store, not the byte source, so paging is
+   * a property of the DRAIN only — anything a `GEOMETRY_BUDGET_MB` eviction
+   * already freed is reported as missing rather than fetched back, exactly
+   * as on a resident source. A consumer that needs every placement copies at
+   * delivery from the pump.
+   *
+   * Safe on a resident source and on a non-deferred model, both of which are
+   * served by the synchronous path internally. Feature-detect with
+   * `typeof api.StreamAllMeshesAsync === 'function'`.
+   *
+   * @param modelID handle retrieved by OpenModelStream / OpenModelStreamed
+   * @param meshCallback receives one whole-model FlatMesh per entity
+   * @return {Promise<void>} resolves once every entity has been delivered
+   */
+  async StreamAllMeshesAsync(
+      modelID: number,
+      meshCallback: (mesh: FlatMesh) => void ): Promise<void> {
+
+    const result = this.models.get(modelID)
+
+    if (result !== void 0) {
+
+      // Passthroughs predating conway#660 (and any future non-conway one)
+      // have no async twin; the sync entry point is the whole of what they
+      // can do, and on a resident source it is equivalent.
+      await Logger.withStatistics(modelID, async () => {
+        if (result.streamAllMeshesAsync !== void 0) {
+          await result.streamAllMeshesAsync(meshCallback)
+        } else {
+          result.streamAllMeshes(meshCallback)
+        }
+      })
+
+      this.refreshProductsWithGeometry_(modelID, result)
     }
 
     Logger.displayLogs()
@@ -1151,7 +1775,11 @@ export class IfcAPI {
 
     if (result !== void 0) {
 
-      result.streamAllMeshesWithTypes(types, meshCallback)
+      // Diagnostics are routed to this model, but no statistics refresh: this
+      // entry point does not pump a deferred model (the IFC proxy has no
+      // deferred branch, the AP214 one is a no-op), so it extracts nothing
+      // that would change the counts. See conway#746.
+      Logger.withStatistics(modelID, () => result.streamAllMeshesWithTypes(types, meshCallback))
     }
   }
 
@@ -1180,7 +1808,12 @@ export class IfcAPI {
 
     if (result !== void 0) {
 
-      return result.loadAllGeometry()
+      const meshes = Logger.withStatistics(modelID, () => result.loadAllGeometry())
+
+      // Drains a deferred model the way StreamAllMeshes does (conway#740).
+      this.refreshProductsWithGeometry_(modelID, result)
+
+      return meshes
     }
 
     // dummy vars

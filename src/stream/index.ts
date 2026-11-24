@@ -22,9 +22,12 @@ export {
   openStreamedIfcModel,
   openStreamedIfcModelAsync,
   openStreamedIfcModelFromStore,
+  openIfcModelFromIndex,
+  assertSidecarDescribesStore,
   ifcPrefixTypeIndex,
   StreamedIfcOpen,
   StreamedIfcOpenOptions,
+  IndexFirstIfcOpenOptions,
 } from '../ifc/ifc_stream_open'
 export {
   buildColumnarIndexStreaming,
@@ -48,13 +51,47 @@ export {
   StepBufferProvider,
   WindowedStepBufferProvider,
 } from '../step/step_buffer_provider'
-export { StepIndexColumns, ColumnarIndexSink } from '../step/parsing/columnar_index'
+export { StepIndexColumns, StepIndexShard, ColumnarIndexSink } from '../step/parsing/columnar_index'
 export {
+  buildColumnarIndexShardedAsync,
+  compareIndexColumns,
+  inProcessShardRunner,
+  mergeIndexShards,
+  resolveShardCount,
+  MAX_DERIVED_SHARD_COUNT,
+  MIN_BYTES_PER_SHARD,
+  ShardStop,
+  ShardJob,
+  ShardOutcome,
+  ShardRunner,
+  ShardedColumnarIndexResult,
+  ShardedIndexOptions,
+} from '../step/parsing/sharded_index_builder'
+export {
+  serializeIndexSidecar,
   serializeIndexSidecarFromColumns,
   deserializeIndexSidecarToColumns,
   sidecarMatchesSource,
+  sidecarMatchesSourceLength,
   hashSource,
+  SIDECAR_VERSION,
+  DecodedSidecarColumns,
+  SidecarSourceIdentity,
+  IndexSidecarStaleError,
+  IndexSidecarStaleReason,
+  IndexSidecarUnsupportedError,
+  readSidecarSourceIdentity,
 } from '../step/parsing/index_sidecar'
+export {
+  HashingByteSource,
+  HashingSyncByteSource,
+  hashSourceAsync,
+} from '../step/parsing/source_hash'
+export {
+  exportIfcIndexSidecar,
+  IfcIndexSidecarExport,
+  IfcIndexSidecarExportOptions,
+} from '../ifc/ifc_index_sidecar_export'
 export {
   StreamingRecordDispatcher,
   RecordHandler,

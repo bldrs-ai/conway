@@ -1,0 +1,99 @@
+ISO-10303-21;
+HEADER;
+FILE_DESCRIPTION((''),'2;1');
+FILE_NAME('lv95_baked_geometry.ifc','2026-08-31T00:00:00',(''),(''),'','','');
+FILE_SCHEMA(('IFC4'));
+ENDSEC;
+DATA;
+/* Minimal synthetic model in the shape that broke Share#1634 /
+   test-models-private#97: a georeferenced building whose national-grid
+   coordinates are baked into the GEOMETRY rather than carried by the
+   object placements.
+
+   Every IfcLocalPlacement below is the identity (#22 = origin); the
+   ~2.6e6 m LV95 easting / 1.25e6 m northing lives in the
+   IfcExtrudedAreaSolid's own Position (#1017 and friends), so it ends up
+   in the tessellated f64 vertex array and NOT in the scene transform.
+   That is exactly Ecobau.ifc's layout, and it is the case a
+   coordination-frame recentre alone cannot fix: the frame cancels the
+   placement, but the vertices Share uploads to the GPU are still at
+   2.6e6 m, where the float32 ULP is ~0.25 m.
+
+   Four products, two shapes of the defect:
+
+     - #1000 / #1100 own their bodies outright.
+     - #1200 / #1300 both map ONE IfcRepresentationMap (#300), so they
+       share a single native geometry that gets normalize()d once. They
+       must both be placed with the SAME recovered centre — the cache
+       case in normalizeWithCentreF64.
+
+   Read by coordination_baked_geometry.test.ts. */
+#1=IFCPROJECT('3lv95Baked000000000000',$,'LV95BakedGeometry',$,$,$,$,(#20),#10);
+#10=IFCUNITASSIGNMENT((#11));
+#11=IFCSIUNIT(*,.LENGTHUNIT.,$,.METRE.);
+#20=IFCGEOMETRICREPRESENTATIONCONTEXT($,'Model',3,1.0E-05,#21,$);
+#21=IFCAXIS2PLACEMENT3D(#22,$,$);
+#22=IFCCARTESIANPOINT((0.,0.,0.));
+#23=IFCDIRECTION((0.,0.,1.));
+
+/* The shared asset: a 2x4x3 m box whose profile sits at the LV95 easting
+   and northing. Mapped twice below. */
+#300=IFCREPRESENTATIONMAP(#21,#310);
+#310=IFCSHAPEREPRESENTATION(#20,'Body','SweptSolid',(#311));
+#311=IFCEXTRUDEDAREASOLID(#312,#316,#23,3.);
+#312=IFCRECTANGLEPROFILEDEF(.AREA.,$,#313,2.,4.);
+#313=IFCAXIS2PLACEMENT2D(#314,$);
+#314=IFCCARTESIANPOINT((0.,0.));
+#316=IFCAXIS2PLACEMENT3D(#317,$,$);
+#317=IFCCARTESIANPOINT((2646020.37,1249010.61,0.));
+
+/* Product with its own body, at the LV95 origin of this fixture. */
+#1000=IFCBUILDINGELEMENTPROXY('3lv95Baked000000000001',$,'BakedFirst',$,$,#1001,#1010,$,$);
+#1001=IFCLOCALPLACEMENT($,#1002);
+#1002=IFCAXIS2PLACEMENT3D(#22,$,$);
+#1010=IFCPRODUCTDEFINITIONSHAPE($,$,(#1011));
+#1011=IFCSHAPEREPRESENTATION(#20,'Body','SweptSolid',(#1012));
+#1012=IFCEXTRUDEDAREASOLID(#1013,#1016,#23,3.);
+#1013=IFCRECTANGLEPROFILEDEF(.AREA.,$,#1014,2.,4.);
+#1014=IFCAXIS2PLACEMENT2D(#1015,$);
+#1015=IFCCARTESIANPOINT((0.,0.));
+#1016=IFCAXIS2PLACEMENT3D(#1017,$,$);
+#1017=IFCCARTESIANPOINT((2646000.37,1249000.61,0.));
+
+/* A second body 30m away in the same grid, so the assertions see more
+   than one distinct centre. */
+#1100=IFCBUILDINGELEMENTPROXY('3lv95Baked000000000002',$,'BakedSecond',$,$,#1101,#1110,$,$);
+#1101=IFCLOCALPLACEMENT($,#1102);
+#1102=IFCAXIS2PLACEMENT3D(#22,$,$);
+#1110=IFCPRODUCTDEFINITIONSHAPE($,$,(#1111));
+#1111=IFCSHAPEREPRESENTATION(#20,'Body','SweptSolid',(#1112));
+#1112=IFCEXTRUDEDAREASOLID(#1113,#1116,#23,3.);
+#1113=IFCRECTANGLEPROFILEDEF(.AREA.,$,#1114,2.,4.);
+#1114=IFCAXIS2PLACEMENT2D(#1115,$);
+#1115=IFCCARTESIANPOINT((0.,0.));
+#1116=IFCAXIS2PLACEMENT3D(#1117,$,$);
+#1117=IFCCARTESIANPOINT((2646030.37,1249000.61,0.));
+
+/* First user of the shared map, identity placement. */
+#1200=IFCBUILDINGELEMENTPROXY('3lv95Baked000000000003',$,'MappedFirst',$,$,#1201,#1210,$,$);
+#1201=IFCLOCALPLACEMENT($,#1202);
+#1202=IFCAXIS2PLACEMENT3D(#22,$,$);
+#1210=IFCPRODUCTDEFINITIONSHAPE($,$,(#1211));
+#1211=IFCSHAPEREPRESENTATION(#20,'Body','MappedRepresentation',(#1212));
+#1212=IFCMAPPEDITEM(#300,#1213);
+#1213=IFCCARTESIANTRANSFORMATIONOPERATOR3D($,$,#22,1.,$);
+
+/* Second user of the SAME map, 20m along +Y. Its body is one native
+   geometry with #1200's, so the second emission must reuse the cached
+   centre rather than re-deriving zero from an already-normalized
+   buffer. */
+#1300=IFCBUILDINGELEMENTPROXY('3lv95Baked000000000004',$,'MappedSecond',$,$,#1301,#1310,$,$);
+#1301=IFCLOCALPLACEMENT($,#1302);
+#1302=IFCAXIS2PLACEMENT3D(#1303,$,$);
+#1303=IFCCARTESIANPOINT((0.,20.,0.));
+#1310=IFCPRODUCTDEFINITIONSHAPE($,$,(#1311));
+#1311=IFCSHAPEREPRESENTATION(#20,'Body','MappedRepresentation',(#1312));
+#1312=IFCMAPPEDITEM(#300,#1313);
+#1313=IFCCARTESIANTRANSFORMATIONOPERATOR3D($,$,#22,1.,$);
+ENDSEC;
+END-ISO-10303-21;

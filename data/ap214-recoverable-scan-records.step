@@ -1,0 +1,60 @@
+ISO-10303-21;
+HEADER;
+/* Records that make a reference getter THROW, in the three shapes the
+ * solid-identity scan actually meets. The scan runs on every load (both the
+ * product-structure tree and the geometry walk read it), so a throw it does
+ * not contain fails the whole model instead of skipping one record --
+ * conway#683 review. The geometry walk has always contained these per record;
+ * this fixture holds the scan to the same bar.
+ *
+ *   #502  a dangling relationship reference (#900 is not in the file). This is
+ *         the NORMAL state of a mid-parse prefix model, which the streamed
+ *         preview channel hands to prepareDemandExtraction.
+ *   #452  an item type the AP214 schema has no id for -- the enum carries no
+ *         tessellated entities at all, so reading #450's items throws, the
+ *         case makeThunk documents for #25231 of
+ *         nist_ftc_08_asme1_ap242-e1-tg.stp.
+ *   #403  a mandatory name slot holding `$`, so the name getter throws while
+ *         the body itself is perfectly good.
+ *
+ * The healthy bodies of #400 must still come through addressable. */
+FILE_DESCRIPTION ('AP214 recoverable scan records / conway#683 containment fixture','2;1');
+FILE_NAME('ap214-recoverable-scan-records','2026-01-01T00:00:00',('test'),('bldrs'),'','','');
+FILE_SCHEMA(('AUTOMOTIVE_DESIGN { 1 0 10303 214 1 1 1 1 }'));
+ENDSEC;
+DATA;
+#1 = APPLICATION_PROTOCOL_DEFINITION('international standard','automotive_design',2010,#2);
+#2 = APPLICATION_CONTEXT('mechanical design');
+#10 = CARTESIAN_POINT('',(0.,0.,0.));
+#20 = DIRECTION('',(0.,0.,1.));
+#21 = DIRECTION('',(1.,0.,0.));
+#30 = AXIS2_PLACEMENT_3D('',#10,#20,#21);
+#100 = ( GEOMETRIC_REPRESENTATION_CONTEXT(3) GLOBAL_UNCERTAINTY_ASSIGNED_CONTEXT((#104)) GLOBAL_UNIT_ASSIGNED_CONTEXT((#101,#102,#103)) REPRESENTATION_CONTEXT('Context','3D') );
+#101 = ( LENGTH_UNIT() NAMED_UNIT(*) SI_UNIT(.MILLI.,.METRE.) );
+#102 = ( NAMED_UNIT(*) PLANE_ANGLE_UNIT() SI_UNIT($,.RADIAN.) );
+#103 = ( NAMED_UNIT(*) SI_UNIT($,.STERADIAN.) SOLID_ANGLE_UNIT() );
+#104 = UNCERTAINTY_MEASURE_WITH_UNIT(LENGTH_MEASURE(1.E-07),#101,'','');
+#201 = PRODUCT_CONTEXT('',#2,'mechanical');
+#202 = PRODUCT_DEFINITION_CONTEXT('part definition',#2,'design');
+#210 = PRODUCT('Document','Document','',(#201));
+#211 = PRODUCT_DEFINITION_FORMATION('','',#210);
+#212 = PRODUCT_DEFINITION('design','',#211,#202);
+#300 = SHAPE_REPRESENTATION('Document',(#30),#100);
+#301 = PRODUCT_DEFINITION_SHAPE('','',#212);
+#302 = SHAPE_DEFINITION_REPRESENTATION(#301,#300);
+#400 = ADVANCED_BREP_SHAPE_REPRESENTATION('brep_rep_0',(#401,#402,#403),#100);
+#401 = MANIFOLD_SOLID_BREP('brep_0',#411);
+#402 = MANIFOLD_SOLID_BREP('brep_1',#412);
+#403 = MANIFOLD_SOLID_BREP($,#413);
+#411 = CLOSED_SHELL('',());
+#412 = CLOSED_SHELL('',());
+#413 = CLOSED_SHELL('',());
+#450 = ADVANCED_BREP_SHAPE_REPRESENTATION('tess_rep',(#451,#452),#100);
+#451 = MANIFOLD_SOLID_BREP('tess_body_0',#461);
+#452 = TESSELLATED_SHELL('tess',(),$);
+#461 = CLOSED_SHELL('',());
+#500 = SHAPE_REPRESENTATION_RELATIONSHIP('','',#300,#400);
+#501 = SHAPE_REPRESENTATION_RELATIONSHIP('','',#300,#450);
+#502 = SHAPE_REPRESENTATION_RELATIONSHIP('','',#900,#300);
+ENDSEC;
+END-ISO-10303-21;
