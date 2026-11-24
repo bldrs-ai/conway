@@ -411,8 +411,8 @@ jobs:
   #
   # Ten shards max (see regression/shards/README.md):
   #   coverage-1..3  public small models (union = smoke_models.txt)
-  #   psb, d3d, ilna, dowa, orbiter, blsn, hospital
-  #                  one private headline model each
+  #   PSB900, D3D224, ILNA250, DOWA418, O10, BLSN282, AHMAC555
+  #                  one private headline model each (codes, not names)
   #
   # A few-minute load gets its own machine so a regression there cannot
   # hide behind a short coverage batch. Skip-smudge + LFS-pull of the

@@ -80,7 +80,7 @@ only true for four of them — `PSB`, `D3D`, `Orbiter` and `BLSN` have
 their exact filenames on `main` in design docs and
 `scripts/debug/README.md`. For the other three it was false: `DOWA` and
 `ILNA` appear on `main` only as bare labels, and nothing on `main`
-mentioned the hospital model in any form. Codes avoid having to make
+mentioned the seventh (`AHMAC555`) in any form. Codes avoid having to make
 that argument at all.
 
 What a code does not hide is the bare label, where `main` already

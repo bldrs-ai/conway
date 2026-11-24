@@ -80,8 +80,8 @@ def main() -> None:
     elif args.private_reason == 'not-on-prs':
         header.append(
             '**Private models:** not run on pull requests. The seven '
-            'headline shards (PSB, D3D, ILNA, DOWA, Orbiter, BLSN, '
-            'Hospital) run on merge to `main` and on `rc-*` tags — they '
+            'headline shards (`PSB900`, `D3D224`, `ILNA250`, `DOWA418`, '
+            '`O10`, `BLSN282`, `AHMAC555`) run on merge to `main` and on `rc-*` tags — they '
             'cannot be cached on a public repo, so running them per push '
             'would spend ~2.6 GB of private LFS each time. See '
             '`regression/shards/README.md`.')

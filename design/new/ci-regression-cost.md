@@ -72,7 +72,7 @@ Measured per-job wall time (representative runs):
 | **perf-three-private** | **~27 min** |
 | **perf-three-public** | **~11 min** |
 | PR coverage shard (public small models) | setup ~2.5 min + batch well under a minute |
-| PR headline shard (one private model) | setup ~2.5 min + a few minutes of load (PSB / D3D / Hospital class) |
+| PR headline shard (one private model) | setup ~2.5 min + a few minutes of load (`PSB900` / `D3D224` / `AHMAC555` class) |
 
 Findings that drove the design:
 
@@ -85,8 +85,8 @@ Findings that drove the design:
    curated subset delivers for correctness at a fraction of the cost
    (#443). The PR job is now **sharded** on free runners: three
    coverage lists of small public models per ready PR, plus one shard
-   per private headline model (PSB / D3D / ILNA / DOWA / Orbiter / BLSN
-   / Hospital) on merge and rc. A few-minute load gets its own machine
+   per private headline model (`PSB900`, `D3D224`, `ILNA250`,
+   `DOWA418`, `O10`, `BLSN282`, `AHMAC555`) on merge and rc. A few-minute load gets its own machine
    so a regression there cannot hide behind a short batch. Skip-smudge
    + LFS-pull of the shard list only — the 9.6 GB public tree and 15 GB
    private tree do not fit 14 GB disk; PSB alone is ~900 MB. The
