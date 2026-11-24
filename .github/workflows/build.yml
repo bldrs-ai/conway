@@ -853,8 +853,19 @@ jobs:
             --private-reason "${{ needs.resolve-models.outputs.private_expected == 'true' && 'no-token' || 'not-on-prs' }}" \
             || echo "::warning::Could not build the regression comment; the regression-shard-* artifacts still hold every shard's CSVs."
 
+      # Not on a cancelled run. This job is always(), so a superseding
+      # push still starts it after the shards were cancelled, and the
+      # comment then reports every shard as "failed before it could
+      # report" — run 45344173663 posted exactly that. The guard is on
+      # this step, not the job: a job skipped on cancel reports
+      # `skipped`, which satisfies a required check, so the AND-reduce
+      # below must keep running and stay red.
+      #
+      # success() is spelled out because naming any status function
+      # drops the implicit one, and this step should still not post
+      # after an earlier step in this job failed.
       - name: Comment on Pull Request with regression results
-        if: ${{ github.event_name == 'pull_request' && hashFiles('regression_comment.md') != '' }}
+        if: ${{ success() && !cancelled() && github.event_name == 'pull_request' && hashFiles('regression_comment.md') != '' }}
         uses: peter-evans/create-or-update-comment@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
