@@ -153,7 +153,12 @@ jobs:
           # Dedupe: the matrix keys artifact names on the version string, so a
           # repeated version would 409 on upload after paying for the full
           # benchmark. Repeat-sampling for noise is done by firing twice.
+          # shellcheck disable=SC2086  # deliberate: $VERSIONS is a
+          # whitespace-separated list and the split is what turns it into
+          # one line per version. Quoting it would print a single line and
+          # silently defeat the dedupe.
           DEDUPED=$(printf '%s\n' $VERSIONS | grep . | awk '!seen[$0]++')
+          # shellcheck disable=SC2086  # same split, same reason
           NRAW=$(printf '%s\n' $VERSIONS | grep -c . || true)
           NDED=$(printf '%s\n' "$DEDUPED" | grep -c . || true)
           if [ "$NRAW" -ne "$NDED" ]; then
@@ -164,10 +169,12 @@ jobs:
           PUB="[]"; PRIV="[]"
           [ "$TARGETS" != "private" ] && PUB="[$JSON]"
           [ "$TARGETS" != "public" ] && PRIV="[$JSON]"
-          echo "public_versions=$PUB" >> "$GITHUB_OUTPUT"
-          echo "private_versions=$PRIV" >> "$GITHUB_OUTPUT"
-          echo "test_models_ref=$TM_REF" >> "$GITHUB_OUTPUT"
-          echo "test_models_private_ref=$TM_PRIV_REF" >> "$GITHUB_OUTPUT"
+          {
+            echo "public_versions=$PUB"
+            echo "private_versions=$PRIV"
+            echo "test_models_ref=$TM_REF"
+            echo "test_models_private_ref=$TM_PRIV_REF"
+          } >> "$GITHUB_OUTPUT"
           echo "Benchmarking versions [$JSON]; public=$PUB private=$PRIV"
           echo "Corpora: test-models@$TM_REF, test-models-private@$TM_PRIV_REF"
 

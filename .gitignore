@@ -55,4 +55,5 @@ benchmarks/*private
 
 # Subagent git worktrees (transient scaffolding created per agent run)
 .claude/worktrees/
+
 __pycache__/

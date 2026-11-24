@@ -1,0 +1,20 @@
+# corpus: public
+# Tiny IFC fixtures and small houses.
+index.ifc
+box.ifc
+bath-csg-solid.ifc
+b.ifc
+example.ifc
+Sample_entities.ifc
+IfcOpenHouse_IFC4.ifc
+KIT-Simple-Road-Test-Web-IFC4x3_RC2.ifc
+haus.ifc
+duplex.ifc
+AC20-FZK-Haus.ifc
+ISSUE_005_haus.ifc
+ISSUE_021_Mini Project.ifc
+ISSUE_044_test_IFCCOMPOSITEPROFILEDEF.ifc
+ISSUE_171_IfcSurfaceCurveSweptAreaSolid.ifc
+tested_sample_project.ifc
+171210AISC_Sculpture_param.ifc
+House Aarburg IFC (1).ifc

@@ -1,0 +1,21 @@
+# corpus: public
+# Public STEP: NIST CTC, small assemblies, supercap error-churn.
+nist_ctc_01_asme1_rd.stp
+nist_ctc_02_asme1_rc.stp
+nist_ctc_03_asme1_rc.stp
+nist_ctc_04_asme1_rd.stp
+nist_ctc_05_asme1_rd.stp
+nist_ctc_01_asme1_ap242-e1.stp
+nist_ctc_02_asme1_ap242-e2.stp
+as1-oc-214.stp
+create-a-tube.step
+a-gear.step
+NEMA 23 - 76mm.STEP
+Right_Hand.step
+Equiptment_1mLSyringe.step
+Equiptment_SyringePumpSystem.step
+TestSetup_UltrasoundTransducerScattering.step
+supercap.step
+supercap2.step
+supercap3.step
+driver board.step
