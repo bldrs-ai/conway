@@ -52,6 +52,8 @@ const CLIPPED_TOP = 1 + (10 * Math.tan(6 * Math.PI / 180))
  *   LongChain     the clip, then CUT_COUNT notch cuts along the bottom edge
  *   RepeatedClip  the clip written REPEAT_COUNT times as separate entities
  *   SingleClip    the clip once
+ *   BudgetSkippedTrim  the clip as a plain boolean, repeated as a clip,
+ *                 under CUT_COUNT notch cuts
  *
  * @return {string} The IFC text.
  */
@@ -92,21 +94,34 @@ function buildFixture(): string {
     add(`IFCBUILDINGELEMENTPROXY('${name.padEnd(22, '0')}',$,'${name}',$,$,#9,${shape},$,$)`)
   }
 
-  let chain = add(`IFCBOOLEANCLIPPINGRESULT(.DIFFERENCE.,#13,${clip()})`)
+  const notchCuts = (under: string): string => {
 
-  for (let cut = 0; cut < CUT_COUNT; ++cut) {
+    let chain = under
 
-    const centre = add(`IFCCARTESIANPOINT((${(0.3 + (0.4 * cut)).toFixed(2)},0.5))`)
-    const profile =
-      add(`IFCRECTANGLEPROFILEDEF(.AREA.,$,${add(`IFCAXIS2PLACEMENT2D(${centre},$)`)},0.2,2.)`)
-    const position =
-      add(`IFCAXIS2PLACEMENT3D(${add('IFCCARTESIANPOINT((0.,0.,-0.5))')},$,$)`)
-    const cutter = add(`IFCEXTRUDEDAREASOLID(${profile},${position},#4,0.7)`)
+    for (let cut = 0; cut < CUT_COUNT; ++cut) {
 
-    chain = add(`IFCBOOLEANRESULT(.DIFFERENCE.,${chain},${cutter})`)
+      const centre = add(`IFCCARTESIANPOINT((${(0.3 + (0.4 * cut)).toFixed(2)},0.5))`)
+      const profile =
+        add(`IFCRECTANGLEPROFILEDEF(.AREA.,$,${add(`IFCAXIS2PLACEMENT2D(${centre},$)`)},0.2,2.)`)
+      const position =
+        add(`IFCAXIS2PLACEMENT3D(${add('IFCCARTESIANPOINT((0.,0.,-0.5))')},$,$)`)
+      const cutter = add(`IFCEXTRUDEDAREASOLID(${profile},${position},#4,0.7)`)
+
+      chain = add(`IFCBOOLEANRESULT(.DIFFERENCE.,${chain},${cutter})`)
+    }
+
+    return chain
   }
 
-  product('LongChain', chain)
+  product('LongChain', notchCuts(add(`IFCBOOLEANCLIPPINGRESULT(.DIFFERENCE.,#13,${clip()})`)))
+
+  // The trim written first as a plain IfcBooleanResult, which is past the
+  // budget and so passed through untrimmed, then repeated as a clip. The
+  // clip must not be taken for a repeat of a cut that never happened.
+  const plainTrim = add(`IFCBOOLEANRESULT(.DIFFERENCE.,#13,${clip()})`)
+
+  product('BudgetSkippedTrim',
+      notchCuts(add(`IFCBOOLEANCLIPPINGRESULT(.DIFFERENCE.,${plainTrim},${clip()})`)))
 
   let repeated = '#13'
 
@@ -228,6 +243,18 @@ describe('boolean chains with innermost half-space clips', () => {
     // Unclipped, the top would be the extrusion's 3 m.
     expect(longChain!.max[2]).toBeCloseTo(CLIPPED_TOP, 3)
     expect(longChain!.min[2]).toBeCloseTo(0, 3)
+  })
+
+  test('a clip over a budget-skipped plain trim of the same plane still trims', () => {
+
+    const product = products.get('BudgetSkippedTrim')
+
+    expect(product).toBeDefined()
+
+    // Taking the clip for a repeat of the skipped plain boolean beneath it
+    // dropped the trim: the top came out at the extrusion's 3 m.
+    expect(product!.max[2]).toBeCloseTo(CLIPPED_TOP, 3)
+    expect(product!.min[2]).toBeCloseTo(0, 3)
   })
 
   test('a clip repeated as identical entities matches the clip written once', () => {

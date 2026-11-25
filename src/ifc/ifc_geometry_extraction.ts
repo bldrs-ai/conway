@@ -1516,7 +1516,24 @@ export class IfcGeometryExtraction {
 
     return this.limitCSGDepth &&
       this.csgDepth >= this.csgDepthLimit &&
-      !( from instanceof IfcBooleanClippingResult )
+      !this.isHalfSpaceClip( from )
+  }
+
+  /**
+   * Is this a clipping result whose cutter really is a half-space?
+   *
+   * Only these are exempt from the depth budget. The exemption is for a
+   * single bounded trim, so a malformed clipping result whose second
+   * operand is a solid (the schema forbids it, the parser does not
+   * enforce it) is budgeted like any other mesh boolean.
+   *
+   * @param from The boolean result to check.
+   * @return {boolean} True for a clip against a half-space.
+   */
+  private isHalfSpaceClip( from: unknown ): boolean {
+
+    return from instanceof IfcBooleanClippingResult &&
+      ( from.SecondOperand as unknown ) instanceof IfcHalfSpaceSolid
   }
 
   /**
@@ -1597,14 +1614,19 @@ export class IfcGeometryExtraction {
     const first: unknown = from.FirstOperand
     const second: unknown = from.SecondOperand
 
+    // The operand must be a half-space clip, never a plain boolean: clips
+    // are exempt from the depth budget, so its cut was really applied. A
+    // plain boolean past the budget was passed through as ITS first
+    // operand, and treating the clip above it as a repeat would drop the
+    // trim altogether.
     if ( from.Operator !== IfcBooleanOperator.DIFFERENCE ||
-      !( first instanceof IfcBooleanResult ) ||
-      first.Operator !== IfcBooleanOperator.DIFFERENCE ||
+      !this.isHalfSpaceClip( first ) ||
+      ( first as IfcBooleanResult ).Operator !== IfcBooleanOperator.DIFFERENCE ||
       !( second instanceof IfcHalfSpaceSolid ) ) {
       return false
     }
 
-    const previous: unknown = first.SecondOperand
+    const previous: unknown = ( first as IfcBooleanResult ).SecondOperand
 
     if ( !( previous instanceof IfcHalfSpaceSolid ) ) {
       return false
