@@ -30,6 +30,21 @@ inputs:
     required: false
     default: 'false'
     description: 'true only for public shards — do not render private models'
+  by-code:
+    required: false
+    default: 'false'
+    description: >-
+      true: run the batch on <CODE><ext> hard links (shard_list.py link)
+      rather than the real files, so the job log, every CSV row and the
+      artifact name the code and never the private filename. Required for
+      a private alsocheck list, whose codes are not covered by the
+      accepted headline-basename exposure (regression/shards/README.md).
+  require-rows:
+    required: false
+    default: 'false'
+    description: >-
+      true: fail unless every listed model has a row in main.csv or
+      failed.csv - the batch exiting 0 is not proof it read anything.
 
 runs:
   using: composite
@@ -47,6 +62,24 @@ runs:
                "silently find no models; the reverse would leak one."
           exit 1
         fi
+        # A private alsocheck list may name any code in the manifest, and
+        # only the seven headline basenames are accepted in public logs.
+        case "${{ inputs.shard-id }}" in
+          alsocheck*)
+            if [ "$DECLARED" = private ] && [ "${{ inputs.by-code }}" != true ]; then
+              echo "::error::A private alsocheck list must run with by-code: 'true', or its filenames reach the public log and artifact."
+              exit 1
+            fi ;;
+        esac
+
+    # Credentials for a private corpus travel per process, as an
+    # http.extraheader in GIT_CONFIG_* environment variables scoped to
+    # https://github.com/ - never in a remote URL, so never in
+    # models/.git/config, where any later step (the batch is PR code)
+    # could read them back. The base64 form is not what the secret is
+    # registered as, so it is masked explicitly. Each step that needs it
+    # rebuilds it from the input; nothing is written to GITHUB_ENV or to
+    # disk.
 
     - name: Resolve corpus SHA
       id: sha
@@ -57,10 +90,13 @@ runs:
         TOKEN: ${{ inputs.models-token }}
       run: |
         set -euo pipefail
+        URL="https://github.com/${REPO}.git"
         if [ -n "$TOKEN" ]; then
-          URL="https://x-access-token:${TOKEN}@github.com/${REPO}.git"
-        else
-          URL="https://github.com/${REPO}.git"
+          B64=$(printf 'x-access-token:%s' "$TOKEN" | base64 -w0)
+          echo "::add-mask::$B64"
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0="http.https://github.com/.extraheader"
+          export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $B64"
         fi
         # Callers normally pass an already-resolved SHA (the
         # resolve-models job pins one commit for the whole run, so ten
@@ -85,9 +121,9 @@ runs:
     # Actions cache written on the default branch is restorable by any
     # pull_request run — including one from a fork, which supplies its
     # own workflow file and could simply add a restore step. Caching a
-    # private shard would publish both the model bytes and the
-    # TEST_MODELS_PRIVATE_TOKEN that `git remote add` leaves in
-    # models/.git/config. Same reason visual-diff is public-only.
+    # private shard would publish the model bytes (and, before the token
+    # moved to a per-process header, the token `git remote add` left in
+    # models/.git/config). Same reason visual-diff is public-only.
     #
     # The cost is real: each ready-PR run re-pulls ~2.6 GB of private
     # LFS instead of restoring it. If that bites the LFS budget, the fix
@@ -114,18 +150,40 @@ runs:
       run: |
         set -euo pipefail
         if [ -n "$TOKEN" ]; then
-          URL="https://x-access-token:${TOKEN}@github.com/${REPO}.git"
-        else
-          URL="https://github.com/${REPO}.git"
+          B64=$(printf 'x-access-token:%s' "$TOKEN" | base64 -w0)
+          echo "::add-mask::$B64"
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0="http.https://github.com/.extraheader"
+          export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $B64"
         fi
         git init models
-        git -C models remote add origin "$URL"
+        git -C models remote add origin "https://github.com/${REPO}.git"
         git -C models fetch --depth 1 origin "$SHA"
         git -C models checkout "$SHA"
+        # Belt and braces: nothing above writes a credential to disk.
+        if grep -qiE 'x-access-token|authorization' models/.git/config; then
+          echo "::error::a credential reached models/.git/config"; exit 1
+        fi
 
+    # Same per-process credential as the checkout; git-lfs reads
+    # http.<url>.extraheader from git's config, environment included.
     - name: Materialize this shard's LFS models
       shell: bash
-      run: python3 "${{ github.action_path }}/shard_list.py" pull "${{ inputs.shard-file }}" models
+      env:
+        TOKEN: ${{ inputs.models-token }}
+      run: |
+        set -euo pipefail
+        if [ -n "$TOKEN" ]; then
+          B64=$(printf 'x-access-token:%s' "$TOKEN" | base64 -w0)
+          echo "::add-mask::$B64"
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0="http.https://github.com/.extraheader"
+          export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $B64"
+        fi
+        python3 "${{ github.action_path }}/shard_list.py" pull "${{ inputs.shard-file }}" models
+        if grep -qiE 'x-access-token|authorization' models/.git/config; then
+          echo "::error::a credential reached models/.git/config"; exit 1
+        fi
 
     # A public shard's cache is saved AFTER its batch ran, so a restored
     # corpus arrives with last run's digest CSVs already written over the
@@ -162,17 +220,30 @@ runs:
         CONCURRENCY: ${{ inputs.concurrency }}
         SHA: ${{ steps.sha.outputs.sha }}
         SHARD_FILE: ${{ inputs.shard-file }}
+        BY_CODE: ${{ inputs.by-code }}
       run: |
         set -euo pipefail
-        # `models` so a private shard's codes resolve through the corpus
-        # manifest; a public list ignores it.
-        REGEX=$(python3 "${{ github.action_path }}/shard_list.py" regex "$SHARD_FILE" models)
+        if [ "$BY_CODE" = true ]; then
+          # Inside the corpus checkout, so the batch's closing `git diff`
+          # still runs in that repo. Only the links are in the folder, so
+          # no filter is needed - and none that names a file is built.
+          python3 "${{ github.action_path }}/shard_list.py" link \
+            "$SHARD_FILE" models models/by-code --out by_code_models.txt
+          MODEL_DIR=models/by-code
+          FILTER=()
+        else
+          # `models` so a private shard's codes resolve through the corpus
+          # manifest; a public list ignores it.
+          REGEX=$(python3 "${{ github.action_path }}/shard_list.py" regex "$SHARD_FILE" models)
+          MODEL_DIR=models
+          FILTER=(-e "$REGEX")
+        fi
         node --experimental-specifier-resolution=node \
           ./compiled/src/ifc/ifc_regression_batch_main.js \
-          -e "$REGEX" \
+          "${FILTER[@]}" \
           -t "$SHA" \
           --perf "${GITHUB_WORKSPACE}/perf.csv" \
-          models \
+          "$MODEL_DIR" \
           models/regression/test_models \
           --parallel --mem-utilization 90 --concurrency "$CONCURRENCY"
 
@@ -194,13 +265,15 @@ runs:
         # A summary that cannot be built must not be what turns a green
         # shard red, so this reports rather than exits - same reason the
         # single-job version caught its own summary errors.
+        BY_CODE=()
+        if [ "${{ inputs.by-code }}" = true ]; then BY_CODE=(--by-code); fi
         if ! python3 "${{ github.action_path }}/shard_summary.py" \
           --shard-id "$ID" \
           --shard-file "${{ inputs.shard-file }}" \
           --root models \
           --sha "$SHA" \
           --perf "${GITHUB_WORKSPACE}/perf.csv" \
-          --out shard_summary.md; then
+          --out shard_summary.md "${BY_CODE[@]}"; then
           echo "::warning::Could not summarize shard $ID; the per-shard CSVs are still in its artifact."
           printf '<h3>%s</h3>\n\n_Summary generation failed - see the job log and the `regression-shard-%s` artifact._\n' \
             "$ID" "$ID" > shard_summary.md
@@ -275,6 +348,20 @@ runs:
           perf.csv
           shard_summary.md
         if-no-files-found: warn
+
+    # The batch's exit status says nothing about whether it found the
+    # models: a list it never read passes every gate below. Inside the
+    # job, so it can read the real names; it reports codes.
+    - name: Fail if a listed model has no result row
+      if: ${{ !cancelled() && inputs.require-rows == 'true' }}
+      shell: bash
+      run: |
+        BY_CODE=()
+        if [ "${{ inputs.by-code }}" = true ]; then BY_CODE=(--by-code); fi
+        python3 "${{ github.action_path }}/shard_list.py" digested \
+          "${{ inputs.shard-file }}" models \
+          models/regression/test_models/main.csv \
+          models/regression/test_models/failed.csv "${BY_CODE[@]}"
 
     - name: Fail on shard parse/extract failures
       if: ${{ !cancelled() }}

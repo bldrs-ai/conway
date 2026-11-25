@@ -272,9 +272,11 @@ commas or spaces, at most 5. Each entry is one of:
   corpus commit.
 
 A bad entry fails `resolve-models`, naming the entry's position and the
-reason. A line inside an HTML comment or a code fence is ignored, so
-writing the syntax down in a PR (as this paragraph does) selects
-nothing.
+reason, never any part of the entry. A line GitHub hides or shows as
+code is ignored: HTML comments (an unclosed `<!--` hides the rest of the
+body), `<pre>`/`<code>` and similar, fenced blocks, and anything indented
+four spaces or by a tab. So writing the syntax down in a PR inside a code
+block (as this file does) selects nothing.
 
 CI then runs regression on exactly those models (the shards' own
 failed.csv and zero-geometry gates) and renders them before/after even
@@ -283,10 +285,29 @@ if their digest did not move. The PR comment reports them in an
 **Private renders go only to the `visual-diff-assets` branch of
 `bldrs-ai/test-models-private`**, under `conway/pr-<N>/<run id>/`, and
 the PR gets a comment that links them by code, never embeds them. Those
-links open only for people with access to that repo. That push needs the
-`TEST_MODELS_PRIVATE_WRITE_TOKEN` secret. Without it the private renders
-are skipped with a note and the regression still runs. A fork PR's
-private entries are skipped with a note, since a fork has no secrets.
+links open only for people with access to that repo. A private model
+that a PR names outside the seven headline shards runs its regression on
+code-named hard links, so its filename never reaches a public log or
+artifact either.
+
+That push needs the `TEST_MODELS_PRIVATE_WRITE_TOKEN` secret, and it
+lives in the **`private-renders` GitHub Environment**, not in repo
+secrets. A `pull_request` run uses the branch's own workflow file, so
+any branch author could read a repo secret by editing `build.yml`. An
+environment secret reaches only a job that names the environment, once
+that environment's protection rules (required reviewers, say) pass, and
+a maintainer can tighten those without a workflow change. The job also
+runs all PR code before the token appears, and pushes with bare git as
+its last step. That is hardening, not a sandbox; the environment is the
+control. Without the secret the private renders are skipped with a note,
+and the regression still runs.
+
+A fork PR's private entries are skipped with a note, since a fork has no
+secrets. So are those of a PR whose run has no
+`TEST_MODELS_PRIVATE_TOKEN`, such as Dependabot's. A fork PR also gets
+no public visual diff and no regression comment, because its read-only
+token can do neither; the report is in `run-ifc-regression`'s job
+summary.
 
 **It runs once the PR is ready.** Draft PRs skip regression, alsocheck
 included. Write the line while the PR is a draft; flipping it to ready

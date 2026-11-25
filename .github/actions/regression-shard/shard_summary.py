@@ -31,7 +31,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from shard_list import parse_shard  # noqa: E402 - needs the path above
+from shard_list import (  # noqa: E402 - needs the path above
+    parse_shard, resolve_private, shard_entries)
 
 # Per-table row caps. Ten fragments share one PR comment, and GitHub
 # rejects a comment body over 65536 characters.
@@ -96,8 +97,20 @@ def _scoped(header: list[str], rows: list[tuple[str, ...]],
             True)
 
 
+def _renamed(header: list[str], rows: list[tuple[str, ...]],
+             rename: dict[str, str]) -> list[tuple[str, ...]]:
+    """Baseline rows with their `file` column renamed (real basename ->
+    `<CODE><ext>`), so a by-code run compares like with like."""
+    if not rename or 'file' not in header:
+        return rows
+    index = header.index('file')
+    return [row[:index] + (rename.get(row[index], row[index]),)
+            + row[index + 1:] if len(row) > index else row for row in rows]
+
+
 def _report_section(root: Path, sha: str, name: str, scope: set[str],
-                    empty_msg: str, mode: str) -> list[str]:
+                    empty_msg: str, mode: str,
+                    rename: dict[str, str] | None = None) -> list[str]:
     current_path = root / 'regression' / 'test_models' / name
     if not current_path.is_file():
         return [f'_No {name} produced._']
@@ -106,6 +119,7 @@ def _report_section(root: Path, sha: str, name: str, scope: set[str],
     has_baseline, baseline_text = _baseline(root, sha, name)
     base_header, baseline = (_parse(baseline_text) if has_baseline
                              else ([], []))
+    baseline = _renamed(base_header, baseline, rename or {})
 
     current, cur_ok = _scoped(header, current, scope, name)
     baseline, base_ok = _scoped(base_header, baseline, scope, name)
@@ -201,11 +215,23 @@ def main() -> None:
                         help='pinned corpus commit, the baseline side')
     parser.add_argument('--perf', required=True)
     parser.add_argument('--out', required=True)
+    parser.add_argument(
+        '--by-code', action='store_true',
+        help='the batch ran on <CODE><ext> links (shard_list.py link), so '
+             'its rows are keyed by code; key the baseline the same way')
     args = parser.parse_args()
 
     corpus, names = parse_shard(args.shard_file, args.root)
     root = Path(args.root)
     scope = set(names)
+    rename: dict[str, str] = {}
+    if args.by_code:
+        if corpus != 'private':
+            raise SystemExit('--by-code is for private lists')
+        _, codes = shard_entries(args.shard_file)
+        for code, rel in resolve_private(root, codes):
+            rename[Path(rel).name] = f'{code}{Path(rel).suffix.lower()}'
+        scope = set(rename.values())
 
     # Conway is public and this fragment is destined for a public PR
     # comment, so a PRIVATE shard reports counts only. The repo already
@@ -225,11 +251,11 @@ def main() -> None:
     lines += ['**failed.csv:**', '']
     lines += _report_section(root, args.sha, 'failed.csv', scope,
                             'No failures :white_check_mark:',
-                            'counts' if redact else 'full')
+                            'counts' if redact else 'full', rename)
     lines += ['', '**errors.csv:**', '']
     lines += _report_section(root, args.sha, 'errors.csv', scope,
                             'No errors found.',
-                            'counts' if redact else 'diff')
+                            'counts' if redact else 'diff', rename)
     if not redact:
         lines += ['', '**Performance:**', '']
         lines += _perf_section(Path(args.perf))

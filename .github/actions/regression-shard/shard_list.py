@@ -4,8 +4,10 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import os
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -101,8 +103,9 @@ def resolve_private(root: Path, codes: list[str]) -> list[tuple[str, str]]:
     for code in codes:
         rel = mapping[code]
         if not (root / rel).is_file():
+            # The code only: this message lands in a public job log.
             raise SystemExit(
-                f'{MANIFEST} maps {code} to {rel!r}, which is not in the '
+                f'{MANIFEST} maps {code} to a path that is not in the '
                 'corpus checkout')
         resolved.append((code, rel))
     return resolved
@@ -233,12 +236,19 @@ def cmd_corpus(args: argparse.Namespace) -> None:
 
 
 def cmd_link(args: argparse.Namespace) -> None:
-    """Expose a private list's models under their CODES, for rendering.
+    """Expose a private list's models under their CODES.
 
-    visual_diff_report.cjs logs each model's basename and names its PNGs
-    after it. Pointed at `<dir>/<CODE><ext>` symlinks instead of the real
-    files, everything it prints or writes says the code, which is already
-    public, and never the private filename. Prints codes only.
+    Both the digest batch (`Current File: <path>`, every CSV's `file`
+    column, the per-model digest name) and visual_diff_report.cjs (its
+    log lines, its PNG names) name a model by its path or basename.
+    Pointed at `<dir>/<CODE><ext>` instead of the real files, all of it
+    says the code, which is already public, and never the private
+    filename.
+
+    HARD links, not symlinks: a symlink keeps the real path one
+    `realpath()` away from any tool that resolves it, and a hard link has
+    no other name to resolve to. Copied if the two paths are on different
+    filesystems. Prints codes only.
     """
     corpus, entries = shard_entries(args.shard)
     if corpus != 'private':
@@ -254,7 +264,11 @@ def cmd_link(args: argparse.Namespace) -> None:
         link = out_dir / f'{code}{ext}'
         if link.is_symlink() or link.exists():
             link.unlink()
-        link.symlink_to((Path(args.root) / rel).resolve())
+        source = (Path(args.root) / rel).resolve()
+        try:
+            os.link(source, link)
+        except OSError:
+            shutil.copyfile(source, link)
         lines.append(str(link))
     Path(args.out).write_text('\n'.join(lines) + '\n', encoding='utf-8')
     print(f'{len(lines)} private model(s) linked by code: '
@@ -526,26 +540,91 @@ def _matrix_errors(workflow: Path, corpora: dict[str, str]) -> list[str]:
     return errors
 
 
+def redact(text: str, pairs: list[tuple[str, str]]) -> str:
+    """Replace every private path, and its basename and stem, with its code.
+
+    Longest first, so a path is replaced whole before its basename is.
+    """
+    subs = []
+    for code, rel in pairs:
+        name = Path(rel).name
+        subs += [(rel, code), (name, code), (Path(rel).stem, code)]
+    for old, new in sorted(subs, key=lambda kv: -len(kv[0])):
+        if old:
+            text = text.replace(old, new)
+    return text
+
+
 def cmd_pull(args: argparse.Namespace) -> None:
     corpus, entries = shard_entries(args.shard)
     root = Path(args.root)
+    pairs: list[tuple[str, str]] = []
     if corpus == 'private':
-        paths = [rel for _, rel in resolve_private(root, entries)]
+        pairs = resolve_private(root, entries)
+        paths = [rel for _, rel in pairs]
+        names = dict((rel, code) for code, rel in pairs)
     else:
         paths = find_paths(root, entries)
+        names = {rel: rel for rel in paths}
     stubs = [rel for rel in paths if is_lfs_stub(root / rel)]
     print(f'{len(paths)} shard models, {len(stubs)} LFS stubs to pull')
     if not stubs:
         return
     subprocess.check_call(['git', 'lfs', 'install', '--local'], cwd=root)
-    subprocess.check_call(
-        ['git', 'lfs', 'pull', '--include=' + ','.join(stubs)], cwd=root)
-    left = [rel for rel in stubs if is_lfs_stub(root / rel)]
+    pull = ['git', 'lfs', 'pull', '--include=' + ','.join(stubs)]
+    if corpus == 'private':
+        # git-lfs names the file it failed on; this log is public. Its
+        # output is passed through with every private path replaced by
+        # its code.
+        done = subprocess.run(pull, cwd=root, capture_output=True,
+                              text=True, check=False)
+        out = redact(done.stdout + done.stderr, pairs).strip()
+        if out:
+            print(out)
+        if done.returncode != 0:
+            raise SystemExit(f'git lfs pull failed (exit {done.returncode})')
+    else:
+        subprocess.check_call(pull, cwd=root)
+    left = [names[rel] for rel in stubs if is_lfs_stub(root / rel)]
     if left:
         print(
             '::error::unsmudged LFS stubs after pull: ' + ', '.join(left),
             file=sys.stderr)
         raise SystemExit(1)
+
+
+def cmd_digested(args: argparse.Namespace) -> None:
+    """Fail unless every model in the list has a row in main.csv or
+    failed.csv: the batch exiting 0 is not evidence it digested anything.
+
+    A row is matched on the batch's `file` column, a basename: the real
+    one for a committed list, `<CODE><ext>` for a list run through
+    `link` (--by-code). Reports by entry (codes for a private list),
+    never by private filename.
+    """
+    corpus, entries = shard_entries(args.shard)
+    expect: list[tuple[str, str]] = []  # (what to report, basename)
+    if corpus == 'private':
+        for code, rel in resolve_private(Path(args.root), entries):
+            name = (f'{code}{Path(rel).suffix.lower()}' if args.by_code
+                    else Path(rel).name)
+            expect.append((code, name))
+    else:
+        expect = [(e, Path(e).name) for e in entries]
+    seen: set[str] = set()
+    for csv_path in (args.main, args.failed):
+        path = Path(csv_path)
+        if not path.is_file():
+            continue
+        with path.open(newline='', encoding='utf-8') as fh:
+            for row in csv.DictReader(fh):
+                seen.add(row.get('file', ''))
+    missing = [label for label, name in expect if name not in seen]
+    if missing:
+        print('::error::The batch exited without a result row for: '
+              + ', '.join(missing) + '. A model it never read cannot pass.')
+        raise SystemExit(1)
+    print(f'{len(expect)} of {len(expect)} listed model(s) have a result row.')
 
 
 def main() -> None:
@@ -572,6 +651,14 @@ def main() -> None:
     p_pull.add_argument('shard')
     p_pull.add_argument('root')
     p_pull.set_defaults(func=cmd_pull)
+
+    p_dig = sub.add_parser('digested')
+    p_dig.add_argument('shard')
+    p_dig.add_argument('root')
+    p_dig.add_argument('main')
+    p_dig.add_argument('failed')
+    p_dig.add_argument('--by-code', action='store_true')
+    p_dig.set_defaults(func=cmd_digested)
 
     p_link = sub.add_parser('link')
     p_link.add_argument('shard')

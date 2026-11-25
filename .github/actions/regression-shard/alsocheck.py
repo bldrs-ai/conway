@@ -56,8 +56,10 @@ MAX_CODE_LEN = 16
 MAX_BODY = 70000
 EXTENSIONS = ('.ifc', '.step', '.stp')
 
-# The key, at the start of a line (leading spaces allowed), any case.
-KEY_RE = re.compile(r'^[ \t]*alsocheck[ \t]*:(.*)$', re.IGNORECASE)
+# The key, at the start of a line, any case. At most three leading
+# spaces and no tab: four spaces or a tab make an indented code block,
+# which GitHub shows as code, not as a request.
+KEY_RE = re.compile(r'^ {0,3}alsocheck[ \t]*:(.*)$', re.IGNORECASE)
 # One path segment. ASCII only (no lookalikes), no shell or glob
 # metacharacters, no `,` (git-lfs `--include` takes a comma list), no
 # `:` (cannot start a workflow command), no quotes, no `\`.
@@ -66,8 +68,21 @@ SEGMENT_RE = re.compile(r'^[A-Za-z0-9_.+-]+$')
 # about a fifth of the public corpus has one in its path.
 QUOTED_SEGMENT_RE = re.compile(r'^[A-Za-z0-9_.+() -]+$')
 TOKEN_RE = re.compile(r'"([^"\n]*)"|([^\s,]+)')
-FENCE_RE = re.compile(r'^[ \t]*(```|~~~)')
-COMMENT_RE = re.compile(r'<!--.*?-->', re.DOTALL)
+# A fence opener or closer: three or more backticks or tildes, after any
+# indentation or blockquote/list markers. Deliberately looser than
+# CommonMark (a fence in a list item or quote counts too): a line wrongly
+# taken as fenced is ignored, which is the safe direction.
+FENCE_RE = re.compile(r'^[ \t>*+\-0-9.)]*(`{3,}|~{3,})(.*)$')
+# Spans GitHub hides or shows as code. An unclosed one runs to the end of
+# the body, as an unclosed `<!--` does on GitHub.
+HIDDEN_RE = re.compile(
+    r'<!--.*?(?:-->|\Z)'
+    r'|<(pre|code|script|style|textarea|template|xmp)\b[^>]*>.*?'
+    r'(?:</\1\s*>|\Z)',
+    re.DOTALL | re.IGNORECASE)
+# Line breaks other than LF/CR that Python's splitlines() would split on
+# but GitHub renders inside a line. A line holding one is ignored whole.
+ODD_BREAKS_RE = re.compile('[\x0b\x0c\x1c\x1d\x1e\x85\u2028\u2029]')
 
 ALSOCHECK_PUBLIC_ID = 'alsocheck-public'
 ALSOCHECK_PRIVATE_ID = 'alsocheck-private'
@@ -97,14 +112,23 @@ def request_lines(body: str) -> list[str]:
     the syntax (this feature's own did) shows it in a code block. Neither
     is a request.
     """
-    body = COMMENT_RE.sub('', body[:MAX_BODY])
     values: list[str] = []
-    fenced = False
-    for line in body.splitlines():
-        if FENCE_RE.match(line):
-            fenced = not fenced
-            continue
-        if fenced:
+    fence: tuple[str, int] | None = None
+    for line in visible_lines(body):
+        opener = FENCE_RE.match(line)
+        if fence is None:
+            if opener:
+                mark = opener.group(1)
+                fence = (mark[0], len(mark))
+                continue
+        else:
+            # Closed only by the same character, at least as long, and
+            # nothing else on the line: a ~~~ inside a ``` fence, or ```
+            # inside a ```` fence, is content. Unclosed runs to the end.
+            if (opener and opener.group(1)[0] == fence[0]
+                    and len(opener.group(1)) >= fence[1]
+                    and not opener.group(2).strip()):
+                fence = None
             continue
         match = KEY_RE.match(line)
         if match:
@@ -112,10 +136,28 @@ def request_lines(body: str) -> list[str]:
     return values
 
 
+def visible_lines(body: str) -> list[str]:
+    """The body's lines with hidden spans masked out, split as GitHub does.
+
+    A hidden span (HTML comment, <pre>, <code>...) is replaced by NUL
+    markers around the newlines it contained, so a line that it starts,
+    ends or covers can never begin with the key: "when in doubt, ignore
+    the line". Only LF, CRLF and CR end a line.
+    """
+    body = body[:MAX_BODY].replace('\r\n', '\n').replace('\r', '\n')
+
+    def mask(match: re.Match) -> str:
+        return '\0' + '\0\n'.join([''] * (match.group(0).count('\n') + 1)) + '\0'
+
+    body = HIDDEN_RE.sub(mask, body)
+    return [line for line in body.split('\n')
+            if not ODD_BREAKS_RE.search(line)]
+
+
 def dispatch_lines(value: str) -> list[str]:
     """A dispatch input: the entry list, with or without the key."""
     lines = []
-    for line in value[:MAX_BODY].splitlines():
+    for line in value[:MAX_BODY].replace('\r', '\n').split('\n'):
         match = KEY_RE.match(line)
         lines.append(match.group(1) if match else line)
     return lines
@@ -193,13 +235,13 @@ def classify(entry: str, quoted: bool) -> tuple[str, str]:
                 + (' (plus space and parentheses inside quotes)'
                    if quoted else '; quote a path that has spaces'))
     # A private model named by path instead of code, most likely typed as
-    # its code plus an extension. Name the code (codes are public), never
-    # the path.
+    # its code plus an extension. No part of the entry is repeated, not
+    # even the code-shaped stem: a rejected entry is never echoed.
     stem = PurePosixPath(entry).stem
     if CODE_RE.match(stem) and len(segments) == 1:
         raise Rejected(
-            f'looks like a private model given as a file; name it by its '
-            f'code alone (`{stem}`)')
+            'looks like a private model given as a file; name a private '
+            'model by its shard code alone, with no extension')
     return 'path', entry
 
 
@@ -257,8 +299,11 @@ def resolve(env: dict[str, str], shard_dir: Path,
     without a runner: `cmd_resolve` does the I/O.
     """
     event = env.get('EVENT_NAME', '')
+    # True for a PR whose head is not this repository - a fork, or a head
+    # repo that has since been deleted (`head.repo` null). The workflow
+    # computes it from `head.repo.full_name`, not `head.repo.fork`.
     is_fork = _truthy(env.get('IS_FORK'))
-    write_token = _truthy(env.get('WRITE_TOKEN_PRESENT'))
+    read_token = _truthy(env.get('TOKEN_PRESENT'))
 
     if event == 'pull_request':
         lines = request_lines(env.get('PR_BODY', ''))
@@ -309,6 +354,14 @@ def resolve(env: dict[str, str], shard_dir: Path,
         # is nothing the author could do about it.
         private_skipped = 'fork'
         codes = []
+    elif codes and event == 'pull_request' and not read_token:
+        # A same-repo PR that still has no secrets: Dependabot's runs get
+        # only Dependabot secrets. Same answer as a fork - a note, not a
+        # red check. (On push and dispatch a missing token is still a
+        # loud failure: resolve-models' "Require the private-models
+        # token" step.)
+        private_skipped = 'no-token'
+        codes = []
 
     selected = [] if full_private else [c for c in codes if c in headline]
     extra = [c for c in codes if c not in headline]
@@ -325,10 +378,13 @@ def resolve(env: dict[str, str], shard_dir: Path,
     if extra:
         matrix.append({'id': ALSOCHECK_PRIVATE_ID, 'corpus': 'private'})
 
-    if private_skipped == 'fork':
-        render = 'fork'
+    # Whether the write token exists is NOT known here: it lives in the
+    # `private-renders` environment, which only visual-diff-private
+    # references, so that job decides and reports a missing one.
+    if private_skipped:
+        render = 'skipped'
     elif codes and event in ('pull_request', 'workflow_dispatch'):
-        render = 'true' if write_token else 'no-write-token'
+        render = 'true'
     else:
         render = 'none'
 
@@ -359,17 +415,19 @@ def resolve(env: dict[str, str], shard_dir: Path,
             summary.append(f'- `{path}` (public)')
         if private_skipped == 'fork':
             summary.append(
-                '- Private entries **skipped**: a fork PR has no access to '
-                'the private corpus.')
-        if render == 'no-write-token':
+                '- Private entries **skipped**: a PR from a fork (or a '
+                'deleted head repo) has no access to the private corpus.')
+        elif private_skipped == 'no-token':
             summary.append(
-                '- Private renders **skipped**: '
-                '`TEST_MODELS_PRIVATE_WRITE_TOKEN` is not set, and private '
-                'renders have no other destination. Regression still runs.')
-        elif render == 'true':
+                '- Private entries **skipped**: this PR\'s run has no '
+                '`TEST_MODELS_PRIVATE_TOKEN` (e.g. a Dependabot PR).')
+        if render == 'true':
             summary.append(
-                '- Private renders go to `bldrs-ai/test-models-private` '
-                '(branch `visual-diff-assets`), never to this repo.')
+                '- Private renders: `visual-diff-private` pushes them to '
+                '`bldrs-ai/test-models-private` (branch '
+                '`visual-diff-assets`) if `TEST_MODELS_PRIVATE_WRITE_TOKEN` '
+                'is set in the `private-renders` environment, and says so '
+                'if not. Never to this repo.')
     return outputs, summary, errors
 
 
@@ -523,8 +581,25 @@ def cmd_verify_artifacts(args: argparse.Namespace) -> None:
     print('shard artifacts match the selection.')
 
 
+def rendered_codes(codes: list[str], png_dir: Path) -> tuple[list[str],
+                                                             list[str]]:
+    """(codes with at least one image, codes with none).
+
+    A side may legitimately have no image (the base engine cannot load a
+    model the fix makes loadable), so one image is enough; a code with
+    NONE rendered nothing, and the job must not go green over it.
+    """
+    done, none = [], []
+    for code in codes:
+        sides = [(png_dir / f'{code}-{side}.png').is_file()
+                 for side in ('before', 'after')]
+        (done if any(sides) else none).append(code)
+    return done, none
+
+
 def private_render_comment(codes: list[str], png_dir: Path, repo: str,
-                           sha: str, dest: str, pushed: bool) -> list[str]:
+                           branch: str, dest: str,
+                           write_token: bool) -> list[str]:
     """The PUBLIC comment for private renders: codes and links only.
 
     No image is embedded (a private raw URL cannot be fetched by GitHub's
@@ -532,15 +607,22 @@ def private_render_comment(codes: list[str], png_dir: Path, repo: str,
     no pixel-diff figure and no export diagnostic: the private fragment
     rule is counts only, and the full report lives beside the images in
     the private repo.
+
+    Built BEFORE the push, so that no script from the PR branch runs once
+    the write token is in the job: the links name the branch path, which
+    is per run and append-only, rather than the commit the push makes.
     """
     lines = ['## Visual Diff (alsocheck, private models)', '']
-    if not pushed:
-        lines += ['_Private renders could not be pushed to '
-                  f'`{repo}`; nothing was published. See the job log._']
+    if not write_token:
+        lines += [
+            'Private renders **skipped**: `TEST_MODELS_PRIVATE_WRITE_TOKEN` '
+            'is not set in the `private-renders` environment, and private '
+            'renders have no other destination. Regression ran; nothing '
+            'was rendered or published.']
         return lines
-    tree = f'https://github.com/{repo}/tree/{sha}/{dest}'
-    blob = f'https://github.com/{repo}/blob/{sha}/{dest}'
-    rendered = 0
+    tree = f'https://github.com/{repo}/tree/{branch}/{dest}'
+    blob = f'https://github.com/{repo}/blob/{branch}/{dest}'
+    done, none = rendered_codes(codes, png_dir)
     rows = ['| code | before | after |', '| --- | --- | --- |']
     for code in codes:
         cells = []
@@ -549,23 +631,31 @@ def private_render_comment(codes: list[str], png_dir: Path, repo: str,
                 cells.append(f'[{side}]({blob}/{code}-{side}.png)')
             else:
                 cells.append('_not rendered_')
-        if cells[0] != '_not rendered_' or cells[1] != '_not rendered_':
-            rendered += 1
         rows.append(f'| `{code}` | {cells[0]} | {cells[1]} |')
     lines += [
-        f'{rendered} of {len(codes)} private model(s) rendered. Images and '
+        f'{len(done)} of {len(codes)} private model(s) rendered. Images and '
         f'the full report are in [`{repo}`]({tree}), and open only for '
         'people with access to that repo. Nothing here is published to '
-        'this repo.', '']
+        'this repo. The links work once this run\'s `visual-diff-private` '
+        'job has finished green: its last step is the push.', '']
+    if none:
+        lines += ['> [!WARNING]',
+                  '> Rendered nothing for: '
+                  + ', '.join(f'`{c}`' for c in none)
+                  + '. `visual-diff-private` fails for this.', '']
     lines += rows
     return lines
 
 
 def cmd_private_render_comment(args: argparse.Namespace) -> None:
     codes = validated_entries('private', os.environ.get('ENTRIES', ''))
-    lines = private_render_comment(codes, Path(args.png_dir), args.repo,
-                                   args.sha, args.dest, args.pushed == 'true')
+    png_dir = Path(args.png_dir)
+    lines = private_render_comment(codes, png_dir, args.repo, args.branch,
+                                   args.dest, args.write_token == 'true')
     Path(args.out).write_text('\n'.join(lines) + '\n', encoding='utf-8')
+    _, none = rendered_codes(codes, png_dir)
+    # Codes only (public), for the final push step to fail on.
+    _write_outputs({'unrendered': ' '.join(none)})
 
 
 def main() -> None:
@@ -575,7 +665,7 @@ def main() -> None:
     p_resolve = sub.add_parser(
         'resolve', help='decide private scope and alsocheck selection; '
         'reads EVENT_NAME, PR_BODY, DISPATCH_ALSOCHECK, RUN_PRIVATE_SHARDS, '
-        'IS_FORK, WRITE_TOKEN_PRESENT from the environment')
+        'IS_FORK, TOKEN_PRESENT from the environment')
     p_resolve.add_argument('--shard-dir', default='regression/shards')
     p_resolve.add_argument('--body-file',
                            help='read the PR body from this file')
@@ -598,9 +688,10 @@ def main() -> None:
     p_comment = sub.add_parser('private-render-comment')
     p_comment.add_argument('--png-dir', required=True)
     p_comment.add_argument('--repo', required=True)
-    p_comment.add_argument('--sha', default='')
-    p_comment.add_argument('--dest', default='')
-    p_comment.add_argument('--pushed', default='false')
+    p_comment.add_argument('--branch', required=True)
+    p_comment.add_argument('--dest', required=True)
+    p_comment.add_argument('--write-token', default='false',
+                           choices=('true', 'false'))
     p_comment.add_argument('--out', required=True)
     p_comment.set_defaults(func=cmd_private_render_comment)
 

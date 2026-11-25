@@ -83,14 +83,21 @@ def _alsocheck_section(public: list[str], private: list[str],
              'Models this PR asked CI to check: ' + ', '.join(named) + '.',
              '']
     notes = []
-    if public:
+    if public and args.external_pr == 'true':
+        notes.append(
+            'Public: regression ran; **no visual diff** - a PR from a fork '
+            'cannot publish images or comment with its read-only token.')
+    elif public:
         notes.append(
             'Public: rendered before/after unconditionally in the visual '
             'diff comment, digest change or not.')
-    if private and args.alsocheck_private_skipped == 'fork':
+    if private and args.alsocheck_private_skipped:
+        why = ('a pull request from a fork has no access to the private '
+               'corpus' if args.alsocheck_private_skipped == 'fork' else
+               'this run has no `TEST_MODELS_PRIVATE_TOKEN` (a Dependabot '
+               'PR, say)')
         notes.append(
-            'Private: **skipped** - a pull request from a fork has no access '
-            'to the private corpus, so ' + ', '.join(
+            f'Private: **skipped** - {why}, so ' + ', '.join(
                 f'`{c}`' for c in private) + ' did not run. A maintainer can '
             'run them with a manual dispatch (`alsocheck` input).')
     elif private:
@@ -101,15 +108,13 @@ def _alsocheck_section(public: list[str], private: list[str],
                 + ' also ran as part of the full headline set below.')
         if args.private_render == 'true':
             notes.append(
-                'Private renders: pushed to `bldrs-ai/test-models-private` '
-                '(branch `visual-diff-assets`) and linked by code in a '
-                'separate comment; the links open only for people with '
-                'access to that repo. Nothing private is published here.')
-        elif args.private_render == 'no-write-token':
-            notes.append(
-                'Private renders: **skipped** - '
-                '`TEST_MODELS_PRIVATE_WRITE_TOKEN` is not set, and private '
-                'renders have no other destination. Regression ran.')
+                'Private renders: `visual-diff-private` pushes them to '
+                '`bldrs-ai/test-models-private` (branch `visual-diff-assets`) '
+                'and links them by code in its own comment; the links open '
+                'only for people with access to that repo. Nothing private '
+                'is published here. That job needs '
+                '`TEST_MODELS_PRIVATE_WRITE_TOKEN` in the `private-renders` '
+                'environment, and its comment says so if it is missing.')
     lines += [f'- {n}' for n in notes] + ([''] if notes else [])
     return lines
 
@@ -142,11 +147,15 @@ def main() -> None:
                         help='JSON list of private codes alsocheck named '
                              '(as requested, before any fork skip)')
     parser.add_argument('--alsocheck-private-skipped', default='',
-                        choices=('', 'fork'))
+                        choices=('', 'fork', 'no-token'))
     parser.add_argument(
         '--private-render', default='none',
-        choices=('none', 'true', 'no-write-token', 'fork'),
+        choices=('none', 'true', 'skipped'),
         help='what happens to private alsocheck renders this run')
+    parser.add_argument(
+        '--external-pr', default='false', choices=('true', 'false'),
+        help='a PR whose head is not this repo: no visual diff, since its '
+             'token cannot publish images or comment')
     args = parser.parse_args()
 
     root = Path(args.artifacts)
@@ -181,7 +190,12 @@ def main() -> None:
         '(`rc-*` tag, see `rc-regression.yml`).',
         '',
     ]
-    if args.visual_diff_count != '0':
+    if args.visual_diff_count != '0' and args.external_pr == 'true':
+        header += [f'**Visual diff:** {args.visual_diff_count} public '
+                   'model(s) changed digests, but `visual-diff` does not run '
+                   'for a PR from a fork: its read-only token cannot publish '
+                   'images or comment.', '']
+    elif args.visual_diff_count != '0':
         header += [f'**Visual diff:** {args.visual_diff_count} public '
                    'model(s) changed digests; see the `visual-diff` job.', '']
     if args.package:

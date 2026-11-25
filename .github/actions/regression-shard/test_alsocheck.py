@@ -80,8 +80,10 @@ class ParserTest(unittest.TestCase):
         self.assertEqual(sel.errors, [])
 
     def test_key_any_case_and_spacing(self):
+        # (A tab or four spaces is an indented code block: see
+        # test_indented_code_block_ignored.)
         for line in ('ALSOCHECK: O10', 'AlsoCheck : O10', '  alsocheck:O10',
-                     '\talsocheck :  O10  '):
+                     '   alsocheck :  O10  '):
             with self.subTest(line=line):
                 self.assertEqual(parse_body(line).codes, ['O10'])
 
@@ -112,6 +114,70 @@ class ParserTest(unittest.TestCase):
                 '~~~text\nalsocheck: BLSN282\n~~~\n'
                 'alsocheck: ILNA250\n')
         self.assertEqual(parse_body(body).codes, ['ILNA250'])
+
+    def test_unclosed_html_comment_hides_the_rest(self):
+        body = 'Fix.\n<!-- forgot to close\nalsocheck: O10\nmore\n'
+        self.assertEqual(parse_body(body).count, 0)
+        body = 'alsocheck: PSB900\n<!--\nalsocheck: O10'
+        self.assertEqual(parse_body(body).codes, ['PSB900'])
+
+    def test_text_after_a_hidden_span_on_its_line_is_ignored(self):
+        for body in ('<!-- x -->alsocheck: O10',
+                     '<!--\nx\n-->alsocheck: O10',
+                     '<code>\nalsocheck: O10\n</code>',
+                     'a <pre>\nb\n</pre>   alsocheck: O10',
+                     '<CODE>alsocheck: O10</CODE>',
+                     '<details><summary>s</summary><pre>\nalsocheck: O10\n</pre>'):
+            with self.subTest(body=body):
+                self.assertEqual(parse_body(body).count, 0)
+
+    def test_unclosed_pre_hides_the_rest(self):
+        self.assertEqual(parse_body('<pre>\nalsocheck: O10\n').count, 0)
+
+    def test_longer_fence_contains_shorter(self):
+        body = ('````\n```\nalsocheck: O10\n```\nalsocheck: D3D224\n````\n'
+                'alsocheck: PSB900\n')
+        self.assertEqual(parse_body(body).codes, ['PSB900'])
+
+    def test_tilde_fence_inside_backtick_fence(self):
+        body = ('```\n~~~\nalsocheck: O10\n~~~\nalsocheck: D3D224\n```\n'
+                'alsocheck: PSB900\n')
+        self.assertEqual(parse_body(body).codes, ['PSB900'])
+
+    def test_fence_with_info_string_does_not_close(self):
+        body = '```\nx\n```python\nalsocheck: O10\n```\nalsocheck: PSB900'
+        self.assertEqual(parse_body(body).codes, ['PSB900'])
+
+    def test_unclosed_fence_hides_the_rest(self):
+        self.assertEqual(parse_body('```\nalsocheck: O10\n').count, 0)
+
+    def test_fence_in_list_or_quote(self):
+        body = ('- ```\n  alsocheck: O10\n  ```\n'
+                '> ```\n> alsocheck: D3D224\n> ```\nalsocheck: PSB900')
+        self.assertEqual(parse_body(body).codes, ['PSB900'])
+
+    def test_indented_code_block_ignored(self):
+        for line in ('    alsocheck: O10', '\talsocheck: O10',
+                     '     alsocheck: O10', '  \talsocheck: O10'):
+            with self.subTest(line=line):
+                self.assertEqual(parse_body('Text.\n\n' + line).count, 0)
+        self.assertEqual(parse_body('   alsocheck: O10').codes, ['O10'])
+
+    def test_unicode_line_separators(self):
+        for sep in ('\u2028', '\u2029', '\x85', '\x0b', '\x0c', '\x1c'):
+            with self.subTest(sep=repr(sep)):
+                # GitHub renders these inside one line: neither half is a
+                # line of its own, so neither half is a request.
+                self.assertEqual(
+                    parse_body(f'Prose{sep}alsocheck: O10').count, 0)
+                self.assertEqual(
+                    parse_body(f'alsocheck: O10{sep}PSB900').count, 0)
+                self.assertEqual(
+                    parse_body(f'alsocheck: O10{sep}\nalsocheck: D3D224')
+                    .codes, ['D3D224'])
+
+    def test_lone_cr_is_a_line_break(self):
+        self.assertEqual(parse_body('Fix.\ralsocheck: O10').codes, ['O10'])
 
     def test_no_line_no_selection(self):
         sel = parse_body('Nothing to see.\n\nalsocheckx: O10\n')
@@ -173,11 +239,32 @@ class ParserTest(unittest.TestCase):
         self.assertEqual(sel.codes, ['O10'])
         self.assertEqual(sel.errors, [])
 
-    def test_private_path_hint_names_code_only(self):
-        sel = parse_body('alsocheck: ILNA250.ifc')
-        self.assertEqual(sel.count, 0)
-        self.assertIn('`ILNA250`', sel.errors[0])
-        self.assertNotIn('ILNA250.ifc', sel.errors[0])
+    def test_private_path_hint_echoes_nothing(self):
+        for entry in ('ILNA250.ifc', 'SECRETX9.step', '`QZ77.stp`'):
+            with self.subTest(entry=entry):
+                sel = parse_body('alsocheck: ' + entry)
+                self.assertEqual(sel.count, 0)
+                self.assertIn('shard code alone', sel.errors[0])
+                bare = entry.strip('`')
+                stem = bare.split('.')[0]
+                for message in sel.errors:
+                    # No part of the entry: not the file, not its stem,
+                    # not even a 3-character run of the stem.
+                    for i in range(len(stem) - 2):
+                        self.assertNotIn(stem[i:i + 3], message)
+
+    def test_no_rejection_echoes_any_fragment(self):
+        # Every HOSTILE entry: no 4-character run of it in any message
+        # (short runs collide with ordinary words in the messages).
+        for entry in HOSTILE:
+            sel = parse_body('alsocheck: ' + entry)
+            for message in sel.errors:
+                for i in range(len(entry) - 3):
+                    chunk = entry[i:i + 4]
+                    if chunk.strip() and chunk.isalnum() and \
+                            chunk.lower() not in ('code', 'path', 'file',
+                                                  'than', 'char'):
+                        self.assertNotIn(chunk, message, (entry, message))
 
     def test_cap(self):
         sel = parse_body('alsocheck: ' + ', '.join(
@@ -212,7 +299,7 @@ class ParserTest(unittest.TestCase):
 
 def env_for(event, body='', **extra):
     env = {'EVENT_NAME': event, 'PR_BODY': body, 'IS_FORK': 'false',
-           'WRITE_TOKEN_PRESENT': 'true'}
+           'TOKEN_PRESENT': 'true'}
     env.update(extra)
     return env
 
@@ -286,12 +373,36 @@ class ResolveTest(unittest.TestCase):
         self.assertEqual(out['private_render'], 'true')
         self.assertIn('visual-diff-assets', summary)
 
-    def test_pr_headline_code_without_write_token(self):
+    def test_write_token_is_decided_by_the_render_job(self):
+        # It lives in the private-renders environment, which resolve-models
+        # cannot see; the summary says where it must be.
         out, summary, _ = self.resolve(env_for(
-            'pull_request', 'alsocheck: ILNA250', WRITE_TOKEN_PRESENT='false'))
-        self.assertEqual(out['private_render'], 'no-write-token')
-        self.assertEqual(out['private_scope'], 'selected')
-        self.assertIn('TEST_MODELS_PRIVATE_WRITE_TOKEN', summary)
+            'pull_request', 'alsocheck: ILNA250'))
+        self.assertEqual(out['private_render'], 'true')
+        self.assertIn('private-renders', summary)
+
+    def test_same_repo_pr_without_read_token_skips(self):
+        # Dependabot: same repo, no secrets. A note, not a failure.
+        out, summary, errors = self.resolve(env_for(
+            'pull_request', 'alsocheck: ILNA250 XYZ12 ifc/foo/bar.ifc',
+            TOKEN_PRESENT='false'))
+        self.assertEqual(errors, [])
+        self.assertEqual(out['private_scope'], 'none')
+        self.assertEqual(out['private_expected'], 'false')
+        self.assertEqual(out['private_needed'], 'false')
+        self.assertEqual(out['alsocheck_private_skipped'], 'no-token')
+        self.assertEqual(out['private_render'], 'skipped')
+        self.assertEqual(json.loads(out['alsocheck_matrix']),
+                         [{'id': 'alsocheck-public', 'corpus': 'public'}])
+        self.assertIn('Dependabot', summary)
+
+    def test_dispatch_without_read_token_still_needs_it(self):
+        # Not a PR: resolve-models' require step fails the run loudly.
+        out, _, _ = self.resolve(env_for(
+            'workflow_dispatch', DISPATCH_ALSOCHECK='O10',
+            TOKEN_PRESENT='false'))
+        self.assertEqual(out['private_needed'], 'true')
+        self.assertEqual(out['alsocheck_private_skipped'], '')
 
     def test_pr_non_headline_code(self):
         out, _, errors = self.resolve(
@@ -307,14 +418,14 @@ class ResolveTest(unittest.TestCase):
     def test_fork_drops_private_keeps_public(self):
         out, summary, errors = self.resolve(env_for(
             'pull_request', 'alsocheck: ILNA250 XYZ12 ifc/foo/bar.ifc',
-            IS_FORK='true', WRITE_TOKEN_PRESENT='false'))
+            IS_FORK='true', TOKEN_PRESENT='false'))
         self.assertEqual(errors, [])
         self.assertEqual(out['private_scope'], 'none')
         self.assertEqual(out['private_expected'], 'false')
         self.assertEqual(out['private_needed'], 'false')
         self.assertEqual(out['alsocheck_private'], '[]')
         self.assertEqual(out['alsocheck_private_skipped'], 'fork')
-        self.assertEqual(out['private_render'], 'fork')
+        self.assertEqual(out['private_render'], 'skipped')
         self.assertEqual(json.loads(out['alsocheck_private_requested']),
                          ['ILNA250', 'XYZ12'])
         self.assertEqual(json.loads(out['alsocheck_matrix']),
@@ -383,7 +494,7 @@ class ResolveTest(unittest.TestCase):
                  '--shard-dir', str(SHARDS), '--body-file', str(body),
                  '--public-tree', str(tree)],
                 env={**os.environ, 'EVENT_NAME': 'pull_request',
-                     'IS_FORK': 'false', 'WRITE_TOKEN_PRESENT': 'false',
+                     'IS_FORK': 'false', 'TOKEN_PRESENT': 'true',
                      'GITHUB_OUTPUT': str(Path(tmp) / 'out'),
                      'GITHUB_STEP_SUMMARY': str(Path(tmp) / 'sum')},
                 capture_output=True, text=True, check=False)
@@ -391,7 +502,7 @@ class ResolveTest(unittest.TestCase):
             lines = (Path(tmp) / 'out').read_text().splitlines()
             got = dict(line.split('=', 1) for line in lines)
             self.assertEqual(got['private_selected'], 'ILNA250')
-            self.assertEqual(got['private_render'], 'no-write-token')
+            self.assertEqual(got['private_render'], 'true')
 
 
 class ValidatedEntriesTest(unittest.TestCase):
@@ -494,23 +605,47 @@ class PrivateRenderCommentTest(unittest.TestCase):
             png = Path(tmp)
             (png / 'ILNA250-before.png').write_bytes(b'x')
             (png / 'ILNA250-after.png').write_bytes(b'x')
-            (png / 'report.md').write_text('| `Secret.ifc` | ![b](x) | 12.3% |')
+            (png / 'O10-after.png').write_bytes(b'x')  # base could not load
+            (png / 'README.md').write_text('| `Secret.ifc` | ![b](x) | 12.3% |')
             lines = alsocheck.private_render_comment(
-                ['ILNA250', 'XYZ12'], png, 'bldrs-ai/test-models-private',
-                'a' * 40, 'conway/pr-7/99', pushed=True)
+                ['ILNA250', 'O10', 'XYZ12'], png,
+                'bldrs-ai/test-models-private', 'visual-diff-assets',
+                'conway/pr-7/99', write_token=True)
+            self.assertEqual(alsocheck.rendered_codes(
+                ['ILNA250', 'O10', 'XYZ12'], png),
+                (['ILNA250', 'O10'], ['XYZ12']))
         text = '\n'.join(lines)
-        self.assertIn('1 of 2 private model(s) rendered', text)
-        self.assertIn('blob/' + 'a' * 40 + '/conway/pr-7/99/ILNA250-before.png',
-                      text)
+        self.assertIn('2 of 3 private model(s) rendered', text)
+        self.assertIn('blob/visual-diff-assets/conway/pr-7/99/'
+                      'ILNA250-before.png', text)
+        self.assertIn('Rendered nothing for: `XYZ12`', text)
         self.assertNotIn('![', text)       # links, never embeds
         self.assertNotIn('%', text)        # no pixel figures
         self.assertNotIn('Secret', text)   # nothing from the report
 
-    def test_not_pushed(self):
+    def test_no_write_token(self):
         text = '\n'.join(alsocheck.private_render_comment(
-            ['O10'], Path('/nonexistent'), 'r/p', '', '', pushed=False))
-        self.assertIn('nothing was published', text)
+            ['O10'], Path('/nonexistent'), 'r/p', 'b', 'd',
+            write_token=False))
+        self.assertIn('private-renders', text)
+        self.assertIn('nothing was rendered or published', text)
         self.assertNotIn('O10-before', text)
+
+    def test_cli_reports_unrendered_codes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            png = Path(tmp) / 'payload'
+            png.mkdir()
+            (png / 'O10-before.png').write_bytes(b'x')
+            out = Path(tmp) / 'gh_out'
+            subprocess.run(
+                [sys.executable, str(HERE / 'alsocheck.py'),
+                 'private-render-comment', '--png-dir', str(png),
+                 '--repo', 'r/p', '--branch', 'b', '--dest', 'd',
+                 '--write-token', 'true', '--out', str(Path(tmp) / 'c.md')],
+                env={**os.environ, 'ENTRIES': '["O10", "PSB900"]',
+                     'GITHUB_OUTPUT': str(out)},
+                check=True, capture_output=True)
+            self.assertEqual(out.read_text().strip(), 'unrendered=PSB900')
 
 
 class ShardListTest(unittest.TestCase):
@@ -558,8 +693,111 @@ class ShardListTest(unittest.TestCase):
         self.assertNotIn('Secret', done.stdout + done.stderr)
         listed = out.read_text().split()
         self.assertEqual([Path(p).name for p in listed], ['ILNA250.ifc'])
-        self.assertTrue(Path(listed[0]).is_symlink())
+        # A hard link: no other name to resolve to.
+        self.assertFalse(Path(listed[0]).is_symlink())
+        self.assertEqual(os.path.realpath(listed[0]), listed[0])
         self.assertEqual(Path(listed[0]).read_text(), 'ISO')
+        self.assertEqual(
+            os.stat(listed[0]).st_ino,
+            os.stat(root / 'ifc' / 'client' / 'Real Secret Name.IFC').st_ino)
+
+    def private_corpus(self):
+        root = self.tmp / 'models'
+        (root / 'regression' / 'test_models').mkdir(parents=True)
+        (root / 'step' / 'client').mkdir(parents=True)
+        (root / 'step' / 'client' / 'Hidden Plant.stp').write_text('ISO')
+        (root / 'regression' / 'shard_codes.txt').write_text(
+            'HP12  step/client/Hidden Plant.stp\n')
+        shard = self.tmp / 'alsocheck-private.txt'
+        shard.write_text('# corpus: private\nHP12\n')
+        return root, shard
+
+    def test_redact(self):
+        pairs = [('HP12', 'step/client/Hidden Plant.stp')]
+        text = ('Error downloading object: step/client/Hidden Plant.stp '
+                '(abc): Hidden Plant.stp; stem Hidden Plant')
+        out = shard_list.redact(text, pairs)
+        self.assertNotIn('Hidden', out)
+        self.assertIn('HP12', out)
+
+    def test_resolve_private_error_names_code_only(self):
+        root, shard = self.private_corpus()
+        (root / 'step' / 'client' / 'Hidden Plant.stp').unlink()
+        with self.assertRaises(SystemExit) as caught:
+            shard_list.resolve_private(root, ['HP12'])
+        self.assertNotIn('Hidden', str(caught.exception))
+        self.assertIn('HP12', str(caught.exception))
+
+    def digested(self, shard, root, rows, by_code=True, failed_rows=''):
+        main = root / 'regression' / 'test_models' / 'main.csv'
+        failed = root / 'regression' / 'test_models' / 'failed.csv'
+        main.write_text('file,hash,errors\n' + rows)
+        failed.write_text('file,code,signal\n' + failed_rows)
+        return subprocess.run(
+            [sys.executable, str(HERE / 'shard_list.py'), 'digested',
+             str(shard), str(root), str(main), str(failed)]
+            + (['--by-code'] if by_code else []),
+            env={**os.environ, 'GITHUB_WORKSPACE': str(self.tmp)},
+            capture_output=True, text=True, check=False)
+
+    def test_digested(self):
+        root, shard = self.private_corpus()
+        done = self.digested(shard, root, 'HP12.stp,abc,0\n')
+        self.assertEqual(done.returncode, 0, done.stdout)
+        done = self.digested(shard, root, '', failed_rows='HP12.stp,1,\n')
+        self.assertEqual(done.returncode, 0, done.stdout)
+        done = self.digested(shard, root, '')
+        self.assertEqual(done.returncode, 1)
+        self.assertIn('HP12', done.stdout)
+        self.assertNotIn('Hidden', done.stdout + done.stderr)
+        # A by-code run's rows are not keyed by the real name, and the
+        # real name does not satisfy a by-code check either.
+        done = self.digested(shard, root, 'Hidden Plant.stp,abc,0\n')
+        self.assertEqual(done.returncode, 1)
+
+    def test_digested_public(self):
+        shard = self.tmp / 'alsocheck-public.txt'
+        shard.write_text('# corpus: public\nifc/a/x.ifc\nstep/y.stp\n')
+        root = self.tmp / 'models'
+        (root / 'regression' / 'test_models').mkdir(parents=True)
+        done = self.digested(shard, root, 'x.ifc,h,0\n', by_code=False)
+        self.assertEqual(done.returncode, 1)
+        self.assertIn('step/y.stp', done.stdout)
+        done = self.digested(shard, root, 'x.ifc,h,0\ny.stp,h,0\n',
+                             by_code=False)
+        self.assertEqual(done.returncode, 0)
+
+    def test_summary_by_code_renames_baseline(self):
+        # A by-code run's rows say HP12.stp; the committed baseline says the
+        # real name. The summary must compare like with like, and print
+        # neither the real name nor any row.
+        root, shard = self.private_corpus()
+        tm = root / 'regression' / 'test_models'
+        header = 'file,expressID,type,message\n'
+        (tm / 'errors.csv').write_text(header + 'Hidden Plant.stp,1,T,old\n')
+        subprocess.run(['git', 'init', '-q', str(root)], check=True)
+        subprocess.run(['git', '-C', str(root), 'add', '-A'], check=True)
+        subprocess.run(['git', '-C', str(root), '-c', 'user.name=t', '-c',
+                        'user.email=t@t', 'commit', '-qm', 'base'],
+                       check=True)
+        sha = subprocess.run(['git', '-C', str(root), 'rev-parse', 'HEAD'],
+                             capture_output=True, text=True,
+                             check=True).stdout.strip()
+        (tm / 'errors.csv').write_text(header + 'HP12.stp,1,T,old\n'
+                                       'HP12.stp,2,T,new\n')
+        (tm / 'failed.csv').write_text('file,code,signal\n')
+        out = self.tmp / 'frag.md'
+        subprocess.run(
+            [sys.executable, str(HERE / 'shard_summary.py'),
+             '--shard-id', 'alsocheck-private', '--shard-file', str(shard),
+             '--root', str(root), '--sha', sha, '--perf',
+             str(self.tmp / 'none.csv'), '--out', str(out), '--by-code'],
+            check=True, capture_output=True)
+        text = out.read_text()
+        self.assertIn('**2** row(s) (baseline **1**', text)
+        self.assertIn('1 new', text)
+        self.assertNotIn('Hidden', text)
+        self.assertNotIn('old', text)
 
     def test_check_reserves_alsocheck_ids(self):
         shards = self.tmp / 'shards'
@@ -685,19 +923,41 @@ class MergeSummariesTest(unittest.TestCase):
         self.assertIn('`ILNA250`', warning)
         self.assertNotIn('`O10`', warning)
 
-    def test_alsocheck_private_no_write_token(self):
+    def test_alsocheck_private_headline_and_extra(self):
         self.frag('coverage-1', 'coverage-2', 'coverage-3', 'ILNA250',
                   'alsocheck-private')
         text, _ = self.merge(
             '--private-sha', 'q' * 40, '--private-scope', 'selected',
             '--private-selected', 'ILNA250',
             '--alsocheck-private', '["ILNA250", "XYZ12"]',
-            '--private-render', 'no-write-token')
+            '--private-render', 'true')
         self.assertNotIn('[!WARNING]', text)
         also = text.split('### alsocheck')[1].split('### Fixed shards')[0]
         self.assertIn('TEST_MODELS_PRIVATE_WRITE_TOKEN', also)
+        self.assertIn('private-renders', also)
         self.assertIn('fragment of alsocheck-private', also)
         self.assertIn('fragment of ILNA250', also)
+
+    def test_same_repo_pr_without_read_token(self):
+        self.frag('coverage-1', 'coverage-2', 'coverage-3')
+        text, _ = self.merge(
+            '--private-reason', 'not-on-prs', '--private-scope', 'none',
+            '--alsocheck-private', '["ILNA250"]',
+            '--alsocheck-private-skipped', 'no-token',
+            '--private-render', 'skipped')
+        self.assertNotIn('[!WARNING]', text)
+        self.assertIn('TEST_MODELS_PRIVATE_TOKEN', text)
+        self.assertIn('**skipped**', text)
+
+    def test_external_pr_says_no_visual_diff(self):
+        self.frag('coverage-1', 'coverage-2', 'coverage-3', 'alsocheck-public')
+        text, _ = self.merge(
+            '--private-reason', 'not-on-prs', '--private-scope', 'none',
+            '--visual-diff-count', '3', '--external-pr', 'true',
+            '--alsocheck-public', '["ifc/foo/bar.ifc"]')
+        self.assertIn('does not run for a PR from a fork', text)
+        self.assertIn('**no visual diff**', text)
+        self.assertNotIn('see the `visual-diff` job', text)
 
     def test_fork(self):
         self.frag('coverage-1', 'coverage-2', 'coverage-3', 'alsocheck-public')
@@ -705,7 +965,7 @@ class MergeSummariesTest(unittest.TestCase):
             '--private-reason', 'not-on-prs', '--private-scope', 'none',
             '--alsocheck-public', '["ifc/foo/bar.ifc"]',
             '--alsocheck-private', '["ILNA250", "XYZ12"]',
-            '--alsocheck-private-skipped', 'fork', '--private-render', 'fork')
+            '--alsocheck-private-skipped', 'fork', '--private-render', 'skipped')
         self.assertNotIn('[!WARNING]', text)
         also = text.split('### alsocheck')[1].split('### Fixed shards')[0]
         self.assertIn('fork', also)

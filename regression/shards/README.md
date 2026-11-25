@@ -29,11 +29,17 @@ the PR path for ~0.4% of the cost. The expensive ones are `PSB900`,
 is in the code.
 
 Private shards need `TEST_MODELS_PRIVATE_TOKEN`. `resolve-models` fails
-loudly if it is missing on a run that executes them - merge, rc, a
-dispatch, or a PR whose alsocheck names a private code. A fork never
-pushes to `main`, and a fork PR's private alsocheck entries are dropped
-with a note before that check (a fork has no secrets), so it cannot fire
-on one.
+loudly if it is missing on a merge, rc or dispatch run that executes
+them. On a pull request a missing token is a **skip with a note**, not a
+failure: a fork has no secrets, a PR whose head repo was deleted is
+treated as a fork, and a same-repo bot PR (Dependabot) gets only
+Dependabot secrets. None of them can do anything about it.
+
+The token never touches disk: every git and git-lfs call that needs it
+gets it per process, as an `http.extraheader` in `GIT_CONFIG_*`
+environment variables scoped to `https://github.com/`. A remote URL
+holding it would sit in `models/.git/config`, readable by every later
+step, the PR's own code among them.
 
 ## What a private shard may and may not publish
 
@@ -48,8 +54,9 @@ invisible.
   written on the default branch is restorable by any `pull_request`
   run, and a `pull_request` run uses the *fork's* workflow file — so a
   fork can add a restore step. A cached private shard would hand over
-  both the model bytes and the `TEST_MODELS_PRIVATE_TOKEN` that
-  `git remote add` leaves in `models/.git/config`.
+  the model bytes. (It used to hand over the token too, from the remote
+  URL in `models/.git/config`; credentials are now passed per process as
+  an `http.extraheader` and never written to disk.)
 - **Renders.** The public `visual-diff` job renders public models only;
   rendering a private model there would publish it onto this repo's
   `visual-diff-assets` branch. The matrix passes the literal `'false'`
@@ -76,8 +83,26 @@ names a private code: then that PR's run produces them too, the same
 exposure by the same mechanism. Note the batch's job log also prints
 each model's basename as it starts and finishes it, so for a private
 shard the real basename is in that log; that is part of the accepted
-log exposure above, and alsocheck does not add to it (its renderer sees
-the models only under their codes).
+log exposure above.
+
+That acceptance covers the **seven headline basenames** and nothing
+else. An alsocheck entry may name any code in the manifest, so the
+`alsocheck-private` job runs its batch with `by-code`: on
+`models/by-code/<CODE><ext>` hard links, so the `Current File:` lines,
+the zero-geometry and `failed.csv` printouts, every CSV row, the digest
+file and the uploaded artifact all name the code. `git lfs pull` and
+`shard_list.py` messages are redacted to codes too. The composite refuses
+a private alsocheck list without `by-code`. `visual-diff-private`
+renders through the same hard links and passes `--quiet-child-stderr`,
+so the engines' error text stays in the private report and out of the
+log. Hard links rather than symlinks: a symlink leaves the real path one
+`realpath()` away.
+
+What by-code cannot hide is the model's own content. Engine error rows
+(express IDs, entity types) are in the job log and artifact as for any
+private shard, and a model whose IFC/STEP header names itself still does
+so to anything that prints the header. The engines print the
+preprocessor and originating system from it, not the file name.
 
 ## Codes, not filenames
 
@@ -123,10 +148,19 @@ models, whether or not they are in a shard list and whether or not their
 digest changed. A manual dispatch takes the same list in its `alsocheck`
 input.
 
-**Syntax.** The key at the start of a line, any case; entries separated
-by commas or spaces; at most **5**. A line inside an HTML comment or a
-fenced code block is not a request (so a PR template's commented example,
-or a PR that documents the syntax, selects nothing). An entry is either:
+**Syntax.** The key at the start of a line (at most three leading
+spaces), any case; entries separated by commas or spaces; at most **5**.
+A line GitHub hides or shows as code is never a request. That covers an
+HTML comment (an unclosed `<!--` hides the rest of the body, as on
+GitHub), `<pre>`/`<code>`/`<script>`/`<style>`/`<textarea>`/`<template>`,
+a fenced block (closed only by the same character at least as long, so
+a fence of four backticks can hold one of three, and a backtick fence
+can hold a tilde one; an unclosed fence runs to the end), and an indented code block (four spaces or a tab). Any text on
+the same line as one of these is ignored too. So is a line containing
+a Unicode line or paragraph separator (U+2028, U+2029 and kin), since
+GitHub renders it as part of one line. When in doubt the parser ignores
+the line, so a PR template's commented example, or a PR that documents
+the syntax, selects nothing. An entry is either:
 
 - a **private** model, by its shard **code only** - capitals then the
   size in MB, e.g. `ILNA250` (the map is `regression/shard_codes.txt` in
@@ -140,7 +174,8 @@ or a PR that documents the syntax, selects nothing). An entry is either:
   is also accepted.
 
 Anything else fails `resolve-models`, loudly, naming the entry's
-**position and reason only** - never its text, because the description is
+**position and reason only** - never its text, nor any part of it,
+because the description is
 attacker-controlled and an entry rejected for looking like a private path
 is exactly the text that must not be repeated. A path is accepted only if
 it is a file in the public corpus, which is also what rejects a private
@@ -165,8 +200,12 @@ edit, and a gated replacement would report a `skipped` check as green).
 | a public path | `regression-alsocheck` `alsocheck-public` | `visual-diff`, its own section, never threshold-suppressed |
 
 The regression gates are the shards' own (failed.csv, zero-geometry),
-through the same composite action. The PR comment reports these models
-in an **alsocheck** section ahead of the fixed shards.
+through the same composite action. The alsocheck jobs add one more,
+`require-rows`: every listed model must have a row in `main.csv` or
+`failed.csv`, because a batch that never read a model exits 0. TODO: the
+fixed shards could take the same check; it is off for them only so it
+does not first land on a merge. The PR comment reports these models in
+an **alsocheck** section ahead of the fixed shards.
 
 **Unselected headline entries.** The `regression-shard-private` matrix
 stays static (`check` reads it), so on an alsocheck PR every entry
@@ -181,10 +220,14 @@ check.
 **Private renders** never reach anything public: not this repo's
 `visual-diff-assets` branch, not an Actions artifact (`visual-diff-private`
 uploads none), not the job log (the renderer sees the models only through
-`<CODE>.<ext>` symlinks, so its output and PNG names say the code), and
-not the PR comment, which carries codes and **links only** - no embedded
-image, no pixel figure. The images and the renderer's report go to the
-`visual-diff-assets` branch (orphan) of `bldrs-ai/test-models-private`:
+`<CODE>.<ext>` hard links, so its output and PNG names say the code, and
+`--quiet-child-stderr` keeps the engines' error text out), and not the
+PR comment, which carries codes and **links only** - no embedded image,
+no pixel figure. A requested code that renders nothing fails the job.
+Models over 300 MB export one engine at a time, with 900 s per export, so
+the headline models fit the 16 GB runner. The images and the renderer's
+report go to the `visual-diff-assets` branch (orphan) of
+`bldrs-ai/test-models-private`:
 
 ```
 conway/pr-<PR number>/<run id>/<CODE>-before.png
@@ -193,17 +236,49 @@ conway/pr-<PR number>/<run id>/README.md      # the full report, relative images
 conway/dispatch/<run id>/...                   # a manual dispatch
 ```
 
-The links open only for people with access to that repo. Pushing needs
+The links open only for people with access to that repo. They name the
+branch path, which is unique per run and never rewritten, so the comment
+can be built before the push. Pushing needs
 **`TEST_MODELS_PRIVATE_WRITE_TOKEN`** (contents: write on
-`test-models-private`; `TEST_MODELS_PRIVATE_TOKEN` may be read-only). If
-it is absent the private renders are skipped, the regression still runs,
-and the comment and `resolve-models`' job summary say so. There is no
-fallback destination.
+`test-models-private`; `TEST_MODELS_PRIVATE_TOKEN` may be read-only),
+stored as a secret of the **`private-renders` GitHub Environment**, not as
+a repo secret. That is deliberate:
 
-**Forks.** A fork PR has no secrets, so its private entries are dropped
-with a note in the comment and summary - skipped, not failed, and never
-leaked. Its public entries still run. A maintainer can run the private
-ones with a dispatch.
+- A `pull_request` run uses the PR branch's own workflow file, so a repo
+  secret can be read by anyone who can push a branch here, simply by
+  editing `build.yml` on that branch.
+- An environment secret is released only to a job that names the
+  environment, and only after that environment's protection rules pass.
+  A maintainer can add required reviewers there, or restrict it, without
+  another workflow change. Note that a deployment-branch restriction
+  would also block PR runs, whose ref is `refs/pull/<n>/merge`.
+
+Inside the job, every step that runs PR code (the engines and their
+`npm install`, the renderer, `alsocheck.py`) runs first. The write token
+appears in the env of exactly one step, the last. That step runs only
+`/usr/bin/git` and `cp`, in an emptied environment with no global or
+system git config and no hooks, in a fresh clone. This stops a script
+from simply reading the token. It is not a sandbox: earlier PR code can
+still poison later steps (GITHUB_ENV, GITHUB_PATH, sudo, a leftover
+process). The environment's rules are the real control. The engines'
+dependencies are not lockfile-pinned: the npm tarballs ship no lockfile,
+and the base engine is a published package with none. They install with
+`--ignore-scripts`, and all before the write token exists.
+
+If the write token is absent the private renders are skipped, the
+regression still runs, and `visual-diff-private`'s comment and job
+summary say so. There is no fallback destination.
+
+**Forks, and PRs without secrets.** A fork PR has no secrets, so its
+private entries are dropped with a note in the comment and summary:
+skipped, not failed, and never leaked. The same applies to a PR whose
+head repo was deleted, and to a same-repo PR whose run has no
+`TEST_MODELS_PRIVATE_TOKEN` (Dependabot). Its public entries still run
+regression. Two things are not posted for a fork PR, because its
+`GITHUB_TOKEN` is read-only: the public visual diff (it could neither
+push images nor comment), and the regression comment itself. The report
+is in `run-ifc-regression`'s job summary instead, and it says the visual
+diff did not run. A maintainer can run either with a dispatch.
 
 ## Invariants
 

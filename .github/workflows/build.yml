@@ -506,17 +506,26 @@ jobs:
       alsocheck_private_requested: ${{ steps.scope.outputs.alsocheck_private_requested }}
       alsocheck_private_skipped: ${{ steps.scope.outputs.alsocheck_private_skipped }}
       alsocheck_matrix: ${{ steps.scope.outputs.alsocheck_matrix }}
-      # true | no-write-token | fork | none - see visual-diff-private.
+      # true | skipped (fork, or a PR without the read token) | none.
+      # Whether the write token exists is decided by visual-diff-private,
+      # the only job that can see its environment.
       private_render: ${{ steps.scope.outputs.private_render }}
     # `secrets` is not an allowed context in a step-level `if:`; a
     # job-level `env` is how it reaches one. Same trick as
     # regression-shard below. IS_FORK is 'false' on push and
     # workflow_dispatch, where `github.event.pull_request` is null and
     # the `&&` short-circuits - those runs are internal by definition.
+    #
+    # IS_FORK means "the PR's head is not this repository", compared by
+    # name rather than read from `head.repo.fork`: a PR whose head repo
+    # was deleted has `head.repo` null, which `.fork` reads as false
+    # (internal) and this reads as external, the safe answer.
+    #
+    # The write token is not checked here: it lives in the
+    # `private-renders` environment, visible only to visual-diff-private.
     env:
       TOKEN_PRESENT: ${{ secrets.TEST_MODELS_PRIVATE_TOKEN != '' }}
-      WRITE_TOKEN_PRESENT: ${{ secrets.TEST_MODELS_PRIVATE_WRITE_TOKEN != '' }}
-      IS_FORK: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork }}
+      IS_FORK: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
     steps:
       # The alsocheck parser and the shard lists it reads the headline
       # codes from. Sparse: this job has a 5-minute budget.
@@ -610,9 +619,10 @@ jobs:
       # every step skips still reports success, so a push to main could
       # reach auto-publish having tested none of the seven headline
       # models. Fail here instead - before seven jobs start, and loudly
-      # enough to name the cause. A fork cannot see the secret, and
-      # alsocheck.py has already dropped a fork's private entries (with
-      # a note), so this does not fire on one.
+      # enough to name the cause. On a pull_request alsocheck.py has
+      # already dropped the private entries of any run without the token
+      # - a fork, or a same-repo bot PR such as Dependabot's - with a
+      # note, so this fires only on push and dispatch.
       - name: Require the private-models token where private shards run
         if: steps.scope.outputs.private_needed == 'true' && env.TOKEN_PRESENT != 'true' && env.IS_FORK != 'true'
         run: |
@@ -632,7 +642,13 @@ jobs:
         run: |
           set -euo pipefail
           REF="$TEST_MODELS_PRIVATE_TAG"
-          URL="https://x-access-token:${TOKEN}@github.com/bldrs-ai/test-models-private.git"
+          # Per-process header, not a URL: nothing on disk or in argv.
+          B64=$(printf 'x-access-token:%s' "$TOKEN" | base64 -w0)
+          echo "::add-mask::$B64"
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0="http.https://github.com/.extraheader"
+          export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $B64"
+          URL="https://github.com/bldrs-ai/test-models-private.git"
           REFS=$(git ls-remote "$URL" "$REF")
           SHA=$(printf '%s\n' "$REFS" | awk '$2 ~ /\^\{\}$/ { print $1; found=1; exit } NR==1 { first=$1 } END { if (!found && first) print first }')
           if [ -z "$SHA" ]; then SHA="$REF"; fi
@@ -781,9 +797,9 @@ jobs:
   # regression cannot hide behind a short coverage batch. But none of
   # them can be cached: Conway is public, an Actions cache written on the
   # default branch is restorable from a fork's pull_request run, and a
-  # cached private shard would hand over the model bytes and the
-  # TEST_MODELS_PRIVATE_TOKEN that `git remote add` leaves in
-  # models/.git/config. Uncached means ~2.6 GB of private LFS per run,
+  # cached private shard would hand over the model bytes (the token is
+  # no longer on disk: the composite passes it per process as an
+  # http.extraheader, never in a remote URL). Uncached means ~2.6 GB of private LFS per run,
   # and on every ready-PR push that is the dominant cost of the whole
   # pipeline for coverage that did not exist before sharding.
   #
@@ -1012,6 +1028,13 @@ jobs:
       # rendered here, as for every private shard. Public: its models are
       # rendered unconditionally by visual-diff's alsocheck section, so a
       # digest-changed list from this shard would only duplicate them.
+      #
+      # by-code for the private entry: it may name ANY code in the
+      # manifest, and only the seven headline basenames are accepted in
+      # public logs and artifacts. The batch runs on <CODE><ext> hard
+      # links, so its log, every CSV row and the artifact carry the code.
+      # require-rows: a generated list is new every run, so prove the
+      # batch read each model rather than trusting its exit status.
       - name: Run shard
         uses: ./.github/actions/regression-shard
         with:
@@ -1023,6 +1046,8 @@ jobs:
           models-token: ${{ matrix.corpus == 'private' && secrets.TEST_MODELS_PRIVATE_TOKEN || '' }}
           concurrency: '1'
           allow-visual-diff: 'false'
+          by-code: ${{ matrix.corpus == 'private' }}
+          require-rows: 'true'
 
   # Required check name. Must stay `run-ifc-regression` — README and any
   # status-check consumers match on it. Tiny: it AND-reduces the shards
@@ -1108,6 +1133,7 @@ jobs:
           ALSOCHECK_PRIVATE: ${{ needs.resolve-models.outputs.alsocheck_private_requested }}
           ALSOCHECK_PRIVATE_SKIPPED: ${{ needs.resolve-models.outputs.alsocheck_private_skipped }}
           PRIVATE_RENDER: ${{ needs.resolve-models.outputs.private_render }}
+          EXTERNAL_PR: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
         run: |
           set -uo pipefail
           # Non-fatal for the same reason as the per-shard fragment: the
@@ -1128,6 +1154,7 @@ jobs:
             --alsocheck-private "${ALSOCHECK_PRIVATE:-[]}" \
             --alsocheck-private-skipped "$ALSOCHECK_PRIVATE_SKIPPED" \
             --private-render "${PRIVATE_RENDER:-none}" \
+            --external-pr "$EXTERNAL_PR" \
             || echo "::warning::Could not build the regression comment; the regression-shard-* artifacts still hold every shard's CSVs."
 
       # The same report in the job summary, so a dispatch (which has no PR
@@ -1148,8 +1175,13 @@ jobs:
       # success() is spelled out because naming any status function
       # drops the implicit one, and this step should still not post
       # after an earlier step in this job failed.
+      #
+      # Not on a PR whose head is another repository either: its
+      # GITHUB_TOKEN is read-only whatever `permissions:` says, so the
+      # comment would 403 and turn this required check red on every fork
+      # PR. The report is in the job summary above instead.
       - name: Comment on Pull Request with regression results
-        if: ${{ success() && !cancelled() && github.event_name == 'pull_request' && hashFiles('regression_comment.md') != '' }}
+        if: ${{ success() && !cancelled() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && hashFiles('regression_comment.md') != '' }}
         uses: peter-evans/create-or-update-comment@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -1243,12 +1275,18 @@ jobs:
     # as before. alsocheck PUBLIC models, on a pull request or a dispatch,
     # rendered whether or not their digest moved. Private alsocheck
     # models are never rendered here: see visual-diff-private.
+    #
+    # Not for a PR whose head is another repository (a fork, or a
+    # deleted head): its GITHUB_TOKEN is read-only, so it can neither
+    # push the images nor comment, and the job would go red at the
+    # first. The regression comment says the visual diff was not run.
     if: >-
       !cancelled() &&
       needs.resolve-models.result == 'success' &&
       needs.run-ifc-regression.result == 'success' &&
       ((github.event_name == 'pull_request' &&
         github.event.pull_request.draft == false &&
+        github.event.pull_request.head.repo.full_name == github.repository &&
         (needs.run-ifc-regression.outputs.visual_diff_count != '0' ||
          needs.resolve-models.outputs.alsocheck_public_count != '0')) ||
        (github.event_name == 'workflow_dispatch' &&
@@ -1258,8 +1296,14 @@ jobs:
     # large runner was on the old 2-vCPU/7 GB image. Disk fits because
     # this job never materializes the corpus: skip-smudge clone, then an
     # LFS pull of the listed models only.
+    #
+    # 45 minutes: the 30 this job had was sized for --max 24 digest-changed
+    # models; alsocheck adds up to 5 more at the same 180 s export
+    # timeout, which is up to 15 more minutes when every one hangs.
+    # Neither figure is a worst case for all 29 hanging (that is 87
+    # minutes); like the 30 before it, this budgets for a few.
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 45
     permissions:
       contents: write       # push rendered PNGs to visual-diff-assets
       pull-requests: write  # post the before/after comment
@@ -1382,7 +1426,7 @@ jobs:
       # script's 600 s default. The default exists to preserve this job's
       # historical 10 minutes, but 600 s is not a cap this job can afford:
       # rc has 120 minutes for --max 60, so one hung export costs it ~2.5%
-      # of its budget, while this job has 30 minutes for --max 24, where
+      # of its budget, while this job had 30 minutes for --max 24, where
       # the same hang costs ~45% and two end the job. Same runner class as
       # rc (4 vCPU) with more RAM (16 GB vs 8), the same renderer and the
       # same threshold, so rc's 180 s carries over. conway#792 is the case
@@ -1495,18 +1539,36 @@ jobs:
   # Visual diff for PRIVATE alsocheck models. Renders never reach anything
   # public: not this repo's visual-diff-assets branch, not an Actions
   # artifact (this job uploads none), not the job log (the renderer only
-  # ever sees the models under code-named symlinks, so what it prints and
-  # the PNG names say the code), and not the PR comment, which carries
-  # codes and links only - no embedded image, no pixel figure.
+  # ever sees the models as code-named hard links, so what it prints and
+  # the PNG names say the code, and --quiet-child-stderr keeps the
+  # engines' error text out of the log), and not the PR comment, which
+  # carries codes and links only - no embedded image, no pixel figure.
   #
   # The images and the renderer's full report are pushed to the
   # `visual-diff-assets` branch of bldrs-ai/test-models-private, under
-  # conway/pr-<N>/<run id>/ (conway/dispatch/<run id>/ for a dispatch),
-  # with TEST_MODELS_PRIVATE_WRITE_TOKEN: the read token may be read-only.
-  # The links resolve only for people with access to that repo. There is
-  # no fallback destination: without the write token resolve-models sets
-  # private_render to 'no-write-token', this job is skipped, and the
-  # regression comment and resolve-models' job summary say so.
+  # conway/pr-<N>/<run id>/ (conway/dispatch/<run id>/ for a dispatch).
+  # There is no fallback destination: without the write token the job
+  # renders nothing, says so in its comment and summary, and passes.
+  #
+  # TEST_MODELS_PRIVATE_WRITE_TOKEN lives in the `private-renders`
+  # GitHub Environment, not in repo secrets. A pull_request run uses the
+  # BRANCH's own workflow file, so a repo secret is readable by anyone
+  # who can push a branch here; an environment secret is released only
+  # to a job that names the environment, and only once that
+  # environment's protection rules (required reviewers, say) pass. That
+  # is the control that actually protects the token - a maintainer can
+  # tighten it without editing this file.
+  #
+  # Inside the job, the order is the hardening: every step that runs PR
+  # code (the engines and their npm installs, the renderer, alsocheck.py)
+  # comes first, and the write token appears in exactly one step's env -
+  # the last one, which runs only git (absolute /usr/bin/git, an emptied
+  # environment, no global or system config, no hooks) and cp. That
+  # stops a script from simply reading the token. It is not a sandbox:
+  # an earlier step's code can still poison later steps (GITHUB_ENV,
+  # GITHUB_PATH, sudo, a leftover process), which is why the environment
+  # above is the real gate. The read token, likewise, travels only as a
+  # per-process http.extraheader and is never written to .git/config.
   #
   # Not on a fork (no secrets; resolve-models dropped its private
   # entries) and not on a draft. Like visual-diff, it needs
@@ -1525,8 +1587,12 @@ jobs:
       needs.resolve-models.outputs.private_sha != '' &&
       ((github.event_name == 'pull_request' && github.event.pull_request.draft == false) ||
       github.event_name == 'workflow_dispatch')
+    environment: private-renders
     runs-on: ubuntu-24.04
-    timeout-minutes: 40
+    # Up to 5 models, the big ones exported one engine at a time with a
+    # 900 s timeout each: 5 x 2 x 15 min is 150 minutes if every export
+    # hangs. Typical is a few minutes per model.
+    timeout-minutes: 160
     permissions:
       contents: read
       pull-requests: write  # post the codes-and-links comment
@@ -1536,26 +1602,11 @@ jobs:
       ASSETS_BRANCH: visual-diff-assets
       DEST: ${{ github.event_name == 'pull_request' && format('conway/pr-{0}/{1}', github.event.pull_request.number, github.run_id) || format('conway/dispatch/{0}', github.run_id) }}
     steps:
-      # resolve-models already gated this on the secret; checked again
-      # here because the alternative to a private destination is no
-      # destination, never a public one.
-      - name: Require the private write token
-        run: |
-          if [ "$WRITE_TOKEN_PRESENT" != true ]; then
-            echo "::error::TEST_MODELS_PRIVATE_WRITE_TOKEN is not set; private renders have no destination, so nothing is rendered."
-            exit 1
-          fi
-
       - name: Checkout conway (render scripts)
         uses: actions/checkout@v4
         with:
           submodules: false
           fetch-depth: 1
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22'
 
       - name: Write the private model list
         env:
@@ -1564,97 +1615,102 @@ jobs:
           python3 .github/actions/regression-shard/alsocheck.py write-list \
             --corpus private --out private_render.txt
 
+      - name: Note a missing write token
+        if: env.WRITE_TOKEN_PRESENT != 'true'
+        run: |
+          echo "::warning::TEST_MODELS_PRIVATE_WRITE_TOKEN is not set in the private-renders environment; private renders have no destination, so nothing is rendered."
+
+      - name: Setup Node
+        if: env.WRITE_TOKEN_PRESENT == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
       - name: Engines (candidate + published base)
+        if: env.WRITE_TOKEN_PRESENT == 'true'
         uses: ./.github/actions/visual-diff-engines
         with:
           package-tgz: ${{ needs.run-ifc-regression.outputs.package_tgz }}
 
-      # Read token, skip-smudge, then LFS for the named codes only. Not
-      # cached, as for every private shard.
+      # Read token as a per-process header (see the job comment), then
+      # LFS for the named codes only, then code-named hard links for the
+      # renderer. Not cached, as for every private shard.
       - name: Checkout private corpus
+        if: env.WRITE_TOKEN_PRESENT == 'true'
         env:
           GIT_LFS_SKIP_SMUDGE: '1'
           TOKEN: ${{ secrets.TEST_MODELS_PRIVATE_TOKEN }}
           SHA: ${{ needs.resolve-models.outputs.private_sha }}
         run: |
           set -euo pipefail
+          B64=$(printf 'x-access-token:%s' "$TOKEN" | base64 -w0)
+          echo "::add-mask::$B64"
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0="http.https://github.com/.extraheader"
+          export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $B64"
           git init -q models
-          git -C models remote add origin "https://x-access-token:${TOKEN}@github.com/${PRIVATE_REPO}.git"
+          git -C models remote add origin "https://github.com/${PRIVATE_REPO}.git"
           git -C models fetch -q --depth 1 origin "$SHA"
           git -C models checkout -q "$SHA"
           python3 .github/actions/regression-shard/shard_list.py pull private_render.txt models
           python3 .github/actions/regression-shard/shard_list.py link \
             private_render.txt models by-code --out abs_private.txt
+          if grep -qiE 'x-access-token|authorization' models/.git/config; then
+            echo "::error::a credential reached models/.git/config"; exit 1
+          fi
 
-      # Same engines, threshold and timeout as visual-diff's alsocheck
-      # section: always shown, at most five.
+      # Same engines and threshold as visual-diff's alsocheck section:
+      # always shown, at most five. Sized for the headline models (PSB900
+      # is ~900 MB and peaks at roughly twelve times that): a model over
+      # 300 MB is exported one engine at a time rather than two side by
+      # side on the 16 GB runner, and each export gets 900 s, not 180.
+      # --quiet-child-stderr: the engines' error text describes the
+      # model's internals; it stays in the private report.
       - name: Render before/after pairs
+        if: env.WRITE_TOKEN_PRESENT == 'true'
         run: |
           node scripts/visual_diff_report.cjs \
             --models abs_private.txt \
             --base engines/base --cand engines/cand \
             --out vdout-private --max 5 \
             --diff-threshold -1 \
-            --export-timeout 180
+            --export-timeout 900 \
+            --serial-over-mb 300 \
+            --quiet-child-stderr true
 
-      # The renderer's report, with image links made relative, becomes the
-      # directory's README so it renders in the private repo's tree view.
-      - name: Push renders to the private repo
-        id: push
-        env:
-          WRITE_TOKEN: ${{ secrets.TEST_MODELS_PRIVATE_WRITE_TOKEN }}
-          GIT_LFS_SKIP_SMUDGE: '1'
+      # The payload the push step copies, as plain files. The renderer's
+      # report, with image links made relative, becomes the directory's
+      # README so it renders in the private repo's tree view.
+      - name: Stage the private payload
+        if: env.WRITE_TOKEN_PRESENT == 'true'
         run: |
           set -euo pipefail
-          URL="https://x-access-token:${WRITE_TOKEN}@github.com/${PRIVATE_REPO}.git"
-          if git clone -q --depth 1 --branch "$ASSETS_BRANCH" "$URL" passets 2>/dev/null; then
-            cd passets
-          else
-            # First private render: an orphan branch, so it carries none
-            # of the corpus's history or LFS objects.
-            mkdir passets && cd passets
-            git init -q -b "$ASSETS_BRANCH"
-            git remote add origin "$URL"
-          fi
-          mkdir -p "$DEST"
-          cp ../vdout-private/*.png "$DEST"/ 2>/dev/null || true
+          mkdir -p payload
+          cp vdout-private/*.png payload/ 2>/dev/null || true
           {
             echo "# conway visual diff (alsocheck, private models)"
             echo ""
             echo "Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
             echo ""
-            if [ -f ../vdout-private/report.md ]; then
-              sed "s|RAW_URL_BASE|.|g" ../vdout-private/report.md
+            if [ -f vdout-private/report.md ]; then
+              sed "s|RAW_URL_BASE|.|g" vdout-private/report.md
             else
               echo "_The renderer wrote no report; see the run's job log._"
             fi
-          } > "$DEST/README.md"
-          git add -A
-          git -c user.name="github-actions[bot]" \
-              -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
-              commit -q -m "conway visual diff assets: ${DEST}" || true
-          pushed=false
-          for i in 1 2 3; do
-            if git push -q origin "$ASSETS_BRANCH"; then pushed=true; break; fi
-            git pull -q --rebase origin "$ASSETS_BRANCH" || true
-            sleep $((i * 2))
-          done
-          echo "pushed=$pushed" >> "$GITHUB_OUTPUT"
-          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-          if [ "$pushed" != true ]; then
-            echo "::error::Could not push private renders to ${PRIVATE_REPO}@${ASSETS_BRANCH}. Nothing was published anywhere else."
-          fi
+          } > payload/README.md
 
+      # Built before the push, so no PR-branch script runs once the write
+      # token is in the job; it links the branch path, not a commit.
       - name: Build the codes-and-links comment
-        if: ${{ !cancelled() && steps.push.outcome != 'skipped' }}
+        id: comment
+        if: ${{ !cancelled() }}
         env:
           ENTRIES: ${{ needs.resolve-models.outputs.alsocheck_private }}
-          SHA: ${{ steps.push.outputs.sha }}
-          PUSHED: ${{ steps.push.outputs.pushed }}
         run: |
           python3 .github/actions/regression-shard/alsocheck.py private-render-comment \
-            --png-dir vdout-private --repo "$PRIVATE_REPO" \
-            --sha "$SHA" --dest "$DEST" --pushed "${PUSHED:-false}" \
+            --png-dir payload --repo "$PRIVATE_REPO" \
+            --branch "$ASSETS_BRANCH" --dest "$DEST" \
+            --write-token "$WRITE_TOKEN_PRESENT" \
             --out private_comment.md
           cat private_comment.md >> "$GITHUB_STEP_SUMMARY"
 
@@ -1666,9 +1722,74 @@ jobs:
           issue-number: ${{ github.event.pull_request.number }}
           body-path: private_comment.md
 
-      - name: Fail if the renders were not pushed
-        if: steps.push.outputs.pushed != 'true'
-        run: exit 1
+      # LAST, and the only step that sees the write token. git and cp
+      # only, through G(): /usr/bin/git in an emptied environment with no
+      # global or system config and hooks off, so neither PATH, a
+      # GITHUB_ENV variable, ~/.gitconfig nor a planted hook can reroute
+      # or capture the push. A fresh clone made here, not one an earlier
+      # step could have touched. Fails after pushing if any requested
+      # code rendered nothing.
+      - name: Push renders to the private repo
+        if: env.WRITE_TOKEN_PRESENT == 'true'
+        env:
+          WRITE_TOKEN: ${{ secrets.TEST_MODELS_PRIVATE_WRITE_TOKEN }}
+          UNRENDERED: ${{ steps.comment.outputs.unrendered }}
+        run: |
+          set -euo pipefail
+          B64=$(printf 'x-access-token:%s' "$WRITE_TOKEN" | /usr/bin/base64 -w0)
+          echo "::add-mask::$B64"
+          unset WRITE_TOKEN
+          PUSH_HOME=$(/usr/bin/mktemp -d)
+          REPO_DIR="$PUSH_HOME/assets"
+          URL="https://github.com/${PRIVATE_REPO}.git"
+          G() {
+            /usr/bin/env -i PATH=/usr/bin:/bin HOME="$PUSH_HOME" \
+              GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 \
+              GIT_TERMINAL_PROMPT=0 GIT_LFS_SKIP_SMUDGE=1 \
+              GIT_AUTHOR_NAME="github-actions[bot]" GIT_COMMITTER_NAME="github-actions[bot]" \
+              GIT_AUTHOR_EMAIL="41898282+github-actions[bot]@users.noreply.github.com" \
+              GIT_COMMITTER_EMAIL="41898282+github-actions[bot]@users.noreply.github.com" \
+              GIT_CONFIG_COUNT=2 \
+              GIT_CONFIG_KEY_0="http.https://github.com/.extraheader" \
+              GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $B64" \
+              GIT_CONFIG_KEY_1=core.hooksPath GIT_CONFIG_VALUE_1=/dev/null \
+              /usr/bin/git "$@"
+          }
+          # Missing branch (first private render ever) vs a failed read:
+          # ls-remote errors on the second, and an orphan branch is made
+          # only on the first, so it carries none of the corpus's history
+          # or LFS objects.
+          # A plain assignment, so a failed ls-remote stops the step
+          # under `set -e` instead of reading as "no branch".
+          HEADS=$(G ls-remote --heads "$URL" "$ASSETS_BRANCH")
+          if [ -n "$HEADS" ]; then
+            G clone -q --depth 1 --branch "$ASSETS_BRANCH" "$URL" "$REPO_DIR"
+          else
+            G init -q -b "$ASSETS_BRANCH" "$REPO_DIR"
+          fi
+          /usr/bin/mkdir -p "$REPO_DIR/$DEST"
+          /usr/bin/cp -R payload/. "$REPO_DIR/$DEST/"
+          G -C "$REPO_DIR" add -A
+          G -C "$REPO_DIR" commit -q -m "conway visual diff assets: ${DEST}" || true
+          pushed=false
+          for i in 1 2 3; do
+            if G -C "$REPO_DIR" push -q "$URL" "HEAD:refs/heads/${ASSETS_BRANCH}"; then
+              pushed=true; break
+            fi
+            # Another run pushed first; its files are in another run's
+            # directory, so the rebase cannot conflict.
+            G -C "$REPO_DIR" pull -q --rebase "$URL" "$ASSETS_BRANCH" || true
+            /usr/bin/sleep $((i * 2))
+          done
+          /usr/bin/rm -rf "$PUSH_HOME"
+          if [ "$pushed" != true ]; then
+            echo "::error::Could not push private renders to ${PRIVATE_REPO}@${ASSETS_BRANCH}. Nothing was published anywhere else; the comment's links will not resolve."
+            exit 1
+          fi
+          if [ -n "$UNRENDERED" ]; then
+            echo "::error::Rendered nothing for: ${UNRENDERED}. A requested model with no image cannot pass."
+            exit 1
+          fi
 
   # ---------------------------------------------------------------------------
   # Headless-three perf benchmark (public models).
