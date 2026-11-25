@@ -116,7 +116,9 @@ def parse_shard(path: str, root: str | None = None) -> tuple[str, list[str]]:
     """
     corpus, entries = shard_entries(path)
     if corpus == 'public':
-        return corpus, entries
+        # A generated alsocheck list names corpus PATHS (a basename is
+        # ambiguous there); the CSVs this feeds are keyed by basename.
+        return corpus, [Path(e).name for e in entries]
     if root is None:
         raise SystemExit(
             f'{path} is a private shard, so resolving its codes needs the '
@@ -154,7 +156,20 @@ def exclude_regex(selectors: list[str]) -> str:
 
 
 def find_paths(root: Path, names: list[str]) -> list[str]:
-    """Relative posix paths under root/ifc and root/step matching basenames."""
+    """Relative posix paths under root/ifc and root/step matching basenames.
+
+    An entry holding a `/` is already a corpus-relative path (the lists
+    alsocheck generates), and is taken as exactly that file rather than
+    searched for, so it cannot pick up a same-named file elsewhere.
+    """
+    exact = [n for n in names if '/' in n]
+    names = [n for n in names if '/' not in n]
+    absent = [n for n in exact if not (root / n).is_file()]
+    if absent:
+        raise SystemExit(
+            'shard paths not in corpus: ' + ', '.join(sorted(absent)))
+    if not names:
+        return sorted(exact)
     want = set(names)
     paths: list[str] = []
     for top in ('ifc', 'step'):
@@ -183,7 +198,7 @@ def find_paths(root: Path, names: list[str]) -> list[str]:
                 f'::warning::{name} matches {len(matches)} corpus paths '
                 f'({", ".join(matches)}); they share one digest CSV, so '
                 f'{matches[0]} is the one whose digest survives.')
-    return paths
+    return sorted(paths + exact)
 
 
 def is_lfs_stub(path: Path) -> bool:
@@ -217,12 +232,46 @@ def cmd_corpus(args: argparse.Namespace) -> None:
     print(corpus, end='')
 
 
+def cmd_link(args: argparse.Namespace) -> None:
+    """Expose a private list's models under their CODES, for rendering.
+
+    visual_diff_report.cjs logs each model's basename and names its PNGs
+    after it. Pointed at `<dir>/<CODE><ext>` symlinks instead of the real
+    files, everything it prints or writes says the code, which is already
+    public, and never the private filename. Prints codes only.
+    """
+    corpus, entries = shard_entries(args.shard)
+    if corpus != 'private':
+        raise SystemExit(f'{args.shard} is not a private shard list')
+    out_dir = Path(args.dir).resolve()
+    out_dir.mkdir(parents=True, exist_ok=True)
+    lines = []
+    for code, rel in resolve_private(Path(args.root), entries):
+        ext = Path(rel).suffix.lower()
+        if ext not in ('.ifc', '.step', '.stp'):
+            raise SystemExit(f'{MANIFEST} maps {code} to a file that is not '
+                             'an .ifc, .step or .stp model')
+        link = out_dir / f'{code}{ext}'
+        if link.is_symlink() or link.exists():
+            link.unlink()
+        link.symlink_to((Path(args.root) / rel).resolve())
+        lines.append(str(link))
+    Path(args.out).write_text('\n'.join(lines) + '\n', encoding='utf-8')
+    print(f'{len(lines)} private model(s) linked by code: '
+          + ', '.join(entries))
+
+
 def cmd_names(args: argparse.Namespace) -> None:
     _, names = parse_shard(args.shard, args.root)
     print('\n'.join(names))
 
 
 MAX_SHARDS = 10
+
+# The regression-alsocheck job's ids (alsocheck-public, alsocheck-private).
+# Generated per run, never committed, and outside MAX_SHARDS: see
+# regression/shards/README.md, "alsocheck".
+RESERVED_PREFIX = 'alsocheck'
 
 # Which workflow job runs which corpus. The shard's corpus is now implied
 # by the job that lists it - public coverage runs on every ready PR,
@@ -264,6 +313,11 @@ def cmd_check(args: argparse.Namespace) -> None:
     corpora: dict[str, str] = {}
     for path in files:
         stem = path.stem
+        if stem.startswith(RESERVED_PREFIX):
+            errors.append(
+                f'{path.name}: `{RESERVED_PREFIX}*` ids are reserved for '
+                'the lists alsocheck generates at run time; a committed one '
+                'would collide with its `regression-shard-<id>` artifact')
         corpus, names = shard_entries(str(path))
         corpora[stem] = corpus
         seen: set[str] = set()
@@ -518,6 +572,14 @@ def main() -> None:
     p_pull.add_argument('shard')
     p_pull.add_argument('root')
     p_pull.set_defaults(func=cmd_pull)
+
+    p_link = sub.add_parser('link')
+    p_link.add_argument('shard')
+    p_link.add_argument('root')
+    p_link.add_argument('dir')
+    p_link.add_argument('--out', required=True,
+                        help='write the linked model paths here, one a line')
+    p_link.set_defaults(func=cmd_link)
 
     p_check = sub.add_parser('check')
     p_check.add_argument('--shard-dir', default='regression/shards')
