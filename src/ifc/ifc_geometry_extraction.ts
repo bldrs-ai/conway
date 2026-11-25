@@ -208,6 +208,7 @@ import {
   IfcRevolvedAreaSolid,
   IfcFaceSurface,
   IfcVirtualGridIntersection,
+  IfcBooleanOperator,
 } from './ifc4_gen'
 import EntityTypesIfc from './ifc4_gen/entity_types_ifc.gen'
 import { IfcMaterialCache } from './ifc_material_cache'
@@ -1493,6 +1494,223 @@ export class IfcGeometryExtraction {
   }
 
   /**
+   * Is this boolean past the CSG depth budget, so that it is passed through
+   * as its first operand instead of evaluated?
+   *
+   * The budget exists for long chains of solid subtractions (hundreds of
+   * faceted-brep cuts on one wall layer), and is spent from the
+   * representation item downwards, so a chain longer than the budget skips
+   * its innermost operations. An IfcBooleanClippingResult is never skipped:
+   * its second operand is a half-space, a single bounded trim rather than
+   * an open-ended mesh boolean, and exporters put these clips innermost
+   * (the extrusion is trimmed to the roof or slab first, then joins and
+   * openings are cut into the trimmed result). Skipping them left the whole
+   * untrimmed extrusion behind as soon as the chain above them was one link
+   * longer than the budget, e.g. wall layers standing metres up through the
+   * roof that was meant to trim them.
+   *
+   * @param from The boolean result to check.
+   * @return {boolean} True if the operation should be skipped.
+   */
+  private isBeyondCsgDepthLimit( from: IfcBooleanResult ): boolean {
+
+    return this.limitCSGDepth &&
+      this.csgDepth >= this.csgDepthLimit &&
+      !this.isHalfSpaceClip( from )
+  }
+
+  /**
+   * Is this a clipping result whose cutter really is a half-space?
+   *
+   * Only these are exempt from the depth budget. The exemption is for a
+   * single bounded trim, so a malformed clipping result whose second
+   * operand is a solid (the schema forbids it, the parser does not
+   * enforce it) is budgeted like any other mesh boolean.
+   *
+   * @param from The boolean result to check.
+   * @return {boolean} True for a clip against a half-space.
+   */
+  private isHalfSpaceClip( from: unknown ): boolean {
+
+    return from instanceof IfcBooleanClippingResult &&
+      ( from.SecondOperand as unknown ) instanceof IfcHalfSpaceSolid
+  }
+
+  /**
+   * A structural key for a plane half-space, so that two separately written
+   * but identical half-spaces compare equal.
+   *
+   * Covers IfcHalfSpaceSolid and IfcPolygonalBoundedHalfSpace on an IfcPlane,
+   * the latter bounded by an IfcPolyline; anything else has no key.
+   *
+   * @param from The half-space solid.
+   * @return {string | undefined} The key, or undefined if not keyable.
+   */
+  private halfSpaceKey( from: IfcHalfSpaceSolid ): string | undefined {
+
+    const surface: unknown = from.BaseSurface
+
+    if ( !( surface instanceof IfcPlane ) ) {
+      return void 0
+    }
+
+    const placementKey = ( placement: IfcAxis2Placement3D ): string | undefined => {
+
+      const location: unknown = placement.Location
+
+      if ( !( location instanceof IfcCartesianPoint ) ) {
+        return void 0
+      }
+
+      return `${location.Coordinates.join( ',' )}` +
+        `|${placement.Axis?.DirectionRatios.join( ',' ) ?? '-'}` +
+        `|${placement.RefDirection?.DirectionRatios.join( ',' ) ?? '-'}`
+    }
+
+    const surfaceKey = placementKey( surface.Position )
+
+    if ( surfaceKey === void 0 ) {
+      return void 0
+    }
+
+    const baseKey = `${from.AgreementFlag ? 'T' : 'F'};${surfaceKey}`
+
+    if ( from instanceof IfcPolygonalBoundedHalfSpace ) {
+
+      const boundary: unknown = from.PolygonalBoundary
+      const positionKey = placementKey( from.Position )
+
+      if ( !( boundary instanceof IfcPolyline ) || positionKey === void 0 ) {
+        return void 0
+      }
+
+      const points = boundary.Points.map( ( point ) => point.Coordinates.join( ',' ) ).join( ';' )
+
+      return `pbhs;${baseKey};${positionKey};${points}`
+    }
+
+    if ( from.type !== EntityTypesIfc.IFCHALFSPACESOLID ) {
+      return void 0
+    }
+
+    return `hs;${baseKey}`
+  }
+
+  /**
+   * Is this boolean a repeat of the cut directly beneath it — a difference
+   * by a half-space identical to the one its first operand just subtracted?
+   *
+   * `(A - H) - H` is `A - H`, so the repeat is passed through rather than
+   * evaluated. ArchiCAD writes runs of the same roof-trim clip (eight in a
+   * row on one wall layer), and re-cutting the face the previous clip just
+   * made is a fully coplanar boolean the kernel does not survive: after a
+   * few repeats it emits stray triangles well outside the solid.
+   *
+   * @param from The boolean result to check.
+   * @return {boolean} True if the operation repeats the one beneath it.
+   */
+  private isRepeatedHalfSpaceCut( from: IfcBooleanResult ): boolean {
+
+    const first: unknown = from.FirstOperand
+    const second: unknown = from.SecondOperand
+
+    // The operand must be a half-space clip, never a plain boolean: clips
+    // are exempt from the depth budget, so its cut was really applied. A
+    // plain boolean past the budget was passed through as ITS first
+    // operand, and treating the clip above it as a repeat would drop the
+    // trim altogether.
+    if ( from.Operator !== IfcBooleanOperator.DIFFERENCE ||
+      !this.isHalfSpaceClip( first ) ||
+      ( first as IfcBooleanResult ).Operator !== IfcBooleanOperator.DIFFERENCE ||
+      !( second instanceof IfcHalfSpaceSolid ) ) {
+      return false
+    }
+
+    const previous: unknown = ( first as IfcBooleanResult ).SecondOperand
+
+    if ( !( previous instanceof IfcHalfSpaceSolid ) ) {
+      return false
+    }
+
+    if ( previous.localID === second.localID ) {
+      return true
+    }
+
+    const key = this.halfSpaceKey( second )
+
+    return key !== void 0 && key === this.halfSpaceKey( previous )
+  }
+
+  /**
+   * Stand a copy of a boolean's first operand in for its result, for a
+   * boolean skipped by the CSG depth limit.
+   *
+   * @param from The skipped boolean result.
+   * @param firstMesh Its first operand's geometry.
+   * @param isRelVoid Is this part of a relative void subtraction?
+   * @param temporary Mark the stand-in geometry temporary.
+   * @param representationItem The item to associate an inherited style with.
+   */
+  private passThroughFirstOperand(
+      from: IfcBooleanResult,
+      firstMesh: CanonicalMesh,
+      isRelVoid: boolean,
+      temporary: boolean,
+      representationItem?: IfcRepresentationItem ) {
+
+    if ( firstMesh.type !== CanonicalMeshType.BUFFER_GEOMETRY ) {
+      return
+    }
+
+    const maximumCsgMemoizationDepth = this.csgDepthLimit
+
+    const canonicalMesh: CanonicalMesh = {
+      type: CanonicalMeshType.BUFFER_GEOMETRY,
+      geometry: firstMesh.geometry.clone(),
+      localID: from.localID,
+      model: this.model,
+      temporary: temporary,
+    }
+
+    const dropOperand =
+      ( !this.csgMemoization &&
+        RegressionCaptureState.memoization !== MemoizationCapture.FULL ) ||
+      this.csgDepth > maximumCsgMemoizationDepth
+
+    if (!isRelVoid) {
+
+      if ( dropOperand ) {
+        this.dropNonSceneGeometry(firstMesh.localID)
+      }
+
+      this.model.geometry.add(canonicalMesh)
+    } else {
+
+      if ( dropOperand ) {
+        this.model.voidGeometry.delete(firstMesh.localID)
+      }
+
+      this.model.voidGeometry.add(canonicalMesh)
+    }
+
+    const styledItemLocalID_ = this.materials.styledItemMap.get(from.localID)
+
+    if (styledItemLocalID_ !== undefined) {
+      const styledItem_ = this.model.getElementByLocalID(styledItemLocalID_) as IfcStyledItem
+      this.extractStyledItem(styledItem_)
+    } else {
+      // get material from first operand
+      const firstOperandStyledItemLocalID_ =
+      this.materials.styledItemMap.get(from.FirstOperand.localID)
+      if (firstOperandStyledItemLocalID_ !== undefined) {
+        const firstOperandStyledItem =
+        this.model.getElementByLocalID(firstOperandStyledItemLocalID_) as IfcStyledItem
+        this.extractStyledItem(firstOperandStyledItem, representationItem)
+      }
+    }
+  }
+
+  /**
    * Accepts IfcBooleanResult and IfcBooleanClippingResult
    *
    * @param from
@@ -1554,6 +1772,14 @@ export class IfcGeometryExtraction {
             `Error extracting firstOperand geometry for expressID: 
           ${from.FirstOperand.expressID} - type: 
           ${EntityTypesIfc[from.FirstOperand.type]} - isRelVoid: ${isRelVoid ? 'True' : 'False'}`)
+        return
+      }
+
+      if ( this.isRepeatedHalfSpaceCut( from ) ) {
+
+        flatFirstMeshVector.delete()
+        this.passThroughFirstOperand( from, firstMesh, isRelVoid, false, from )
+
         return
       }
 
@@ -1706,57 +1932,12 @@ export class IfcGeometryExtraction {
 
         const firstMesh = this.getFirstBooleanOperandGeometry(from, isRelVoid, representationItem)
 
-        if ( this.limitCSGDepth && this.csgDepth >= maximumCsgMemoizationDepth ) {
- 
-          if ( firstMesh === void 0 ) {
+        if ( this.isBeyondCsgDepthLimit( from ) || this.isRepeatedHalfSpaceCut( from ) ) {
 
-            return
+          if ( firstMesh !== void 0 ) {
+            this.passThroughFirstOperand( from, firstMesh, isRelVoid, true, representationItem )
           }
 
-          const canonicalMesh: CanonicalMesh = {
-            type: CanonicalMeshType.BUFFER_GEOMETRY,
-            geometry: firstMesh.geometry.clone(),
-            localID: from.localID,
-            model: this.model,
-            temporary: true,
-          }
-
-          if (!isRelVoid) {
-
-            if ( ( !this.csgMemoization &&
-              RegressionCaptureState.memoization !== MemoizationCapture.FULL ) ||
-              this.csgDepth > maximumCsgMemoizationDepth ) {
-              this.dropNonSceneGeometry(firstMesh.localID)
-            }
-  
-            this.model.geometry.add(canonicalMesh)
-          } else {
-  
-            if ( ( !this.csgMemoization &&
-              RegressionCaptureState.memoization !== MemoizationCapture.FULL ) ||
-              this.csgDepth > maximumCsgMemoizationDepth ) {
-              this.model.voidGeometry.delete(firstMesh.localID)
-            }
-  
-            this.model.voidGeometry.add(canonicalMesh)
-          }
-
-          const styledItemLocalID_ = this.materials.styledItemMap.get(from.localID)
-
-          if (styledItemLocalID_ !== undefined) {
-            const styledItem_ = this.model.getElementByLocalID(styledItemLocalID_) as IfcStyledItem
-            this.extractStyledItem(styledItem_)
-          } else {
-            // get material from first operand
-            const firstOperandStyledItemLocalID_ =
-            this.materials.styledItemMap.get(from.FirstOperand.localID)
-            if (firstOperandStyledItemLocalID_ !== undefined) {
-              const firstOperandStyledItem =
-              this.model.getElementByLocalID(firstOperandStyledItemLocalID_) as IfcStyledItem
-              this.extractStyledItem(firstOperandStyledItem, representationItem)
-            }
-          }
-          
           return
         }
 
