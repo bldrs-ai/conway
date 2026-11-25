@@ -222,6 +222,16 @@ tidier:
   whole mechanism keeping the private corpus off pull requests, not a
   belt-and-braces clause. Pruning it as "defensive" would put ~2.6 GB
   of private LFS back on every ready-PR push.
+- **A job below `run-ifc-regression` must name a status function.** An
+  `if:` without one gets an implicit `success()`, and GitHub applies it
+  to the whole dependency chain, not just `needs`: a skipped ancestor
+  skips the job. `regression-shard-private` is skipped on most pull
+  requests, so from #707 on, `visual-diff` never ran on a PR (conway#801
+  showed `visual_diff_count=1` and a skipped `visual-diff`), and a plain
+  dispatch skipped `perf-three-*`. Each downstream job now says
+  `!cancelled() && needs.run-ifc-regression.result == 'success' && ...`.
+  `run-ifc-regression` is the gate, so its success already means every
+  shard came out as expected. A new job down there needs the same.
 
 The same lifecycle and the same gate shape apply in
 [Share](https://github.com/bldrs-ai/Share) — see its `AGENTS.md` for

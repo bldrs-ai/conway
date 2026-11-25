@@ -910,9 +910,24 @@ jobs:
     needs: run-ifc-regression
     # The draft clause is redundant today — a skipped `needs` job skips this
     # one regardless — but it is stated so the draft rule is greppable from
-    # every job it governs, and so this stays correct if visual-diff ever
-    # gains an always()/!cancelled() guard.
+    # every job it governs, and so this stays correct now that the job has
+    # a !cancelled() guard.
+    #
+    # The guard is load-bearing, not tidy. An `if:` with no status
+    # function gets an implicit success(), and GitHub evaluates that over
+    # the WHOLE dependency chain, not just `needs`: "a failure or skip
+    # applies to all jobs in the dependency chain from the point of
+    # failure or skip onwards" (workflow syntax, jobs.<job_id>.needs).
+    # run-ifc-regression needs regression-shard-private, which is
+    # `skipped` on every pull request, so since #707 this job was skipped
+    # on every PR even with digest-changed models to render (bldrs-ai/conway#801,
+    # run 45560353673: visual_diff_count=1, visual-diff skipped). So the
+    # condition names the one result it depends on instead:
+    # run-ifc-regression is the AND-reduce gate, and its success already
+    # means every shard came out as expected (including "skipped where
+    # it should be"). Same shape on every job downstream of it.
     if: >-
+      !cancelled() && needs.run-ifc-regression.result == 'success' &&
       github.event_name == 'pull_request' &&
       github.event.pull_request.draft == false &&
       needs.run-ifc-regression.outputs.visual_diff_count != '0'
@@ -1122,7 +1137,16 @@ jobs:
     # to main. build + run-ifc-regression (ungated) still run on the tag, so
     # the candidate tarball this job benchmarks is produced; auto-publish is
     # main-branch-only and does not fire on a tag ref.
-    if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/rc-')) || github.event_name == 'workflow_dispatch'
+    #
+    # !cancelled() and the run-ifc-regression result, for the reason on
+    # visual-diff: without a status function the implicit success() spans
+    # the whole dependency chain, so on a plain dispatch (run_private_shards
+    # off, private shards `skipped`) this job was skipped too - on exactly
+    # the run the dispatch exists for.
+    if: >-
+      !cancelled() && needs.run-ifc-regression.result == 'success' &&
+      ((github.event_name == 'push' && startsWith(github.ref, 'refs/tags/rc-')) ||
+      github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-24.04-4vcpu-8gb-150gbssd
     # Full set locally takes ~10 min; H3 build + clone adds ~5-10 min. Cap at
     # 60 to bound runner-minute cost on a hung benchmark.
@@ -1446,7 +1470,11 @@ jobs:
     # to main. build + run-ifc-regression (ungated) still run on the tag, so
     # the candidate tarball this job benchmarks is produced; auto-publish is
     # main-branch-only and does not fire on a tag ref.
-    if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/rc-')) || github.event_name == 'workflow_dispatch'
+    # Status functions as on perf-three-public.
+    if: >-
+      !cancelled() && needs.run-ifc-regression.result == 'success' &&
+      ((github.event_name == 'push' && startsWith(github.ref, 'refs/tags/rc-')) ||
+      github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-24.04-4vcpu-8gb-150gbssd
     timeout-minutes: 60
     permissions:
@@ -1835,7 +1863,17 @@ jobs:
   # ---------------------------------------------------------------------------
   auto-publish:
     needs: [build, run-ifc-regression]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    # Both results named, with !cancelled(), rather than the implicit
+    # success() - which spans every ancestor, not just `needs` (see
+    # visual-diff). Today every ancestor runs on a push to main, so this
+    # changes nothing there; it stops a skipped ancestor ever silently
+    # skipping a release. The publish still requires a green build and a
+    # green regression gate, and still never runs on a cancelled run.
+    if: >-
+      !cancelled() &&
+      needs.build.result == 'success' &&
+      needs.run-ifc-regression.result == 'success' &&
+      github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04-4vcpu-8gb-150gbssd
     permissions:
       contents: write    # tag push
