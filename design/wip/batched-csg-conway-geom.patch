@@ -1,0 +1,102 @@
+diff --git a/conway_geometry/ConwayGeometryProcessor.cpp b/conway_geometry/ConwayGeometryProcessor.cpp
+index 887003f..292d360 100644
+--- a/conway_geometry/ConwayGeometryProcessor.cpp
++++ b/conway_geometry/ConwayGeometryProcessor.cpp
+@@ -255,6 +255,88 @@ Geometry ConwayGeometryProcessor::BoolSubtract(
+ 
+   Geometry finalResult;
+ 
++  // Batch the solid cutters. A - B - C == A - ( B u C ), and when B and C
++  // neither overlap nor touch, B u C is just their concatenation. A long
++  // chain of small cutters (hundreds of notch cuts on one wall layer) then
++  // costs a handful of kernel passes instead of one per cutter, each of which
++  // re-processes the whole accumulated result. Bounding boxes are padded past
++  // the weld tolerance so cutters that nearly touch never share a batch (one
++  // batch must stay a set of separate closed shells). Half-spaces stay
++  // unbatched: they are scaled to the current result in the loop below.
++  std::vector< Geometry > batchedSeconds;
++
++  {
++    struct CutterBatch {
++      Geometry geometry;
++      std::vector< box3 > boxes;
++    };
++
++    std::vector< CutterBatch > batches;
++
++    for ( auto &secondGeom : secondGeoms ) {
++
++      if ( secondGeom.halfSpace ) {
++
++        batchedSeconds.push_back( secondGeom );
++        continue;
++      }
++
++      {
++        AllocTagScope prepTag( AllocSite::CsgOperandPrep );
++
++        secondGeom.Cleanup( !isSubtractOperand );
++      }
++
++      if ( secondGeom.IsEmpty() ) {
++
++        Logger::logWarning("bool aborted due to empty second operand");
++        continue;
++      }
++
++      box3 box = secondGeom.GetAABB();
++      glm::dvec3 pad = glm::max( box.interval() * 1e-7, glm::dvec3( 1e-5 ) );
++
++      box.min -= pad;
++      box.max += pad;
++
++      CutterBatch* target = nullptr;
++
++      for ( auto &batch : batches ) {
++
++        bool clash = false;
++
++        for ( const box3& other : batch.boxes ) {
++
++          if ( overlaps( other, box ) ) {
++
++            clash = true;
++            break;
++          }
++        }
++
++        if ( !clash ) {
++
++          target = &batch;
++          break;
++        }
++      }
++
++      if ( target == nullptr ) {
++
++        batches.emplace_back();
++        target = &batches.back();
++      }
++
++      target->geometry.AppendGeometry( secondGeom );
++      target->boxes.push_back( box );
++    }
++
++    for ( auto &batch : batches ) {
++
++      batchedSeconds.push_back( std::move( batch.geometry ) );
++    }
++  }
++
+   for ( auto &firstGeom : firstGeoms ) {
+ 
+     {
+@@ -265,7 +347,7 @@ Geometry ConwayGeometryProcessor::BoolSubtract(
+ 
+     Geometry result = firstGeom;
+ 
+-    for ( auto &secondGeom : secondGeoms ) {
++    for ( auto &secondGeom : batchedSeconds ) {
+ 
+       {
+         AllocTagScope prepTag( AllocSite::CsgOperandPrep );
