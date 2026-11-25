@@ -189,7 +189,10 @@ of private LFS — paid per landed change instead of per push. A headline
 regression therefore surfaces at merge, not at review. To exercise them
 before a merge, run the workflow manually with `run_private_shards`
 on; a plain dispatch (for debugging `perf-three-*` on a branch) leaves
-them off and spends nothing. See
+them off. Either way a dispatch also starts both `perf-three-*` jobs
+once `run-ifc-regression` passes: ~40 paid runner-minutes, and
+`perf-three-private` clones the private corpus again. If you only want
+the shards, cancel the run when `run-ifc-regression` finishes. See
 [regression/shards/README.md](regression/shards/README.md).
 
 Mechanics worth knowing before you edit `.github/workflows/build.yml`
