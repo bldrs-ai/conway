@@ -1494,85 +1494,6 @@ export class IfcGeometryExtraction {
   }
 
   /**
-   * Flatten a left-deep chain of DIFFERENCE booleans into its base and its
-   * cutters, so the chain is one kernel call instead of one per link.
-   *
-   * `((A - B1) - B2) - ... - Bn` is `A - B1 - ... - Bn`; the kernel batches
-   * the cutters (see BoolSubtract), so the chain's cost no longer grows with
-   * its length and no CSG depth budget is needed to bound it. Clipping
-   * results end the walk (their half-space needs the clip-specific handling
-   * and repeat detection), as do links that carry their own style or that
-   * are already extracted (shared with another representation).
-   *
-   * @param from The outermost boolean of the chain.
-   * @param isRelVoid Whether this is void geometry.
-   * @return {object | undefined} The base and the cutters innermost first,
-   * or undefined if the chain has fewer than two links.
-   */
-  private flattenDifferenceChain( from: IfcBooleanResult, isRelVoid: boolean ):
-    { base: any, cutters: any[] } | undefined {
-
-    if ( process.env.CONWAY_NO_CSG_FLATTEN ||
-      from instanceof IfcBooleanClippingResult ||
-      from.Operator !== IfcBooleanOperator.DIFFERENCE ) {
-      return void 0
-    }
-
-    const cache = isRelVoid ? this.model.voidGeometry : this.model.geometry
-    const cutters: any[] = [ from.SecondOperand ]
-    let base: any = from.FirstOperand
-
-    while ( base instanceof IfcBooleanResult &&
-      !( base instanceof IfcBooleanClippingResult ) &&
-      base.Operator === IfcBooleanOperator.DIFFERENCE &&
-      !this.materials.styledItemMap.has( base.localID ) &&
-      cache.getByLocalID( base.localID ) === void 0 ) {
-
-      cutters.push( base.SecondOperand )
-      base = base.FirstOperand
-    }
-
-    if ( cutters.length < 2 ) {
-      return void 0
-    }
-
-    cutters.reverse()
-
-    return { base, cutters }
-  }
-
-  /**
-   * Gather the cutter meshes of a flattened chain into a native vector.
-   *
-   * A cutter that fails to extract is skipped with an error rather than
-   * aborting the whole chain.
-   *
-   * @param cutters The cutter operands.
-   * @param isRelVoid Whether this is void geometry.
-   * @return {object} The vector and the meshes it holds.
-   */
-  private gatherCutterMeshes( cutters: any[], isRelVoid: boolean ):
-    { vector: StdVector<GeometryObject>, meshes: CanonicalMesh[] } {
-
-    const vector = this.nativeVectorGeometry()
-    const meshes: CanonicalMesh[] = []
-
-    for ( const cutter of cutters ) {
-
-      const mesh = this.getOperandGeometry( cutter, true, isRelVoid, undefined )
-
-      if ( mesh !== void 0 && mesh.type === CanonicalMeshType.BUFFER_GEOMETRY ) {
-        vector.push_back( mesh.geometry )
-        meshes.push( mesh )
-      } else {
-        Logger.error( `Error extracting boolean cutter geometry for expressID: ${cutter.expressID}` )
-      }
-    }
-
-    return { vector, meshes }
-  }
-
-  /**
    * Is this boolean past the CSG depth budget, so that it is passed through
    * as its first operand instead of evaluated?
    *
@@ -1801,10 +1722,7 @@ export class IfcGeometryExtraction {
 
       // get geometry TODO(nickcastel50): eventually support flattening meshes
       let flatFirstMeshVector: StdVector<GeometryObject>// = this.nativeVectorGeometry()
-      const flat = this.flattenDifferenceChain( from, isRelVoid )
-      const firstMesh = flat !== void 0 ?
-        this.getOperandGeometry( flat.base, false, isRelVoid, from ) :
-        this.getFirstBooleanOperandGeometry(from, isRelVoid, from)
+      const firstMesh = this.getFirstBooleanOperandGeometry(from, isRelVoid, from)
 
       if (firstMesh !== void 0 && firstMesh.type === CanonicalMeshType.BUFFER_GEOMETRY) {
 
@@ -1835,7 +1753,7 @@ export class IfcGeometryExtraction {
         return
       }
 
-      if ( flat === void 0 && this.isRepeatedHalfSpaceCut( from ) ) {
+      if ( this.isRepeatedHalfSpaceCut( from ) ) {
 
         flatFirstMeshVector.delete()
         this.passThroughFirstOperand( from, firstMesh, isRelVoid, false, from )
@@ -1844,31 +1762,14 @@ export class IfcGeometryExtraction {
       }
 
       let flatSecondMeshVector: StdVector<GeometryObject>// = this.nativeVectorGeometry()
-      let secondMeshes: CanonicalMesh[]
 
-      if ( flat !== void 0 ) {
+      const secondMesh = this.getSecondBooleanOperandGeometry(from, isRelVoid)
+      
+      if (secondMesh !== void 0 && secondMesh.type === CanonicalMeshType.BUFFER_GEOMETRY) {
 
-        const gathered = this.gatherCutterMeshes( flat.cutters, isRelVoid )
-
-        flatSecondMeshVector = gathered.vector
-        secondMeshes = gathered.meshes
+        flatSecondMeshVector = this.nativeVectorGeometry()
+        flatSecondMeshVector.push_back(secondMesh.geometry)
       } else {
-
-        const secondMesh = this.getSecondBooleanOperandGeometry(from, isRelVoid)
-
-        if (secondMesh !== void 0 && secondMesh.type === CanonicalMeshType.BUFFER_GEOMETRY) {
-          flatSecondMeshVector = this.nativeVectorGeometry()
-          flatSecondMeshVector.push_back(secondMesh.geometry)
-          secondMeshes = [ secondMesh ]
-        } else {
-          flatSecondMeshVector = void 0 as any
-          secondMeshes = []
-        }
-      }
-
-      if ( secondMeshes.length === 0 ) {
-        flatSecondMeshVector?.delete()
-        flatFirstMeshVector.delete()
         Logger.error(
             `Error extracting secondOperand geometry for expressID: 
           ${from.SecondOperand.localID} - type:
@@ -1885,7 +1786,8 @@ export class IfcGeometryExtraction {
 
       const booleanGeometryObject: GeometryObject = this.conwayModel.getBooleanResult(parameters)
 
-      if (firstMesh.type === CanonicalMeshType.BUFFER_GEOMETRY) {
+      if (firstMesh.type === CanonicalMeshType.BUFFER_GEOMETRY &&
+          secondMesh.type === CanonicalMeshType.BUFFER_GEOMETRY) {
 
         const canonicalMesh: CanonicalMesh = {
           type: CanonicalMeshType.BUFFER_GEOMETRY,
@@ -1915,7 +1817,7 @@ export class IfcGeometryExtraction {
           if ( ( !this.csgMemoization &&
             RegressionCaptureState.memoization !== MemoizationCapture.FULL ) ) {
             this.dropNonSceneGeometry(firstMesh.localID)
-            secondMeshes.forEach( ( mesh ) => this.dropNonSceneGeometry( mesh.localID ) )
+            this.dropNonSceneGeometry(secondMesh.localID)
           }
 
           this.model.geometry.add(canonicalMesh)
@@ -1924,7 +1826,7 @@ export class IfcGeometryExtraction {
           if ( !this.csgMemoization &&
             RegressionCaptureState.memoization !== MemoizationCapture.FULL ) {
             this.model.voidGeometry.delete(firstMesh.localID)
-            secondMeshes.forEach( ( mesh ) => this.model.voidGeometry.delete( mesh.localID ) )
+            this.model.voidGeometry.delete(secondMesh.localID)
           }
 
           this.model.voidGeometry.add(canonicalMesh)
@@ -2006,13 +1908,9 @@ export class IfcGeometryExtraction {
 
         const maximumCsgMemoizationDepth = this.csgDepthLimit
 
-        const flat = this.flattenDifferenceChain( from, isRelVoid )
-        const firstMesh = flat !== void 0 ?
-          this.getOperandGeometry( flat.base, false, isRelVoid, representationItem ) :
-          this.getFirstBooleanOperandGeometry(from, isRelVoid, representationItem)
+        const firstMesh = this.getFirstBooleanOperandGeometry(from, isRelVoid, representationItem)
 
-        if ( flat === void 0 &&
-          ( this.isBeyondCsgDepthLimit( from ) || this.isRepeatedHalfSpaceCut( from ) ) ) {
+        if ( this.isBeyondCsgDepthLimit( from ) || this.isRepeatedHalfSpaceCut( from ) ) {
 
           if ( firstMesh !== void 0 ) {
             this.passThroughFirstOperand( from, firstMesh, isRelVoid, true, representationItem )
@@ -2036,31 +1934,13 @@ export class IfcGeometryExtraction {
         }
 
         let flatSecondMeshVector: StdVector<GeometryObject>
-        let secondMeshes: CanonicalMesh[]
+        const secondMesh = this.getSecondBooleanOperandGeometry(from, isRelVoid)
 
-        if ( flat !== void 0 ) {
+        if (secondMesh !== void 0 && secondMesh.type === CanonicalMeshType.BUFFER_GEOMETRY) {
 
-          const gathered = this.gatherCutterMeshes( flat.cutters, isRelVoid )
-
-          flatSecondMeshVector = gathered.vector
-          secondMeshes = gathered.meshes
+          flatSecondMeshVector = this.nativeVectorGeometry()
+          flatSecondMeshVector.push_back(secondMesh.geometry)
         } else {
-
-          const secondMesh = this.getSecondBooleanOperandGeometry(from, isRelVoid)
-
-          if (secondMesh !== void 0 && secondMesh.type === CanonicalMeshType.BUFFER_GEOMETRY) {
-            flatSecondMeshVector = this.nativeVectorGeometry()
-            flatSecondMeshVector.push_back(secondMesh.geometry)
-            secondMeshes = [ secondMesh ]
-          } else {
-            flatSecondMeshVector = void 0 as any
-            secondMeshes = []
-          }
-        }
-
-        if ( secondMeshes.length === 0 ) {
-          flatSecondMeshVector?.delete()
-          flatFirstMeshVector.delete()
           Logger.error(
               `(Operand) Error extracting secondOperand geometry for expressID: 
             ${from.SecondOperand.expressID} - type:
@@ -2107,7 +1987,7 @@ export class IfcGeometryExtraction {
             RegressionCaptureState.memoization !== MemoizationCapture.FULL ) ||
             this.csgDepth > maximumCsgMemoizationDepth ) {
             this.dropNonSceneGeometry(firstMesh.localID)
-            secondMeshes.forEach( ( mesh ) => this.dropNonSceneGeometry( mesh.localID ) )
+            this.dropNonSceneGeometry(secondMesh.localID)
           }
 
           this.model.geometry.add(canonicalMesh)
@@ -2117,7 +1997,7 @@ export class IfcGeometryExtraction {
             RegressionCaptureState.memoization !== MemoizationCapture.FULL ) ||
             this.csgDepth > maximumCsgMemoizationDepth ) {
             this.model.voidGeometry.delete(firstMesh.localID)
-            secondMeshes.forEach( ( mesh ) => this.model.voidGeometry.delete( mesh.localID ) )
+            this.model.voidGeometry.delete(secondMesh.localID)
           }
 
           this.model.voidGeometry.add(canonicalMesh)
