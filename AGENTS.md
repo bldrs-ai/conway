@@ -290,17 +290,18 @@ that a PR names outside the seven headline shards runs its regression on
 code-named hard links, so its filename never reaches a public log or
 artifact either.
 
-That push needs the `TEST_MODELS_PRIVATE_WRITE_TOKEN` secret, and it
-lives in the **`private-renders` GitHub Environment**, not in repo
-secrets. A `pull_request` run uses the branch's own workflow file, so
-any branch author could read a repo secret by editing `build.yml`. An
-environment secret reaches only a job that names the environment, once
-that environment's protection rules (required reviewers, say) pass, and
-a maintainer can tighten those without a workflow change. The job also
-runs all PR code before the token appears, and pushes with bare git as
-its last step. That is hardening, not a sandbox; the environment is the
-control. Without the secret the private renders are skipped with a note,
-and the regression still runs.
+That push needs the `TEST_MODELS_PRIVATE_WRITE_TOKEN` repo secret. **This
+is an accepted risk, decided by the maintainer:** a `pull_request` run
+uses the branch's own workflow file, so anyone who can push a branch here
+can read that secret by editing `build.yml`, and with it write to
+`test-models-private`. That is acceptable only while the people with push
+access here are the people trusted with write access there. If that
+changes, move the secret into a GitHub Environment with required
+reviewers and add `environment:` to `visual-diff-private`. The job also
+runs all PR code before the token appears and pushes with bare git as its
+last step; that narrows the exposure but is not a sandbox. Without the
+secret the private renders are skipped with a note, and the regression
+still runs.
 
 A fork PR's private entries are skipped with a note, since a fork has no
 secrets. So are those of a PR whose run has no

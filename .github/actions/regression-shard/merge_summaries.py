@@ -113,8 +113,8 @@ def _alsocheck_section(public: list[str], private: list[str],
                 'and links them by code in its own comment; the links open '
                 'only for people with access to that repo. Nothing private '
                 'is published here. That job needs '
-                '`TEST_MODELS_PRIVATE_WRITE_TOKEN` in the `private-renders` '
-                'environment, and its comment says so if it is missing.')
+                'the `TEST_MODELS_PRIVATE_WRITE_TOKEN` repo secret, and its '
+                'comment says so if it is missing.')
     lines += [f'- {n}' for n in notes] + ([''] if notes else [])
     return lines
 

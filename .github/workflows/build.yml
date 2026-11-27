@@ -521,8 +521,8 @@ jobs:
     # was deleted has `head.repo` null, which `.fork` reads as false
     # (internal) and this reads as external, the safe answer.
     #
-    # The write token is not checked here: it lives in the
-    # `private-renders` environment, visible only to visual-diff-private.
+    # The write token is not checked here: visual-diff-private checks it
+    # itself, as the only job that uses it.
     env:
       TOKEN_PRESENT: ${{ secrets.TEST_MODELS_PRIVATE_TOKEN != '' }}
       IS_FORK: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
@@ -1550,14 +1550,14 @@ jobs:
   # There is no fallback destination: without the write token the job
   # renders nothing, says so in its comment and summary, and passes.
   #
-  # TEST_MODELS_PRIVATE_WRITE_TOKEN lives in the `private-renders`
-  # GitHub Environment, not in repo secrets. A pull_request run uses the
-  # BRANCH's own workflow file, so a repo secret is readable by anyone
-  # who can push a branch here; an environment secret is released only
-  # to a job that names the environment, and only once that
-  # environment's protection rules (required reviewers, say) pass. That
-  # is the control that actually protects the token - a maintainer can
-  # tighten it without editing this file.
+  # TEST_MODELS_PRIVATE_WRITE_TOKEN is a plain repo secret, an ACCEPTED
+  # RISK (maintainer decision, #803): a pull_request run uses the
+  # BRANCH's own workflow file, so anyone who can push a branch here can
+  # read it, and so can write to test-models-private. Acceptable only
+  # while the people with push access here are the people trusted with
+  # write access there. To tighten it later, move the secret into a
+  # GitHub Environment with required reviewers and add `environment:` to
+  # this job; nothing else needs to change.
   #
   # Inside the job, the order is the hardening: every step that runs PR
   # code (the engines and their npm installs, the renderer, alsocheck.py)
@@ -1566,8 +1566,8 @@ jobs:
   # environment, no global or system config, no hooks) and cp. That
   # stops a script from simply reading the token. It is not a sandbox:
   # an earlier step's code can still poison later steps (GITHUB_ENV,
-  # GITHUB_PATH, sudo, a leftover process), which is why the environment
-  # above is the real gate. The read token, likewise, travels only as a
+  # GITHUB_PATH, sudo, a leftover process), so it narrows the exposure
+  # but does not remove it (see above). The read token, likewise, travels only as a
   # per-process http.extraheader and is never written to .git/config.
   #
   # Not on a fork (no secrets; resolve-models dropped its private
@@ -1587,7 +1587,6 @@ jobs:
       needs.resolve-models.outputs.private_sha != '' &&
       ((github.event_name == 'pull_request' && github.event.pull_request.draft == false) ||
       github.event_name == 'workflow_dispatch')
-    environment: private-renders
     runs-on: ubuntu-24.04
     # Up to 5 models, the big ones exported one engine at a time with a
     # 900 s timeout each: 5 x 2 x 15 min is 150 minutes if every export
@@ -1618,7 +1617,7 @@ jobs:
       - name: Note a missing write token
         if: env.WRITE_TOKEN_PRESENT != 'true'
         run: |
-          echo "::warning::TEST_MODELS_PRIVATE_WRITE_TOKEN is not set in the private-renders environment; private renders have no destination, so nothing is rendered."
+          echo "::warning::TEST_MODELS_PRIVATE_WRITE_TOKEN is not set; private renders have no destination, so nothing is rendered."
 
       - name: Setup Node
         if: env.WRITE_TOKEN_PRESENT == 'true'

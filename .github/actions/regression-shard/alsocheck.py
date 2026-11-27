@@ -378,9 +378,8 @@ def resolve(env: dict[str, str], shard_dir: Path,
     if extra:
         matrix.append({'id': ALSOCHECK_PRIVATE_ID, 'corpus': 'private'})
 
-    # Whether the write token exists is NOT known here: it lives in the
-    # `private-renders` environment, which only visual-diff-private
-    # references, so that job decides and reports a missing one.
+    # Whether the write token exists is decided by visual-diff-private,
+    # the only job that uses it, which also reports a missing one.
     if private_skipped:
         render = 'skipped'
     elif codes and event in ('pull_request', 'workflow_dispatch'):
@@ -426,7 +425,7 @@ def resolve(env: dict[str, str], shard_dir: Path,
                 '- Private renders: `visual-diff-private` pushes them to '
                 '`bldrs-ai/test-models-private` (branch '
                 '`visual-diff-assets`) if `TEST_MODELS_PRIVATE_WRITE_TOKEN` '
-                'is set in the `private-renders` environment, and says so '
+                'is set as a repo secret, and says so '
                 'if not. Never to this repo.')
     return outputs, summary, errors
 
@@ -616,7 +615,7 @@ def private_render_comment(codes: list[str], png_dir: Path, repo: str,
     if not write_token:
         lines += [
             'Private renders **skipped**: `TEST_MODELS_PRIVATE_WRITE_TOKEN` '
-            'is not set in the `private-renders` environment, and private '
+            'is not set as a repo secret, and private '
             'renders have no other destination. Regression ran; nothing '
             'was rendered or published.']
         return lines

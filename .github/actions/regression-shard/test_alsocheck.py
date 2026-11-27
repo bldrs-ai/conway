@@ -374,12 +374,11 @@ class ResolveTest(unittest.TestCase):
         self.assertIn('visual-diff-assets', summary)
 
     def test_write_token_is_decided_by_the_render_job(self):
-        # It lives in the private-renders environment, which resolve-models
-        # cannot see; the summary says where it must be.
+        # The render job decides; the summary says where the token must be.
         out, summary, _ = self.resolve(env_for(
             'pull_request', 'alsocheck: ILNA250'))
         self.assertEqual(out['private_render'], 'true')
-        self.assertIn('private-renders', summary)
+        self.assertIn('repo secret', summary)
 
     def test_same_repo_pr_without_read_token_skips(self):
         # Dependabot: same repo, no secrets. A note, not a failure.
@@ -627,7 +626,7 @@ class PrivateRenderCommentTest(unittest.TestCase):
         text = '\n'.join(alsocheck.private_render_comment(
             ['O10'], Path('/nonexistent'), 'r/p', 'b', 'd',
             write_token=False))
-        self.assertIn('private-renders', text)
+        self.assertIn('repo secret', text)
         self.assertIn('nothing was rendered or published', text)
         self.assertNotIn('O10-before', text)
 
@@ -934,7 +933,7 @@ class MergeSummariesTest(unittest.TestCase):
         self.assertNotIn('[!WARNING]', text)
         also = text.split('### alsocheck')[1].split('### Fixed shards')[0]
         self.assertIn('TEST_MODELS_PRIVATE_WRITE_TOKEN', also)
-        self.assertIn('private-renders', also)
+        self.assertIn('repo secret', also)
         self.assertIn('fragment of alsocheck-private', also)
         self.assertIn('fragment of ILNA250', also)
 
