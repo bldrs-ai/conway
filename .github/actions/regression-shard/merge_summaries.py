@@ -228,8 +228,11 @@ def main() -> None:
                 if scope == 'selected' else [])
     if also_public:
         also_ids.append(ALSOCHECK_PUBLIC_ID)
+    # Any skip reason (a fork, or a same-repo PR without the read token,
+    # e.g. Dependabot) means no alsocheck-private job was created, so its
+    # absent fragment is the noted skip, not a shard that failed.
     if [c for c in also_private if c not in headline] and \
-            args.alsocheck_private_skipped != 'fork':
+            not args.alsocheck_private_skipped:
         also_ids.append(ALSOCHECK_PRIVATE_ID)
 
     body: list[str] = []

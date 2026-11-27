@@ -29,7 +29,8 @@ SHARDS = REPO / 'regression' / 'shards'
 HEADLINE = ['AHMAC555', 'BLSN282', 'D3D224', 'DOWA418', 'ILNA250', 'O10',
             'PSB900']
 TREE = {'ifc/foo/bar.ifc', 'step/nist/x.stp',
-        'ifc/misc/Stohr - IFC Test.ifc', 'ifc/citra/House (1).ifc'}
+        'ifc/misc/Stohr - IFC Test.ifc', 'ifc/citra/House (1).ifc',
+        'ifc/index.ifc', 'ifc/bldrs/index.ifc', 'ifc/other/BAR.ifc'}
 
 # Entries that must never be accepted. Each is also checked to never
 # appear in an error message.
@@ -394,6 +395,21 @@ class ResolveTest(unittest.TestCase):
         self.assertEqual(json.loads(out['alsocheck_matrix']),
                          [{'id': 'alsocheck-public', 'corpus': 'public'}])
         self.assertIn('Dependabot', summary)
+
+    def test_public_paths_sharing_a_file_name_are_rejected(self):
+        # Digests are keyed by stem and renders by basename, so these
+        # would overwrite each other. Named by position, never by path.
+        for body in ('alsocheck: ifc/index.ifc ifc/bldrs/index.ifc',
+                     'alsocheck: ifc/foo/bar.ifc ifc/other/BAR.ifc'):
+            _, _, errors = self.resolve(env_for('pull_request', body))
+            self.assertEqual(len(errors), 1, body)
+            self.assertIn('public paths 1 and 2 have the same file name',
+                          errors[0])
+            self.assertNotIn('index', errors[0])
+            self.assertNotIn('bar', errors[0].lower().replace('overwrite', ''))
+        _, _, errors = self.resolve(env_for(
+            'pull_request', 'alsocheck: ifc/index.ifc ifc/foo/bar.ifc'))
+        self.assertEqual(errors, [])
 
     def test_dispatch_without_read_token_still_needs_it(self):
         # Not a PR: resolve-models' require step fails the run loudly.
@@ -970,6 +986,20 @@ class MergeSummariesTest(unittest.TestCase):
         self.assertIn('fork', also)
         self.assertIn('`XYZ12`', also)
         self.assertNotIn('visual-diff-assets', also)
+
+    def test_no_token_private_skip_is_not_a_failure(self):
+        # Dependabot: same repo, no secrets. resolve drops the private
+        # entries with alsocheck_private_skipped=no-token and creates no
+        # alsocheck-private job, so its absent fragment is the noted skip.
+        self.frag('coverage-1', 'coverage-2', 'coverage-3', 'alsocheck-public')
+        text, log = self.merge(
+            '--private-reason', 'not-on-prs', '--private-scope', 'none',
+            '--alsocheck-public', '["ifc/foo/bar.ifc"]',
+            '--alsocheck-private', '["XYZ12"]',
+            '--alsocheck-private-skipped', 'no-token',
+            '--private-render', 'skipped')
+        self.assertNotIn('[!WARNING]', text)
+        self.assertIn('0 missing', log)
 
 
 if __name__ == '__main__':

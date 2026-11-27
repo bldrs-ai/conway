@@ -336,6 +336,21 @@ def resolve(env: dict[str, str], shard_dir: Path,
                         'ILNA250), never by path, because this repo is '
                         'public')
             sel.paths = kept
+            # Regression digests are keyed by file stem and the renderer
+            # names its PNGs by basename, so two selected paths sharing a
+            # file name would overwrite each other's results. Compared
+            # case-insensitively, as the renderer's slug may fold case.
+            # Entries are named by position only, as everywhere here.
+            seen: dict[str, int] = {}
+            for index, path in enumerate(kept, 1):
+                stem = path.rsplit('/', 1)[-1].rsplit('.', 1)[0].lower()
+                if stem in seen:
+                    errors.append(
+                        f'public paths {seen[stem]} and {index} have the same '
+                        'file name, so their digests and renders would '
+                        'overwrite each other; name one of them per run')
+                else:
+                    seen[stem] = index
 
     headline = headline_codes(shard_dir)
     if event == 'push':
