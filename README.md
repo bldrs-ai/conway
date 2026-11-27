@@ -221,7 +221,7 @@ The `build` job also runs a fast, hermetic geometry gate over every `data/*.ifc`
 
 **Tier 2 — full headless-three perf in CI (live).** Two jobs,
 `perf-three-public` and `perf-three-private`, run on `rc-*` tags and
-`workflow_dispatch` (`needs: run-ifc-regression`) — once per release
+`workflow_dispatch` with `run_perf` on, its default (`needs: run-ifc-regression`) — once per release
 candidate, not per merge, so per-model timings stay low-variance on the
 isolated runner (see [ci-regression-cost.md](design/new/ci-regression-cost.md)
 for why frequency, not runner size, is the cost lever). Each downloads the candidate Conway tarball

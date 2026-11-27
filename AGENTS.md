@@ -188,8 +188,9 @@ models cannot be cached on a public repo, so each run re-pulls ~2.6 GB
 of private LFS — paid per landed change instead of per push. A headline
 regression therefore surfaces at merge, not at review. To exercise them
 before a merge, run the workflow manually with `run_private_shards`
-on; a plain dispatch (for debugging `perf-three-*` on a branch) leaves
-them off and spends nothing. See
+on, and `run_perf` off unless you also want benchmarks: it defaults to
+on, and `perf-three-*` costs ~40 paid runner-minutes plus a second
+private clone. See
 [regression/shards/README.md](regression/shards/README.md).
 
 Mechanics worth knowing before you edit `.github/workflows/build.yml`
