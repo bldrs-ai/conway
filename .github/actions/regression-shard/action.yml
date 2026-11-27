@@ -94,9 +94,16 @@ runs:
         if [ -n "$TOKEN" ]; then
           B64=$(printf 'x-access-token:%s' "$TOKEN" | base64 -w0)
           echo "::add-mask::$B64"
-          export GIT_CONFIG_COUNT=1
+          # An empty extraheader first resets any inherited one - actions/checkout
+          # persists GITHUB_TOKEN as http.https://github.com/.extraheader in the
+          # workspace checkout, and two Authorization headers get a 400. git
+          # honours the reset; git-lfs does not, so token-carrying commands also
+          # run outside that checkout (git -C models, or from $RUNNER_TEMP).
+          export GIT_CONFIG_COUNT=2
           export GIT_CONFIG_KEY_0="http.https://github.com/.extraheader"
-          export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $B64"
+          export GIT_CONFIG_VALUE_0=""
+          export GIT_CONFIG_KEY_1="http.https://github.com/.extraheader"
+          export GIT_CONFIG_VALUE_1="AUTHORIZATION: basic $B64"
         fi
         # Callers normally pass an already-resolved SHA (the
         # resolve-models job pins one commit for the whole run, so ten
@@ -105,7 +112,7 @@ runs:
         if [[ "$REF" =~ ^[0-9a-f]{40}$ ]]; then
           SHA="$REF"
         else
-          REFS=$(git ls-remote "$URL" "$REF")
+          REFS=$(cd "${RUNNER_TEMP:-/tmp}" && git ls-remote "$URL" "$REF")
           SHA=$(printf '%s\n' "$REFS" | awk '$2 ~ /\^\{\}$/ { print $1; found=1; exit } NR==1 { first=$1 } END { if (!found && first) print first }')
           if [ -z "$SHA" ]; then SHA="$REF"; fi
         fi
@@ -152,9 +159,16 @@ runs:
         if [ -n "$TOKEN" ]; then
           B64=$(printf 'x-access-token:%s' "$TOKEN" | base64 -w0)
           echo "::add-mask::$B64"
-          export GIT_CONFIG_COUNT=1
+          # An empty extraheader first resets any inherited one - actions/checkout
+          # persists GITHUB_TOKEN as http.https://github.com/.extraheader in the
+          # workspace checkout, and two Authorization headers get a 400. git
+          # honours the reset; git-lfs does not, so token-carrying commands also
+          # run outside that checkout (git -C models, or from $RUNNER_TEMP).
+          export GIT_CONFIG_COUNT=2
           export GIT_CONFIG_KEY_0="http.https://github.com/.extraheader"
-          export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $B64"
+          export GIT_CONFIG_VALUE_0=""
+          export GIT_CONFIG_KEY_1="http.https://github.com/.extraheader"
+          export GIT_CONFIG_VALUE_1="AUTHORIZATION: basic $B64"
         fi
         # -q throughout: checking out a SHA prints "HEAD is now at <sha>
         # <subject>", and on a private corpus that subject - which may name
@@ -179,9 +193,16 @@ runs:
         if [ -n "$TOKEN" ]; then
           B64=$(printf 'x-access-token:%s' "$TOKEN" | base64 -w0)
           echo "::add-mask::$B64"
-          export GIT_CONFIG_COUNT=1
+          # An empty extraheader first resets any inherited one - actions/checkout
+          # persists GITHUB_TOKEN as http.https://github.com/.extraheader in the
+          # workspace checkout, and two Authorization headers get a 400. git
+          # honours the reset; git-lfs does not, so token-carrying commands also
+          # run outside that checkout (git -C models, or from $RUNNER_TEMP).
+          export GIT_CONFIG_COUNT=2
           export GIT_CONFIG_KEY_0="http.https://github.com/.extraheader"
-          export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $B64"
+          export GIT_CONFIG_VALUE_0=""
+          export GIT_CONFIG_KEY_1="http.https://github.com/.extraheader"
+          export GIT_CONFIG_VALUE_1="AUTHORIZATION: basic $B64"
         fi
         python3 "${{ github.action_path }}/shard_list.py" pull "${{ inputs.shard-file }}" models
         if grep -rqiE --exclude-dir=objects 'x-access-token|authorization' models/.git; then

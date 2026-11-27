@@ -645,11 +645,18 @@ jobs:
           # Per-process header, not a URL: nothing on disk or in argv.
           B64=$(printf 'x-access-token:%s' "$TOKEN" | base64 -w0)
           echo "::add-mask::$B64"
-          export GIT_CONFIG_COUNT=1
+          # An empty extraheader first resets any inherited one - actions/checkout
+          # persists GITHUB_TOKEN as http.https://github.com/.extraheader in the
+          # workspace checkout, and two Authorization headers get a 400. git
+          # honours the reset; git-lfs does not, so token-carrying commands also
+          # run outside that checkout (git -C models, or from $RUNNER_TEMP).
+          export GIT_CONFIG_COUNT=2
           export GIT_CONFIG_KEY_0="http.https://github.com/.extraheader"
-          export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $B64"
+          export GIT_CONFIG_VALUE_0=""
+          export GIT_CONFIG_KEY_1="http.https://github.com/.extraheader"
+          export GIT_CONFIG_VALUE_1="AUTHORIZATION: basic $B64"
           URL="https://github.com/bldrs-ai/test-models-private.git"
-          REFS=$(git ls-remote "$URL" "$REF")
+          REFS=$(cd "$RUNNER_TEMP" && git ls-remote "$URL" "$REF")
           SHA=$(printf '%s\n' "$REFS" | awk '$2 ~ /\^\{\}$/ { print $1; found=1; exit } NR==1 { first=$1 } END { if (!found && first) print first }')
           if [ -z "$SHA" ]; then SHA="$REF"; fi
           if ! [[ "$SHA" =~ ^[0-9a-f]{40}$ ]]; then
@@ -1655,9 +1662,16 @@ jobs:
           set -euo pipefail
           B64=$(printf 'x-access-token:%s' "$TOKEN" | base64 -w0)
           echo "::add-mask::$B64"
-          export GIT_CONFIG_COUNT=1
+          # An empty extraheader first resets any inherited one - actions/checkout
+          # persists GITHUB_TOKEN as http.https://github.com/.extraheader in the
+          # workspace checkout, and two Authorization headers get a 400. git
+          # honours the reset; git-lfs does not, so token-carrying commands also
+          # run outside that checkout (git -C models, or from $RUNNER_TEMP).
+          export GIT_CONFIG_COUNT=2
           export GIT_CONFIG_KEY_0="http.https://github.com/.extraheader"
-          export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $B64"
+          export GIT_CONFIG_VALUE_0=""
+          export GIT_CONFIG_KEY_1="http.https://github.com/.extraheader"
+          export GIT_CONFIG_VALUE_1="AUTHORIZATION: basic $B64"
           git init -q models
           git -C models remote add origin "https://github.com/${PRIVATE_REPO}.git"
           git -C models fetch -q --depth 1 origin "$SHA"
@@ -1753,18 +1767,23 @@ jobs:
           PUSH_HOME=$(/usr/bin/mktemp -d)
           REPO_DIR="$PUSH_HOME/assets"
           URL="https://github.com/${PRIVATE_REPO}.git"
+          # From PUSH_HOME (in a subshell, so the step's own cwd is kept),
+          # outside the workspace checkout: git reads the
+          # config of the repo it starts in, emptied environment or not, and
+          # actions/checkout left an Authorization extraheader there.
           G() {
-            /usr/bin/env -i PATH=/usr/bin:/bin HOME="$PUSH_HOME" \
+            ( cd "$PUSH_HOME" && exec /usr/bin/env -i PATH=/usr/bin:/bin HOME="$PUSH_HOME" \
               GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 \
               GIT_TERMINAL_PROMPT=0 GIT_LFS_SKIP_SMUDGE=1 \
               GIT_AUTHOR_NAME="github-actions[bot]" GIT_COMMITTER_NAME="github-actions[bot]" \
               GIT_AUTHOR_EMAIL="41898282+github-actions[bot]@users.noreply.github.com" \
               GIT_COMMITTER_EMAIL="41898282+github-actions[bot]@users.noreply.github.com" \
-              GIT_CONFIG_COUNT=2 \
-              GIT_CONFIG_KEY_0="http.https://github.com/.extraheader" \
-              GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $B64" \
-              GIT_CONFIG_KEY_1=core.hooksPath GIT_CONFIG_VALUE_1=/dev/null \
-              /usr/bin/git "$@"
+              GIT_CONFIG_COUNT=3 \
+              GIT_CONFIG_KEY_0="http.https://github.com/.extraheader" GIT_CONFIG_VALUE_0="" \
+              GIT_CONFIG_KEY_1="http.https://github.com/.extraheader" \
+              GIT_CONFIG_VALUE_1="AUTHORIZATION: basic $B64" \
+              GIT_CONFIG_KEY_2=core.hooksPath GIT_CONFIG_VALUE_2=/dev/null \
+              /usr/bin/git "$@" )
           }
           # Missing branch (first private render ever) vs a failed read:
           # ls-remote errors on the second, and an orphan branch is made
