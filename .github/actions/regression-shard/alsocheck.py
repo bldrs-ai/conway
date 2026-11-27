@@ -439,9 +439,9 @@ def resolve(env: dict[str, str], shard_dir: Path,
             summary.append(
                 '- Private renders: `visual-diff-private` pushes them to '
                 '`bldrs-ai/test-models-private` (branch '
-                '`visual-diff-assets`) if `TEST_MODELS_PRIVATE_WRITE_TOKEN` '
-                'is set as a repo secret, and says so '
-                'if not. Never to this repo.')
+                '`visual-diff-assets`) with `TEST_MODELS_PRIVATE_TOKEN`, '
+                'which needs write access there (the repo secret). Never to '
+                'this repo.')
     return outputs, summary, errors
 
 
@@ -629,8 +629,8 @@ def private_render_comment(codes: list[str], png_dir: Path, repo: str,
     lines = ['## Visual Diff (alsocheck, private models)', '']
     if not write_token:
         lines += [
-            'Private renders **skipped**: `TEST_MODELS_PRIVATE_WRITE_TOKEN` '
-            'is not set as a repo secret, and private '
+            'Private renders **skipped**: the `TEST_MODELS_PRIVATE_TOKEN` '
+            'repo secret is not set, and private '
             'renders have no other destination. Regression ran; nothing '
             'was rendered or published.']
         return lines

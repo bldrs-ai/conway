@@ -290,18 +290,20 @@ that a PR names outside the seven headline shards runs its regression on
 code-named hard links, so its filename never reaches a public log or
 artifact either.
 
-That push needs the `TEST_MODELS_PRIVATE_WRITE_TOKEN` repo secret. **This
-is an accepted risk, decided by the maintainer:** a `pull_request` run
-uses the branch's own workflow file, so anyone who can push a branch here
-can read that secret by editing `build.yml`, and with it write to
-`test-models-private`. That is acceptable only while the people with push
-access here are the people trusted with write access there. If that
-changes, move the secret into a GitHub Environment with required
-reviewers and add `environment:` to `visual-diff-private`. The job also
-runs all PR code before the token appears and pushes with bare git as its
-last step; that narrows the exposure but is not a sandbox. Without the
-secret the private renders are skipped with a note, and the regression
-still runs.
+That push uses the same `TEST_MODELS_PRIVATE_TOKEN` repo secret the
+private shards read with, so that token must have **Contents: read and
+write** on `test-models-private`; a read-only token makes the push, and
+the job, fail. **This is an accepted risk, decided by the maintainer:** a
+`pull_request` run uses the branch's own workflow file, so anyone who can
+push a branch here can read that secret by editing `build.yml`, and with
+it write to `test-models-private`; and every job that carries it carries
+write access. That is acceptable only while the people with push access
+here are the people trusted with write access there. A ruleset protecting
+`main` on `test-models-private` keeps a leaked token off the corpus. To
+tighten further, give the push its own token in a GitHub Environment with
+required reviewers. Within the render job, PR code runs only between the
+corpus checkout and the final bare-git push, and never sees the token;
+that narrows the exposure but is not a sandbox.
 
 A fork PR's private entries are skipped with a note, since a fork has no
 secrets. So are those of a PR whose run has no

@@ -948,7 +948,7 @@ class MergeSummariesTest(unittest.TestCase):
             '--private-render', 'true')
         self.assertNotIn('[!WARNING]', text)
         also = text.split('### alsocheck')[1].split('### Fixed shards')[0]
-        self.assertIn('TEST_MODELS_PRIVATE_WRITE_TOKEN', also)
+        self.assertIn('TEST_MODELS_PRIVATE_TOKEN', also)
         self.assertIn('repo secret', also)
         self.assertIn('fragment of alsocheck-private', also)
         self.assertIn('fragment of ILNA250', also)

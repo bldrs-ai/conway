@@ -1552,28 +1552,34 @@ jobs:
   # The images and the renderer's full report are pushed to the
   # `visual-diff-assets` branch of bldrs-ai/test-models-private, under
   # conway/pr-<N>/<run id>/ (conway/dispatch/<run id>/ for a dispatch).
-  # There is no fallback destination: without the write token the job
-  # renders nothing, says so in its comment and summary, and passes.
+  # There is no fallback destination: a push that fails (a token without
+  # write access, say) fails the job; no render is ever sent elsewhere.
   #
-  # TEST_MODELS_PRIVATE_WRITE_TOKEN is a plain repo secret, an ACCEPTED
-  # RISK (maintainer decision, #803): a pull_request run uses the
-  # BRANCH's own workflow file, so anyone who can push a branch here can
-  # read it, and so can write to test-models-private. Acceptable only
-  # while the people with push access here are the people trusted with
-  # write access there. To tighten it later, move the secret into a
-  # GitHub Environment with required reviewers and add `environment:` to
-  # this job; nothing else needs to change.
+  # The push uses TEST_MODELS_PRIVATE_TOKEN, the same repo secret every
+  # private shard reads with, which must therefore have Contents: read
+  # AND write on test-models-private (maintainer decision, #803: one
+  # token, not a separate write secret). That is an ACCEPTED RISK: a
+  # pull_request run uses the BRANCH's own workflow file, so anyone who
+  # can push a branch here can read the token and so write to
+  # test-models-private; and every job that carries it (each private
+  # shard, which runs PR-built code) carries write access too. Acceptable
+  # only while the people with push access here are the people trusted
+  # with write access there. A ruleset on test-models-private protecting
+  # `main` keeps a leaked token off the corpus and its baselines. To
+  # tighten further, give the push its own token in a GitHub Environment
+  # with required reviewers and add `environment:` to this job.
   #
-  # Inside the job, the order is the hardening: every step that runs PR
-  # code (the engines and their npm installs, the renderer, alsocheck.py)
-  # comes first, and the write token appears in exactly one step's env -
-  # the last one, which runs only git (absolute /usr/bin/git, an emptied
-  # environment, no global or system config, no hooks) and cp. That
+  # Inside this job the token appears in two steps' env only: the corpus
+  # checkout, which runs before any PR code and leaves nothing on disk,
+  # and the last one, which runs only git (absolute /usr/bin/git, an
+  # emptied environment, no global or system config, no hooks) and cp.
+  # Every step that runs PR code (the engines and their npm installs,
+  # the renderer, alsocheck.py) comes between them, without it. That
   # stops a script from simply reading the token. It is not a sandbox:
   # an earlier step's code can still poison later steps (GITHUB_ENV,
   # GITHUB_PATH, sudo, a leftover process), so it narrows the exposure
-  # but does not remove it (see above). The read token, likewise, travels only as a
-  # per-process http.extraheader and is never written to .git/config.
+  # but does not remove it. The token travels only as a per-process
+  # http.extraheader and is never written to .git/config.
   #
   # Not on a fork (no secrets; resolve-models dropped its private
   # entries) and not on a draft. Like visual-diff, it needs
@@ -1601,7 +1607,7 @@ jobs:
       contents: read
       pull-requests: write  # post the codes-and-links comment
     env:
-      WRITE_TOKEN_PRESENT: ${{ secrets.TEST_MODELS_PRIVATE_WRITE_TOKEN != '' }}
+      WRITE_TOKEN_PRESENT: ${{ secrets.TEST_MODELS_PRIVATE_TOKEN != '' }}
       PRIVATE_REPO: bldrs-ai/test-models-private
       ASSETS_BRANCH: visual-diff-assets
       DEST: ${{ github.event_name == 'pull_request' && format('conway/pr-{0}/{1}', github.event.pull_request.number, github.run_id) || format('conway/dispatch/{0}', github.run_id) }}
@@ -1622,7 +1628,7 @@ jobs:
       - name: Note a missing write token
         if: env.WRITE_TOKEN_PRESENT != 'true'
         run: |
-          echo "::warning::TEST_MODELS_PRIVATE_WRITE_TOKEN is not set; private renders have no destination, so nothing is rendered."
+          echo "::warning::TEST_MODELS_PRIVATE_TOKEN is not set; private renders have no destination, so nothing is rendered."
 
       - name: Setup Node
         if: env.WRITE_TOKEN_PRESENT == 'true'
@@ -1726,7 +1732,8 @@ jobs:
           issue-number: ${{ github.event.pull_request.number }}
           body-path: private_comment.md
 
-      # LAST, and the only step that sees the write token. git and cp
+      # LAST, and the only step after any PR code that sees the token
+      # (TEST_MODELS_PRIVATE_TOKEN, which needs write here). git and cp
       # only, through G(): /usr/bin/git in an emptied environment with no
       # global or system config and hooks off, so neither PATH, a
       # GITHUB_ENV variable, ~/.gitconfig nor a planted hook can reroute
@@ -1736,7 +1743,7 @@ jobs:
       - name: Push renders to the private repo
         if: env.WRITE_TOKEN_PRESENT == 'true'
         env:
-          WRITE_TOKEN: ${{ secrets.TEST_MODELS_PRIVATE_WRITE_TOKEN }}
+          WRITE_TOKEN: ${{ secrets.TEST_MODELS_PRIVATE_TOKEN }}
           UNRENDERED: ${{ steps.comment.outputs.unrendered }}
         run: |
           set -euo pipefail
@@ -1787,7 +1794,7 @@ jobs:
           done
           /usr/bin/rm -rf "$PUSH_HOME"
           if [ "$pushed" != true ]; then
-            echo "::error::Could not push private renders to ${PRIVATE_REPO}@${ASSETS_BRANCH}. Nothing was published anywhere else; the comment's links will not resolve."
+            echo "::error::Could not push private renders to ${PRIVATE_REPO}@${ASSETS_BRANCH}. Nothing was published anywhere else; the comment's links will not resolve. Check that TEST_MODELS_PRIVATE_TOKEN has Contents: read and write on ${PRIVATE_REPO} (a fine-grained token's permission change may await org approval), and that no ruleset blocks pushes to ${ASSETS_BRANCH}."
             exit 1
           fi
           if [ -n "$UNRENDERED" ]; then

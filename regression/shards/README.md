@@ -244,21 +244,25 @@ conway/dispatch/<run id>/...                   # a manual dispatch
 
 The links open only for people with access to that repo. They name the
 branch path, which is unique per run and never rewritten, so the comment
-can be built before the push. Pushing needs
-**`TEST_MODELS_PRIVATE_WRITE_TOKEN`** (contents: write on
-`test-models-private`; `TEST_MODELS_PRIVATE_TOKEN` may be read-only),
-stored as a plain **repo secret**. That is an **accepted risk, decided by
-the maintainer** (#803):
+can be built before the push. Pushing uses **`TEST_MODELS_PRIVATE_TOKEN`**,
+the same plain **repo secret** every private shard reads with, so it must
+have **Contents: read and write** on `test-models-private` (one token, not
+a separate write secret). That is an **accepted risk, decided by the
+maintainer** (#803):
 
 - A `pull_request` run uses the PR branch's own workflow file, so a repo
   secret can be read by anyone who can push a branch here, simply by
   editing `build.yml` on that branch. Anyone with push access to conway
-  can therefore get write access to `test-models-private`.
-- That is acceptable only while those are the same people. If it stops
-  being true, move the secret into a GitHub Environment with required
-  reviewers and add `environment:` to `visual-diff-private`; nothing else
-  needs to change. (A deployment-branch restriction would also block PR
-  runs, whose ref is `refs/pull/<n>/merge`.)
+  can therefore get write access to `test-models-private`, and every job
+  that carries the token (each private shard, which runs PR-built code)
+  carries write access.
+- That is acceptable only while those are the same people. A ruleset
+  protecting `main` on `test-models-private` keeps a leaked token off the
+  corpus and its baselines. To tighten further, give the push its own
+  token in a GitHub Environment with required reviewers and add
+  `environment:` to `visual-diff-private`. (A deployment-branch
+  restriction would also block PR runs, whose ref is
+  `refs/pull/<n>/merge`.)
 
 Inside the job, every step that runs PR code (the engines and their
 `npm install`, the renderer, `alsocheck.py`) runs first. The write token
