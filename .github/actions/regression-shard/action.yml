@@ -156,13 +156,16 @@ runs:
           export GIT_CONFIG_KEY_0="http.https://github.com/.extraheader"
           export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $B64"
         fi
-        git init models
+        # -q throughout: checking out a SHA prints "HEAD is now at <sha>
+        # <subject>", and on a private corpus that subject - which may name
+        # a model file - would land in this public log.
+        git init -q models
         git -C models remote add origin "https://github.com/${REPO}.git"
-        git -C models fetch --depth 1 origin "$SHA"
-        git -C models checkout "$SHA"
+        git -C models fetch -q --depth 1 origin "$SHA"
+        git -C models checkout -q "$SHA"
         # Belt and braces: nothing above writes a credential to disk.
-        if grep -qiE 'x-access-token|authorization' models/.git/config; then
-          echo "::error::a credential reached models/.git/config"; exit 1
+        if grep -rqiE --exclude-dir=objects 'x-access-token|authorization' models/.git; then
+          echo "::error::a credential reached models/.git"; exit 1
         fi
 
     # Same per-process credential as the checkout; git-lfs reads
@@ -181,8 +184,8 @@ runs:
           export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $B64"
         fi
         python3 "${{ github.action_path }}/shard_list.py" pull "${{ inputs.shard-file }}" models
-        if grep -qiE 'x-access-token|authorization' models/.git/config; then
-          echo "::error::a credential reached models/.git/config"; exit 1
+        if grep -rqiE --exclude-dir=objects 'x-access-token|authorization' models/.git; then
+          echo "::error::a credential reached models/.git"; exit 1
         fi
 
     # A public shard's cache is saved AFTER its batch ran, so a restored

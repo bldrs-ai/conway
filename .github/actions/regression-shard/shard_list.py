@@ -572,6 +572,25 @@ def cmd_pull(args: argparse.Namespace) -> None:
         return
     subprocess.check_call(['git', 'lfs', 'install', '--local'], cwd=root)
     pull = ['git', 'lfs', 'pull', '--include=' + ','.join(stubs)]
+    try:
+        _lfs_pull(pull, root, corpus, pairs)
+    finally:
+        # On any error git-lfs writes .git/lfs/logs/<time>.log, and that log
+        # holds its whole GIT_* environment - including the per-process
+        # credential header. Callers then assert no credential is anywhere
+        # under .git, so remove it whatever happened.
+        shutil.rmtree(root / '.git' / 'lfs' / 'logs', ignore_errors=True)
+    left = [names[rel] for rel in stubs if is_lfs_stub(root / rel)]
+    if left:
+        print(
+            '::error::unsmudged LFS stubs after pull: ' + ', '.join(left),
+            file=sys.stderr)
+        raise SystemExit(1)
+
+
+def _lfs_pull(pull: list[str], root: Path, corpus: str,
+              pairs: list[tuple[str, str]]) -> None:
+    """Run git lfs pull; a private corpus's output has its paths redacted."""
     if corpus == 'private':
         # git-lfs names the file it failed on; this log is public. Its
         # output is passed through with every private path replaced by
@@ -585,12 +604,6 @@ def cmd_pull(args: argparse.Namespace) -> None:
             raise SystemExit(f'git lfs pull failed (exit {done.returncode})')
     else:
         subprocess.check_call(pull, cwd=root)
-    left = [names[rel] for rel in stubs if is_lfs_stub(root / rel)]
-    if left:
-        print(
-            '::error::unsmudged LFS stubs after pull: ' + ', '.join(left),
-            file=sys.stderr)
-        raise SystemExit(1)
 
 
 def cmd_digested(args: argparse.Namespace) -> None:

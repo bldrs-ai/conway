@@ -39,7 +39,10 @@ The token never touches disk: every git and git-lfs call that needs it
 gets it per process, as an `http.extraheader` in `GIT_CONFIG_*`
 environment variables scoped to `https://github.com/`. A remote URL
 holding it would sit in `models/.git/config`, readable by every later
-step, the PR's own code among them.
+step, the PR's own code among them. git-lfs writes its whole environment,
+header included, to `.git/lfs/logs/` when a transfer fails, so
+`shard_list.py pull` deletes that directory after every pull, and each
+step then asserts that no credential appears anywhere under `models/.git`.
 
 ## What a private shard may and may not publish
 
@@ -150,7 +153,8 @@ input.
 
 **Syntax.** The key at the start of a line (at most three leading
 spaces), any case; entries separated by commas or spaces; at most **5**.
-A line GitHub hides or shows as code is never a request. That covers an
+A line GitHub hides or shows as code is not a request, for the cases
+below. That covers an
 HTML comment (an unclosed `<!--` hides the rest of the body, as on
 GitHub), `<pre>`/`<code>`/`<script>`/`<style>`/`<textarea>`/`<template>`,
 a fenced block (closed only by the same character at least as long, so
@@ -158,7 +162,9 @@ a fence of four backticks can hold one of three, and a backtick fence
 can hold a tilde one; an unclosed fence runs to the end), and an indented code block (four spaces or a tab). Any text on
 the same line as one of these is ignored too. So is a line containing
 a Unicode line or paragraph separator (U+2028, U+2029 and kin), since
-GitHub renders it as part of one line. When in doubt the parser ignores
+GitHub renders it as part of one line. One known gap: a line inside an
+HTML attribute that spans lines (`<img alt="...` continued on the next
+line) is hidden by GitHub but still read. When in doubt the parser ignores
 the line, so a PR template's commented example, or a PR that documents
 the syntax, selects nothing. An entry is either:
 
@@ -261,7 +267,8 @@ appears in the env of exactly one step, the last. That step runs only
 system git config and no hooks, in a fresh clone. This stops a script
 from simply reading the token. It is not a sandbox: earlier PR code can
 still poison later steps (GITHUB_ENV, GITHUB_PATH, sudo, a leftover
-process). The environment's rules are the real control. The engines'
+process), so this narrows the accepted risk above rather than removing
+it. The engines'
 dependencies are not lockfile-pinned: the npm tarballs ship no lockfile,
 and the base engine is a published package with none. They install with
 `--ignore-scripts`, and all before the write token exists.

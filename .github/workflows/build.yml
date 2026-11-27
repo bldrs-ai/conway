@@ -508,7 +508,7 @@ jobs:
       alsocheck_matrix: ${{ steps.scope.outputs.alsocheck_matrix }}
       # true | skipped (fork, or a PR without the read token) | none.
       # Whether the write token exists is decided by visual-diff-private,
-      # the only job that can see its environment.
+      # the only job that uses it.
       private_render: ${{ steps.scope.outputs.private_render }}
     # `secrets` is not an allowed context in a step-level `if:`; a
     # job-level `env` is how it reaches one. Same trick as
@@ -1654,8 +1654,8 @@ jobs:
           python3 .github/actions/regression-shard/shard_list.py pull private_render.txt models
           python3 .github/actions/regression-shard/shard_list.py link \
             private_render.txt models by-code --out abs_private.txt
-          if grep -qiE 'x-access-token|authorization' models/.git/config; then
-            echo "::error::a credential reached models/.git/config"; exit 1
+          if grep -rqiE --exclude-dir=objects 'x-access-token|authorization' models/.git; then
+            echo "::error::a credential reached models/.git"; exit 1
           fi
 
       # Same engines and threshold as visual-diff's alsocheck section:
