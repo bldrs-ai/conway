@@ -4,8 +4,10 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import os
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -101,8 +103,9 @@ def resolve_private(root: Path, codes: list[str]) -> list[tuple[str, str]]:
     for code in codes:
         rel = mapping[code]
         if not (root / rel).is_file():
+            # The code only: this message lands in a public job log.
             raise SystemExit(
-                f'{MANIFEST} maps {code} to {rel!r}, which is not in the '
+                f'{MANIFEST} maps {code} to a path that is not in the '
                 'corpus checkout')
         resolved.append((code, rel))
     return resolved
@@ -116,7 +119,9 @@ def parse_shard(path: str, root: str | None = None) -> tuple[str, list[str]]:
     """
     corpus, entries = shard_entries(path)
     if corpus == 'public':
-        return corpus, entries
+        # A generated alsocheck list names corpus PATHS (a basename is
+        # ambiguous there); the CSVs this feeds are keyed by basename.
+        return corpus, [Path(e).name for e in entries]
     if root is None:
         raise SystemExit(
             f'{path} is a private shard, so resolving its codes needs the '
@@ -154,7 +159,20 @@ def exclude_regex(selectors: list[str]) -> str:
 
 
 def find_paths(root: Path, names: list[str]) -> list[str]:
-    """Relative posix paths under root/ifc and root/step matching basenames."""
+    """Relative posix paths under root/ifc and root/step matching basenames.
+
+    An entry holding a `/` is already a corpus-relative path (the lists
+    alsocheck generates), and is taken as exactly that file rather than
+    searched for, so it cannot pick up a same-named file elsewhere.
+    """
+    exact = [n for n in names if '/' in n]
+    names = [n for n in names if '/' not in n]
+    absent = [n for n in exact if not (root / n).is_file()]
+    if absent:
+        raise SystemExit(
+            'shard paths not in corpus: ' + ', '.join(sorted(absent)))
+    if not names:
+        return sorted(exact)
     want = set(names)
     paths: list[str] = []
     for top in ('ifc', 'step'):
@@ -183,7 +201,7 @@ def find_paths(root: Path, names: list[str]) -> list[str]:
                 f'::warning::{name} matches {len(matches)} corpus paths '
                 f'({", ".join(matches)}); they share one digest CSV, so '
                 f'{matches[0]} is the one whose digest survives.')
-    return paths
+    return sorted(paths + exact)
 
 
 def is_lfs_stub(path: Path) -> bool:
@@ -217,12 +235,57 @@ def cmd_corpus(args: argparse.Namespace) -> None:
     print(corpus, end='')
 
 
+def cmd_link(args: argparse.Namespace) -> None:
+    """Expose a private list's models under their CODES.
+
+    Both the digest batch (`Current File: <path>`, every CSV's `file`
+    column, the per-model digest name) and visual_diff_report.cjs (its
+    log lines, its PNG names) name a model by its path or basename.
+    Pointed at `<dir>/<CODE><ext>` instead of the real files, all of it
+    says the code, which is already public, and never the private
+    filename.
+
+    HARD links, not symlinks: a symlink keeps the real path one
+    `realpath()` away from any tool that resolves it, and a hard link has
+    no other name to resolve to. Copied if the two paths are on different
+    filesystems. Prints codes only.
+    """
+    corpus, entries = shard_entries(args.shard)
+    if corpus != 'private':
+        raise SystemExit(f'{args.shard} is not a private shard list')
+    out_dir = Path(args.dir).resolve()
+    out_dir.mkdir(parents=True, exist_ok=True)
+    lines = []
+    for code, rel in resolve_private(Path(args.root), entries):
+        ext = Path(rel).suffix.lower()
+        if ext not in ('.ifc', '.step', '.stp'):
+            raise SystemExit(f'{MANIFEST} maps {code} to a file that is not '
+                             'an .ifc, .step or .stp model')
+        link = out_dir / f'{code}{ext}'
+        if link.is_symlink() or link.exists():
+            link.unlink()
+        source = (Path(args.root) / rel).resolve()
+        try:
+            os.link(source, link)
+        except OSError:
+            shutil.copyfile(source, link)
+        lines.append(str(link))
+    Path(args.out).write_text('\n'.join(lines) + '\n', encoding='utf-8')
+    print(f'{len(lines)} private model(s) linked by code: '
+          + ', '.join(entries))
+
+
 def cmd_names(args: argparse.Namespace) -> None:
     _, names = parse_shard(args.shard, args.root)
     print('\n'.join(names))
 
 
 MAX_SHARDS = 10
+
+# The regression-alsocheck job's ids (alsocheck-public, alsocheck-private).
+# Generated per run, never committed, and outside MAX_SHARDS: see
+# regression/shards/README.md, "alsocheck".
+RESERVED_PREFIX = 'alsocheck'
 
 # Which workflow job runs which corpus. The shard's corpus is now implied
 # by the job that lists it - public coverage runs on every ready PR,
@@ -264,6 +327,11 @@ def cmd_check(args: argparse.Namespace) -> None:
     corpora: dict[str, str] = {}
     for path in files:
         stem = path.stem
+        if stem.startswith(RESERVED_PREFIX):
+            errors.append(
+                f'{path.name}: `{RESERVED_PREFIX}*` ids are reserved for '
+                'the lists alsocheck generates at run time; a committed one '
+                'would collide with its `regression-shard-<id>` artifact')
         corpus, names = shard_entries(str(path))
         corpora[stem] = corpus
         seen: set[str] = set()
@@ -472,26 +540,104 @@ def _matrix_errors(workflow: Path, corpora: dict[str, str]) -> list[str]:
     return errors
 
 
+def redact(text: str, pairs: list[tuple[str, str]]) -> str:
+    """Replace every private path, and its basename and stem, with its code.
+
+    Longest first, so a path is replaced whole before its basename is.
+    """
+    subs = []
+    for code, rel in pairs:
+        name = Path(rel).name
+        subs += [(rel, code), (name, code), (Path(rel).stem, code)]
+    for old, new in sorted(subs, key=lambda kv: -len(kv[0])):
+        if old:
+            text = text.replace(old, new)
+    return text
+
+
 def cmd_pull(args: argparse.Namespace) -> None:
     corpus, entries = shard_entries(args.shard)
     root = Path(args.root)
+    pairs: list[tuple[str, str]] = []
     if corpus == 'private':
-        paths = [rel for _, rel in resolve_private(root, entries)]
+        pairs = resolve_private(root, entries)
+        paths = [rel for _, rel in pairs]
+        names = dict((rel, code) for code, rel in pairs)
     else:
         paths = find_paths(root, entries)
+        names = {rel: rel for rel in paths}
     stubs = [rel for rel in paths if is_lfs_stub(root / rel)]
     print(f'{len(paths)} shard models, {len(stubs)} LFS stubs to pull')
     if not stubs:
         return
     subprocess.check_call(['git', 'lfs', 'install', '--local'], cwd=root)
-    subprocess.check_call(
-        ['git', 'lfs', 'pull', '--include=' + ','.join(stubs)], cwd=root)
-    left = [rel for rel in stubs if is_lfs_stub(root / rel)]
+    pull = ['git', 'lfs', 'pull', '--include=' + ','.join(stubs)]
+    try:
+        _lfs_pull(pull, root, corpus, pairs)
+    finally:
+        # On any error git-lfs writes .git/lfs/logs/<time>.log, and that log
+        # holds its whole GIT_* environment - including the per-process
+        # credential header. Callers then assert no credential is anywhere
+        # under .git, so remove it whatever happened.
+        shutil.rmtree(root / '.git' / 'lfs' / 'logs', ignore_errors=True)
+    left = [names[rel] for rel in stubs if is_lfs_stub(root / rel)]
     if left:
         print(
             '::error::unsmudged LFS stubs after pull: ' + ', '.join(left),
             file=sys.stderr)
         raise SystemExit(1)
+
+
+def _lfs_pull(pull: list[str], root: Path, corpus: str,
+              pairs: list[tuple[str, str]]) -> None:
+    """Run git lfs pull; a private corpus's output has its paths redacted."""
+    if corpus == 'private':
+        # git-lfs names the file it failed on; this log is public. Its
+        # output is passed through with every private path replaced by
+        # its code.
+        done = subprocess.run(pull, cwd=root, capture_output=True,
+                              text=True, check=False)
+        out = redact(done.stdout + done.stderr, pairs).strip()
+        if out:
+            print(out)
+        if done.returncode != 0:
+            raise SystemExit(f'git lfs pull failed (exit {done.returncode})')
+    else:
+        subprocess.check_call(pull, cwd=root)
+
+
+def cmd_digested(args: argparse.Namespace) -> None:
+    """Fail unless every model in the list has a row in main.csv or
+    failed.csv: the batch exiting 0 is not evidence it digested anything.
+
+    A row is matched on the batch's `file` column, a basename: the real
+    one for a committed list, `<CODE><ext>` for a list run through
+    `link` (--by-code). Reports by entry (codes for a private list),
+    never by private filename.
+    """
+    corpus, entries = shard_entries(args.shard)
+    expect: list[tuple[str, str]] = []  # (what to report, basename)
+    if corpus == 'private':
+        for code, rel in resolve_private(Path(args.root), entries):
+            name = (f'{code}{Path(rel).suffix.lower()}' if args.by_code
+                    else Path(rel).name)
+            expect.append((code, name))
+    else:
+        expect = [(e, Path(e).name) for e in entries]
+    seen: set[str] = set()
+    for csv_path in (args.main, args.failed):
+        path = Path(csv_path)
+        if not path.is_file():
+            continue
+        with path.open(newline='', encoding='utf-8') as fh:
+            for row in csv.DictReader(fh):
+                seen.add(row.get('file', ''))
+    missing = [label for label, name in expect if name not in seen]
+    if missing:
+        print('::error::The batch exited without a result row for: '
+              + ', '.join(missing) + '. A model it never read cannot pass.')
+        raise SystemExit(1)
+    print(f'{len(expect)} of {len(expect)} listed model(s) have a result row.')
 
 
 def main() -> None:
@@ -518,6 +664,22 @@ def main() -> None:
     p_pull.add_argument('shard')
     p_pull.add_argument('root')
     p_pull.set_defaults(func=cmd_pull)
+
+    p_dig = sub.add_parser('digested')
+    p_dig.add_argument('shard')
+    p_dig.add_argument('root')
+    p_dig.add_argument('main')
+    p_dig.add_argument('failed')
+    p_dig.add_argument('--by-code', action='store_true')
+    p_dig.set_defaults(func=cmd_digested)
+
+    p_link = sub.add_parser('link')
+    p_link.add_argument('shard')
+    p_link.add_argument('root')
+    p_link.add_argument('dir')
+    p_link.add_argument('--out', required=True,
+                        help='write the linked model paths here, one a line')
+    p_link.set_defaults(func=cmd_link)
 
     p_check = sub.add_parser('check')
     p_check.add_argument('--shard-dir', default='regression/shards')

@@ -175,22 +175,26 @@ the two in step when either changes.
 | `resolve-models` (pins one corpus commit) | **skipped** | runs |
 | `regression-pack` (npm tarball for perf jobs) | **skipped** | runs |
 | `regression-shard` (3 public coverage shards) | **skipped** | runs |
-| `regression-shard-private` (7 private headline shards) | **skipped** | **skipped** — merge, rc, or an opt-in manual dispatch |
+| `regression-shard-private` (7 private headline shards) | **skipped** | **skipped** — merge, rc, or an opt-in manual dispatch; only the codes an `alsocheck:` line names |
+| `regression-alsocheck` (models `alsocheck:` names outside the shards) | **skipped** | runs only when `alsocheck:` names them |
 | `run-ifc-regression` (aggregator + PR comment) | **skipped** | runs |
-| `visual-diff` | **skipped** | runs (when digests changed) |
+| `visual-diff` | **skipped** | runs (when digests changed, or `alsocheck:` names public models) |
+| `visual-diff-private` | **skipped** | runs only when `alsocheck:` names private codes |
 
 `build` is deliberately left ungated: it is the cheap compile and
 unit-test signal you want while a draft is still moving.
 
 `regression-shard-private` is gated on the *run's scope*, not on draft
-state: it never runs on a `pull_request` at all. Its seven headline
-models cannot be cached on a public repo, so each run re-pulls ~2.6 GB
-of private LFS — paid per landed change instead of per push. A headline
-regression therefore surfaces at merge, not at review. To exercise them
-before a merge, run the workflow manually with `run_private_shards`
-on, and `run_perf` off unless you also want benchmarks: it defaults to
-on, and `perf-three-*` costs ~40 paid runner-minutes plus a second
-private clone. See
+state: on a `pull_request` it runs only the headline codes the PR's
+`alsocheck:` line names (see [alsocheck](#alsocheck-ci-on-the-models-a-fix-is-for)),
+and otherwise not at all. Its seven headline models cannot be cached on
+a public repo, so each run re-pulls ~2.6 GB of private LFS — paid per
+landed change instead of per push. A headline regression therefore
+surfaces at merge, not at review, unless the PR asked for it. To
+exercise all seven before a merge, run the workflow manually with
+`run_private_shards` on, and `run_perf` off unless you also want
+benchmarks: it defaults to on, and `perf-three-*` costs ~40 paid
+runner-minutes plus a second private clone. See
 [regression/shards/README.md](regression/shards/README.md).
 
 Mechanics worth knowing before you edit `.github/workflows/build.yml`
@@ -222,11 +226,102 @@ tidier:
   (`needs.resolve-models.outputs.private_expected == 'true'`) is the
   whole mechanism keeping the private corpus off pull requests, not a
   belt-and-braces clause. Pruning it as "defensive" would put ~2.6 GB
-  of private LFS back on every ready-PR push.
+  of private LFS back on every ready-PR push. Under an alsocheck
+  selection the job runs and its unselected entries stop at their first
+  step (`select`). That step is just as load-bearing, and so is
+  `run-ifc-regression`'s artifact check (`alsocheck.py
+  verify-artifacts`), which catches an entry that ran without being
+  asked, or skipped when it was asked.
+- **A job below `run-ifc-regression` must name a status function.** An
+  `if:` without one gets an implicit `success()`, and GitHub applies it
+  to the whole dependency chain, not just `needs`: a skipped ancestor
+  skips the job. `regression-shard-private` is skipped on most pull
+  requests, so from #707 on, `visual-diff` never ran on a PR (conway#801
+  showed `visual_diff_count=1` and a skipped `visual-diff`), and a plain
+  dispatch skipped `perf-three-*`. Each downstream job now says
+  `!cancelled() && needs.run-ifc-regression.result == 'success' && ...`.
+  `run-ifc-regression` is the gate, so its success already means every
+  shard came out as expected. A new job down there needs the same.
 
 The same lifecycle and the same gate shape apply in
 [Share](https://github.com/bldrs-ai/Share) — see its `AGENTS.md` for
 which jobs are gated there.
+
+### alsocheck: CI on the models a fix is for
+
+**Use it on any PR that fixes an error reported on particular models.**
+The fixed shards are a sample, and the model in the bug report is
+usually not in it: no private headline model runs on a PR otherwise. Put
+one line in the PR description:
+
+```
+alsocheck: ILNA250, ifc/foo/bar.ifc
+```
+
+The key is any case and starts its own line. Separate entries with
+commas or spaces, at most 5. Each entry is one of:
+
+- **A private model, by its shard code only**: capitals then its size in
+  MB, e.g. `ILNA250`. The map is `regression/shard_codes.txt` in
+  `bldrs-ai/test-models-private`. **Never write a private path or
+  filename**, here or anywhere else in this repo: it is public, and a
+  name in a PR description stays published. CI rejects an entry that
+  looks like one, without repeating it.
+- **A public model, by its path in `bldrs-ai/test-models`**, e.g.
+  `ifc/foo/bar.ifc`. Only `.ifc`, `.step` and `.stp`, relative, no `..`.
+  Double-quote a path that has spaces. It must exist at the run's pinned
+  corpus commit.
+
+A bad entry fails `resolve-models`, naming the entry's position and the
+reason, never any part of the entry. A line GitHub hides or shows as
+code is ignored: HTML comments (an unclosed `<!--` hides the rest of the
+body), `<pre>`/`<code>` and similar, fenced blocks, and anything indented
+four spaces or by a tab. So writing the syntax down in a PR inside a code
+block (as this file does) selects nothing.
+
+CI then runs regression on exactly those models (the shards' own
+failed.csv and zero-geometry gates) and renders them before/after even
+if their digest did not move. The PR comment reports them in an
+**alsocheck** section. Public renders appear in the visual-diff comment.
+**Private renders go only to the `visual-diff-assets` branch of
+`bldrs-ai/test-models-private`**, under `conway/pr-<N>/<run id>/`, and
+the PR gets a comment that links them by code, never embeds them. Those
+links open only for people with access to that repo. A private model
+that a PR names outside the seven headline shards runs its regression on
+code-named hard links, so its filename never reaches a public log or
+artifact either.
+
+That push uses the same `TEST_MODELS_PRIVATE_TOKEN` repo secret the
+private shards read with, so that token must have **Contents: read and
+write** on `test-models-private`; a read-only token makes the push, and
+the job, fail. **This is an accepted risk, decided by the maintainer:** a
+`pull_request` run uses the branch's own workflow file, so anyone who can
+push a branch here can read that secret by editing `build.yml`, and with
+it write to `test-models-private`; and every job that carries it carries
+write access. That is acceptable only while the people with push access
+here are the people trusted with write access there. A ruleset protecting
+`main` on `test-models-private` keeps a leaked token off the corpus. To
+tighten further, give the push its own token in a GitHub Environment with
+required reviewers. Within the render job, PR code runs only between the
+corpus checkout and the final bare-git push, and never sees the token;
+that narrows the exposure but is not a sandbox.
+
+A fork PR's private entries are skipped with a note, since a fork has no
+secrets. So are those of a PR whose run has no
+`TEST_MODELS_PRIVATE_TOKEN`, such as Dependabot's. A fork PR also gets
+no public visual diff and no regression comment, because its read-only
+token can do neither; the report is in `run-ifc-regression`'s job
+summary.
+
+**It runs once the PR is ready.** Draft PRs skip regression, alsocheck
+included. Write the line while the PR is a draft; flipping it to ready
+(step 3 above) is what reads it. Editing the description alone starts
+no run: the workflow does not listen for `edited`, and the comment on
+`types:` in `build.yml` says why. After an edit, push or use "Re-run all
+jobs": the description is read live when the run starts. For a one-off
+without a PR, the manual dispatch has an `alsocheck` input with the same
+syntax. Details:
+[regression/shards/README.md](regression/shards/README.md#alsocheck).
 
 ## Issue-queue burndowns: sub-agents and the rubric
 

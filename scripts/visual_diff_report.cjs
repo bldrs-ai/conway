@@ -14,6 +14,7 @@
  *   visual_diff_report.cjs --models <changed_models.txt> \
  *     --base <package root> --cand <package root> --out <dir> [--max N] \
  *     [--base-label <text>] [--cand-label <text>] [--export-timeout <seconds>]
+ *     [--quiet-child-stderr true] [--serial-over-mb <MB>]
  *
  * <changed_models.txt>: one absolute model path per line, optionally
  * followed by a tab and `new` for models whose digest has no committed
@@ -23,6 +24,16 @@
  * still left GLBs that render identically.
  * <package root>: a directory containing compiled/src/... (an unpacked npm
  * package or a built working tree).
+ *
+ * --quiet-child-stderr true: never echo a failed child's stderr into this
+ * process's stderr (the CI job log). For PRIVATE models, whose engine
+ * errors describe model internals in a public log; the one-line
+ * diagnostic still goes into report.md, which a private caller keeps
+ * private.
+ * --serial-over-mb <MB>: export base and candidate one after the other,
+ * not side by side, for a model file larger than this. A large model
+ * peaks at many times its file size in RAM, and two at once can exceed
+ * the runner's memory (seen as a kill, which reads as an export failure).
  *
  * Outputs into --out: <slug>-before.png / <slug>-after.png per model plus
  * report.md, a markdown table body with RAW_URL_BASE placeholders the
@@ -52,6 +63,9 @@ function parseArgs() {
   opts.exportTimeoutMs = (opts['export-timeout'] !== undefined ?
     parseFloat(opts['export-timeout']) : 600) * 1000
   opts.candLabel = opts['cand-label'] || 'candidate (this PR)'
+  opts.quietChildStderr = opts['quiet-child-stderr'] === 'true'
+  opts.serialOverBytes = opts['serial-over-mb'] !== undefined ?
+    parseFloat(opts['serial-over-mb']) * 1024 * 1024 : Infinity
   // Minimum fraction of pixels that must differ between the before/after
   // render for a row to be shown. The digest gate and the visual-diff base
   // (published npm) use different baselines, so a flagged model can render
@@ -165,10 +179,14 @@ function exportGlb(packageRoot, modelPath, scratchDir, timeoutMs) {
  * just the "Node.js vX.Y.Z" crash footer. Also echoes the full child
  * stderr into our own stderr so the CI job log has the complete stack.
  */
+let quietChildStderr = false
+
 function childFailureDiagnostic(err, label) {
   const stderr = (err.stderr || '').toString().trim()
-  if (stderr) {
+  if (stderr && !quietChildStderr) {
     process.stderr.write(`--- ${label} stderr ---\n${stderr}\n---\n`)
+  } else if (stderr) {
+    process.stderr.write(`--- ${label} failed; stderr withheld (--quiet-child-stderr) ---\n`)
   }
   const lines = stderr.split('\n').filter(Boolean)
   return lines.find((l) => /error|cannot|not found|bad option|unexpected/i.test(l)) ||
@@ -181,6 +199,7 @@ function slugify(name) {
 
 async function main() {
   const opts = parseArgs()
+  quietChildStderr = opts.quietChildStderr
   // Each line is `<model path>` or `<model path>\tnew` — the workflow marks
   // models whose digest CSV is untracked (first appearance in the smoke
   // subset, no committed baseline). New models bypass the below-threshold
@@ -240,10 +259,19 @@ async function main() {
     const work = fs.mkdtempSync(path.join(os.tmpdir(), `vdiff-${slug}-`))
     process.stderr.write(`visual-diff: ${name}\n`)
 
-    const [base, cand] = await Promise.all([
-      exportGlb(opts.base, model, path.join(work, 'base'), opts.exportTimeoutMs),
-      exportGlb(opts.cand, model, path.join(work, 'cand'), opts.exportTimeoutMs),
-    ])
+    const exportBase = () =>
+      exportGlb(opts.base, model, path.join(work, 'base'), opts.exportTimeoutMs)
+    const exportCand = () =>
+      exportGlb(opts.cand, model, path.join(work, 'cand'), opts.exportTimeoutMs)
+    let modelBytes = 0
+    try {
+      modelBytes = fs.statSync(model).size
+    } catch {
+      // Missing model: the exports below report it.
+    }
+    const [base, cand] = modelBytes > opts.serialOverBytes ?
+      [await exportBase(), await exportCand()] :
+      await Promise.all([exportBase(), exportCand()])
     // Timings in the job log, so the next look at where a render's time
     // went does not have to reconstruct them from line timestamps.
     process.stderr.write(`visual-diff: ${name} exports base ${base.seconds.toFixed(1)}s, ` +

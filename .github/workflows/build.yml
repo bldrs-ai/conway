@@ -30,6 +30,23 @@ on:
     # a reopened PR keeps whatever conclusions sat on its head SHA -- possibly
     # a `skipped` regression, which reads as passing -- with nothing to
     # re-run it.
+    #
+    # `edited` is deliberately NOT here, although the `alsocheck:` line
+    # lives in the PR description (see resolve-models). It fires on every
+    # title, body and base edit, and in this concurrency group each one
+    # would cancel the regression in flight and restart `build` on the
+    # paid runner - a typo fix in the description would cost a full
+    # pipeline. Gating the edited runs off does not rescue it: the
+    # cancelled run's replacement would report `skipped`, which satisfies
+    # a required check, so editing the description would turn
+    # `run-ifc-regression` green without running it.
+    #
+    # Nothing is lost for the normal lifecycle: the line is written while
+    # the PR is a draft, and ready_for_review reads it. resolve-models
+    # reads the description LIVE from the API rather than from this event's
+    # payload, so after a later edit "Re-run all jobs" picks it up (a
+    # re-run replays the original payload, which would not); so does the
+    # next push.
     types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
     # Skip the heavy build + IFC regression on doc-only PRs. paths-ignore
     # skips the workflow only when EVERY changed file matches — a PR that
@@ -82,6 +99,15 @@ on:
           before a merge, and usually turn run_perf off with it.
         type: boolean
         default: false
+      alsocheck:
+        description: >-
+          Models to also regress and render before/after, as on a PR's
+          `alsocheck:` line: private models by shard CODE only (e.g.
+          ILNA250), public ones by path in bldrs-ai/test-models (e.g.
+          ifc/foo/bar.ifc). Comma or space separated, at most 5. See
+          regression/shards/README.md.
+        type: string
+        default: ''
 
 # Cancel superseded runs so a rapid series of pushes to the same PR doesn't
 # leave N full build+regression(+visual-diff) pipelines running to completion
@@ -188,6 +214,13 @@ jobs:
 
       - name: Validate regression shard lists
         run: python3 .github/actions/regression-shard/shard_list.py check
+
+      # The alsocheck parser reads attacker-controlled PR text, so its
+      # rejection rules are pinned by tests rather than by review alone.
+      # Hermetic and about a second; covers shard_list.py and
+      # merge_summaries.py too.
+      - name: Test the regression-shard scripts (alsocheck parser included)
+        run: python3 -m unittest discover -s .github/actions/regression-shard -p 'test_*.py'
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -455,46 +488,68 @@ jobs:
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ubuntu-24.04
     timeout-minutes: 5
+    # pull-requests: read is for the live description read below; nothing
+    # here writes.
+    permissions:
+      contents: read
+      pull-requests: read
     outputs:
       public_sha: ${{ steps.public.outputs.sha }}
       private_sha: ${{ steps.private.outputs.sha }}
-      # Whether this run executes the private headline shards. Consumed
-      # by regression-shard-private's `if:` and by run-ifc-regression's
-      # assert, so the three cannot drift apart.
-      private_expected: ${{ steps.scope.outputs.private }}
+      # Whether regression-shard-private runs at all. Consumed by its
+      # `if:` and by run-ifc-regression's assert, so the three cannot
+      # drift apart. Now also 'true' on a PR whose alsocheck names a
+      # headline code; private_scope says which kind of run it is.
+      private_expected: ${{ steps.scope.outputs.private_expected }}
+      # all: every headline shard (merge, rc, run_private_shards).
+      # selected: only the codes in private_selected (alsocheck).
+      # none: no headline shard runs.
+      private_scope: ${{ steps.scope.outputs.private_scope }}
+      private_selected: ${{ steps.scope.outputs.private_selected }}
+      # alsocheck. Every value below was validated by alsocheck.py
+      # (codes, or public paths found in the pinned public corpus), and
+      # consumers still pass them through `env:` and re-validate rather
+      # than interpolate them: they started life as PR-body text.
+      alsocheck_public: ${{ steps.scope.outputs.alsocheck_public }}
+      alsocheck_public_count: ${{ steps.scope.outputs.alsocheck_public_count }}
+      alsocheck_private: ${{ steps.scope.outputs.alsocheck_private }}
+      alsocheck_private_count: ${{ steps.scope.outputs.alsocheck_private_count }}
+      alsocheck_private_extra: ${{ steps.scope.outputs.alsocheck_private_extra }}
+      alsocheck_private_requested: ${{ steps.scope.outputs.alsocheck_private_requested }}
+      alsocheck_private_skipped: ${{ steps.scope.outputs.alsocheck_private_skipped }}
+      alsocheck_matrix: ${{ steps.scope.outputs.alsocheck_matrix }}
+      # true | skipped (fork, or a PR without the read token) | none.
+      # Whether the write token exists is decided by visual-diff-private,
+      # the only job that uses it.
+      private_render: ${{ steps.scope.outputs.private_render }}
     # `secrets` is not an allowed context in a step-level `if:`; a
     # job-level `env` is how it reaches one. Same trick as
     # regression-shard below. IS_FORK is 'false' on push and
     # workflow_dispatch, where `github.event.pull_request` is null and
     # the `&&` short-circuits - those runs are internal by definition.
+    #
+    # IS_FORK means "the PR's head is not this repository", compared by
+    # name rather than read from `head.repo.fork`: a PR whose head repo
+    # was deleted has `head.repo` null, which `.fork` reads as false
+    # (internal) and this reads as external, the safe answer.
+    #
+    # The write token is not checked here: visual-diff-private checks it
+    # itself, as the only job that uses it.
     env:
       TOKEN_PRESENT: ${{ secrets.TEST_MODELS_PRIVATE_TOKEN != '' }}
-      IS_FORK: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork }}
-      # Merge to main and rc tags always; a manual dispatch only when
-      # asked. Never on a pull_request. `push` is branches:[main] +
-      # tags:[rc-*], so naming the event is enough.
-      PRIVATE_NEEDED: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.run_private_shards) }}
+      IS_FORK: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
     steps:
-      - name: Scope of this run
-        id: scope
-        run: |
-          echo "private=${PRIVATE_NEEDED}" >> "$GITHUB_OUTPUT"
-          echo "private headline shards this run: ${PRIVATE_NEEDED}"
+      # The alsocheck parser and the shard lists it reads the headline
+      # codes from. Sparse: this job has a 5-minute budget.
+      - name: Checkout alsocheck parser and shard lists
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+          fetch-depth: 1
+          sparse-checkout: |
+            .github/actions/regression-shard
+            regression/shards
 
-      # Where private shards DO run, a missing token is a
-      # misconfiguration wearing a skip's clothes: a matrix entry whose
-      # every step skips still reports success, so a push to main could
-      # reach auto-publish having tested none of the seven headline
-      # models. Fail here instead - before seven jobs start, and loudly
-      # enough to name the cause. A fork cannot see the secret, but a
-      # fork never pushes to main either, so this cannot fire on one.
-      - name: Require the private-models token where private shards run
-        if: env.PRIVATE_NEEDED == 'true' && env.TOKEN_PRESENT != 'true' && env.IS_FORK != 'true'
-        run: |
-          echo "::error::TEST_MODELS_PRIVATE_TOKEN is empty or unset on a run that executes the private headline shards (event: ${{ github.event_name }}, ref: ${{ github.ref }})."
-          echo "::error::Those seven shards would skip every step and still report success, so this fails instead."
-          echo "::error::Set the secret, or if the private corpus is deliberately unavailable, remove the entries from the regression-shard-private matrix."
-          exit 1
       # Recording a SHA (not a tag) is what makes the baseline
       # reproducible: test-models does not tag reliably, so we track its
       # main branch and pin per-run to the commit we actually tested.
@@ -520,19 +575,100 @@ jobs:
           echo "sha=$SHA" >> "$GITHUB_OUTPUT"
           echo "**Models:** test-models @ \`$SHA\` (ref \`$REF\`)" >> "$GITHUB_STEP_SUMMARY"
 
-      # Skipped on pull_request (no private shards to pin) and on a fork
-      # (no token); an empty output is the expected quiet path in both,
-      # not a failure.
+      # What an alsocheck path is checked against: the public corpus's
+      # file list at the pinned commit. Trees only (blob:none), so this is
+      # a few hundred KB however large the corpus is. A path that is not
+      # in it is rejected without being repeated - it may be a private
+      # filename typed by mistake.
+      - name: List public corpus files at the pinned commit
+        if: github.event_name != 'push'
+        env:
+          SHA: ${{ steps.public.outputs.sha }}
+        run: |
+          set -euo pipefail
+          git init -q public-tree
+          git -C public-tree remote add origin https://github.com/bldrs-ai/test-models.git
+          git -C public-tree fetch -q --depth 1 --filter=blob:none origin "$SHA"
+          git -C public-tree ls-tree -r -z --name-only "$SHA" > public_tree.z
+
+      # The PR description is attacker-controlled (a fork's author writes
+      # it). It reaches the parser only through a file, never through a
+      # `${{ }}` in this script. Read LIVE from the API so that "Re-run
+      # all jobs" after an edit sees the edit (a re-run replays the
+      # original event payload; see `edited` at the top of this file).
+      # The payload is the fallback if the API read fails.
+      - name: Read the PR description
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_BODY: ${{ github.event.pull_request.body }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -uo pipefail
+          if ! gh api "repos/${REPO}/pulls/${PR_NUMBER}" --jq '.body // ""' > pr_body.txt; then
+            echo "::warning::Could not read the PR description from the API; using the copy in this run's event payload, which predates any edit since the event."
+            printf '%s' "$EVENT_BODY" > pr_body.txt
+          fi
+
+      # Which private work this run does, and what alsocheck asked for.
+      # alsocheck.py prints a rejected entry by position and reason only.
+      - name: Scope of this run
+        id: scope
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          DISPATCH_ALSOCHECK: ${{ inputs.alsocheck }}
+          RUN_PRIVATE_SHARDS: ${{ inputs.run_private_shards }}
+        run: |
+          set -euo pipefail
+          ARGS=(--shard-dir regression/shards)
+          if [ -f pr_body.txt ]; then ARGS+=(--body-file pr_body.txt); fi
+          if [ -f public_tree.z ]; then ARGS+=(--public-tree public_tree.z); fi
+          python3 .github/actions/regression-shard/alsocheck.py resolve "${ARGS[@]}"
+
+      # Where private shards DO run, a missing token is a
+      # misconfiguration wearing a skip's clothes: a matrix entry whose
+      # every step skips still reports success, so a push to main could
+      # reach auto-publish having tested none of the seven headline
+      # models. Fail here instead - before seven jobs start, and loudly
+      # enough to name the cause. On a pull_request alsocheck.py has
+      # already dropped the private entries of any run without the token
+      # - a fork, or a same-repo bot PR such as Dependabot's - with a
+      # note, so this fires only on push and dispatch.
+      - name: Require the private-models token where private shards run
+        if: steps.scope.outputs.private_needed == 'true' && env.TOKEN_PRESENT != 'true' && env.IS_FORK != 'true'
+        run: |
+          echo "::error::TEST_MODELS_PRIVATE_TOKEN is empty or unset on a run that executes private shards (event: ${{ github.event_name }}, ref: ${{ github.ref }}, scope: ${{ steps.scope.outputs.private_scope }})."
+          echo "::error::Those shards would skip every step and still report success, so this fails instead."
+          echo "::error::Set the secret, or if the private corpus is deliberately unavailable, remove the entries from the regression-shard-private matrix (or the private codes from this PR's alsocheck line)."
+          exit 1
+
+      # Skipped when no private work is needed (a PR without private
+      # alsocheck entries) and on a fork (no token); an empty output is
+      # the expected quiet path in both, not a failure.
       - name: Resolve private test-models SHA
         id: private
-        if: env.PRIVATE_NEEDED == 'true' && env.TOKEN_PRESENT == 'true'
+        if: steps.scope.outputs.private_needed == 'true' && env.TOKEN_PRESENT == 'true'
         env:
           TOKEN: ${{ secrets.TEST_MODELS_PRIVATE_TOKEN }}
         run: |
           set -euo pipefail
           REF="$TEST_MODELS_PRIVATE_TAG"
-          URL="https://x-access-token:${TOKEN}@github.com/bldrs-ai/test-models-private.git"
-          REFS=$(git ls-remote "$URL" "$REF")
+          # Per-process header, not a URL: nothing on disk or in argv.
+          B64=$(printf 'x-access-token:%s' "$TOKEN" | base64 -w0)
+          echo "::add-mask::$B64"
+          # An empty extraheader first resets any inherited one - actions/checkout
+          # persists GITHUB_TOKEN as http.https://github.com/.extraheader in the
+          # workspace checkout, and two Authorization headers get a 400. git
+          # honours the reset; git-lfs does not, so token-carrying commands also
+          # run outside that checkout (git -C models, or from $RUNNER_TEMP).
+          export GIT_CONFIG_COUNT=2
+          export GIT_CONFIG_KEY_0="http.https://github.com/.extraheader"
+          export GIT_CONFIG_VALUE_0=""
+          export GIT_CONFIG_KEY_1="http.https://github.com/.extraheader"
+          export GIT_CONFIG_VALUE_1="AUTHORIZATION: basic $B64"
+          URL="https://github.com/bldrs-ai/test-models-private.git"
+          REFS=$(cd "$RUNNER_TEMP" && git ls-remote "$URL" "$REF")
           SHA=$(printf '%s\n' "$REFS" | awk '$2 ~ /\^\{\}$/ { print $1; found=1; exit } NR==1 { first=$1 } END { if (!found && first) print first }')
           if [ -z "$SHA" ]; then SHA="$REF"; fi
           if ! [[ "$SHA" =~ ^[0-9a-f]{40}$ ]]; then
@@ -680,9 +816,9 @@ jobs:
   # regression cannot hide behind a short coverage batch. But none of
   # them can be cached: Conway is public, an Actions cache written on the
   # default branch is restorable from a fork's pull_request run, and a
-  # cached private shard would hand over the model bytes and the
-  # TEST_MODELS_PRIVATE_TOKEN that `git remote add` leaves in
-  # models/.git/config. Uncached means ~2.6 GB of private LFS per run,
+  # cached private shard would hand over the model bytes (the token is
+  # no longer on disk: the composite passes it per process as an
+  # http.extraheader, never in a remote URL). Uncached means ~2.6 GB of private LFS per run,
   # and on every ready-PR push that is the dominant cost of the whole
   # pipeline for coverage that did not exist before sharding.
   #
@@ -691,10 +827,23 @@ jobs:
   # caught before a release rather than at review time, which is the
   # trade. See regression/shards/README.md.
   #
-  # A job-level `if:` on event_name, rather than per-step gates in one
-  # combined matrix: a matrix entry whose every step skips still reports
-  # `success`, which is exactly how a private shard could have gone green
-  # without digesting anything.
+  # A job-level `if:` on the run's scope, rather than per-step gates in
+  # one combined matrix: a matrix entry whose every step skips still
+  # reports `success`, which is exactly how a private shard could have
+  # gone green without digesting anything.
+  #
+  # alsocheck CHANGES that invariant, for one case. A PR that names a
+  # headline code (`alsocheck: ILNA250`) runs this job (private_expected
+  # is 'true') with private_scope 'selected', and the entries it did not
+  # name gate their own steps off in the first step below - the matrix
+  # has to stay static, because `shard_list.py check` reads it. So an
+  # unselected entry DOES report `success` having digested nothing. Two
+  # things keep that from hiding a real skip: its job summary says "not
+  # selected" in so many words, and run-ifc-regression asserts at the
+  # ARTIFACT level that exactly the selected shards uploaded results (a
+  # selected entry that skipped by mistake has none; an unselected one
+  # that ran anyway has one). On merge, rc and run_private_shards the
+  # scope is 'all' and every entry runs, as before.
   regression-shard-private:
     needs: [build, resolve-models]
     if: needs.resolve-models.outputs.private_expected == 'true'
@@ -724,10 +873,143 @@ jobs:
             concurrency: '1'
     name: regression-shard-private ${{ matrix.id }}
     steps:
+      # First, and before anything that costs: on an alsocheck PR most
+      # entries are not selected and stop here in seconds. Every later
+      # step is gated on `run`.
+      - name: Is this shard selected?
+        id: select
+        env:
+          ID: ${{ matrix.id }}
+          SCOPE: ${{ needs.resolve-models.outputs.private_scope }}
+          SELECTED: ${{ needs.resolve-models.outputs.private_selected }}
+        run: |
+          set -euo pipefail
+          RUN=false
+          if [ "$SCOPE" = all ]; then
+            RUN=true
+          elif [ "$SCOPE" = selected ]; then
+            case " $SELECTED " in *" $ID "*) RUN=true ;; esac
+          fi
+          echo "run=$RUN" >> "$GITHUB_OUTPUT"
+          if [ "$RUN" = true ]; then
+            echo "$ID: selected (scope $SCOPE)."
+          else
+            # Says so where a reader of a green check looks first.
+            echo "::notice::$ID: NOT SELECTED this run - nothing digested. This run's alsocheck selected only: ${SELECTED:-none}."
+            printf '### %s: not selected\n\nThis shard did **not** run: the success it reports means nothing was digested. This run (scope: %s) selected only: %s.\n' \
+              "$ID" "$SCOPE" "${SELECTED:-none}" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Checkout Conway Repo
+        if: steps.select.outputs.run == 'true'
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup Node
+        if: steps.select.outputs.run == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '26'
+          cache: 'yarn'
+
+      - name: Compute conway-geom submodule SHA
+        if: steps.select.outputs.run == 'true'
+        id: subsha
+        run: echo "sha=$(git -C dependencies/conway-geom rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Install dependencies
+        if: steps.select.outputs.run == 'true'
+        run: yarn install --frozen-lockfile
+
+      - name: Restore WASM build cache (populated by build)
+        if: steps.select.outputs.run == 'true'
+        id: wasm-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            dependencies/conway-geom/Dist
+            dependencies/conway-geom/bin/release
+            compiled/dependencies/conway-geom/Dist
+          key: wasm-${{ runner.os }}-emsdk${{ env.EMSDK_VERSION }}-${{ steps.subsha.outputs.sha }}
+
+      - name: Fail if WASM cache miss
+        if: steps.select.outputs.run == 'true' && steps.wasm-cache.outputs.cache-hit != 'true'
+        run: |
+          echo "::error::WASM cache miss in regression shard; build should have populated it."
+          exit 1
+
+      - name: TypeScript build
+        if: steps.select.outputs.run == 'true'
+        run: yarn build-incremental
+
+      - name: Run shard
+        if: steps.select.outputs.run == 'true'
+        uses: ./.github/actions/regression-shard
+        with:
+          shard-id: ${{ matrix.id }}
+          shard-file: regression/shards/${{ matrix.id }}.txt
+          corpus: private
+          models-ref: ${{ needs.resolve-models.outputs.private_sha }}
+          models-repo: bldrs-ai/test-models-private
+          models-token: ${{ secrets.TEST_MODELS_PRIVATE_TOKEN }}
+          concurrency: ${{ matrix.concurrency }}
+          allow-visual-diff: 'false'
+
+
+  # alsocheck: models a PR named on its `alsocheck:` line (or a dispatch
+  # in its `alsocheck` input) that are not a whole headline shard -
+  # public corpus paths, and private codes outside the seven. Up to two
+  # entries, built by resolve-models: `alsocheck-public` and
+  # `alsocheck-private`, each running ONE generated shard list through
+  # the same composite action as every other shard, so the same digest,
+  # failed.csv and zero-geometry gates apply.
+  #
+  # Outside the "at most 10 shards" cap, deliberately: the cap is on the
+  # FIXED matrices `shard_list.py check` reads, and this one is dynamic,
+  # never more than two entries, and runs only when asked. `check`
+  # reserves the `alsocheck*` ids so no committed list can collide with
+  # these artifacts.
+  #
+  # A private entry is uncached and never renders here (the private
+  # visual diff is visual-diff-private, which publishes nothing to this
+  # repo). On a fork resolve-models drops private entries, so the private
+  # entry never exists without the token.
+  regression-alsocheck:
+    needs: [build, resolve-models]
+    if: >-
+      (github.event_name != 'pull_request' || github.event.pull_request.draft == false) &&
+      needs.resolve-models.outputs.alsocheck_matrix != '[]' &&
+      needs.resolve-models.outputs.alsocheck_matrix != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.resolve-models.outputs.alsocheck_matrix) }}
+    name: regression-alsocheck ${{ matrix.id }}
+    steps:
       - name: Checkout Conway Repo
         uses: actions/checkout@v4
         with:
           submodules: recursive
+
+      # The list is generated, not committed. ENTRIES crosses from
+      # resolve-models through `env:` and is validated again before it is
+      # written: it began as PR-body text.
+      - name: Write this run's alsocheck list
+        env:
+          CORPUS: ${{ matrix.corpus }}
+          ID: ${{ matrix.id }}
+          ENTRIES: ${{ matrix.corpus == 'private' && needs.resolve-models.outputs.alsocheck_private_extra || needs.resolve-models.outputs.alsocheck_public }}
+        run: |
+          set -euo pipefail
+          case "$ID:$CORPUS" in
+            alsocheck-public:public|alsocheck-private:private) ;;
+            *) echo "::error::unexpected alsocheck matrix entry"; exit 1 ;;
+          esac
+          python3 .github/actions/regression-shard/alsocheck.py write-list \
+            --corpus "$CORPUS" --out "alsocheck/$ID.txt"
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -761,25 +1043,37 @@ jobs:
       - name: TypeScript build
         run: yarn build-incremental
 
+      # allow-visual-diff is 'false' for BOTH entries. Private: never
+      # rendered here, as for every private shard. Public: its models are
+      # rendered unconditionally by visual-diff's alsocheck section, so a
+      # digest-changed list from this shard would only duplicate them.
+      #
+      # by-code for the private entry: it may name ANY code in the
+      # manifest, and only the seven headline basenames are accepted in
+      # public logs and artifacts. The batch runs on <CODE><ext> hard
+      # links, so its log, every CSV row and the artifact carry the code.
+      # require-rows: a generated list is new every run, so prove the
+      # batch read each model rather than trusting its exit status.
       - name: Run shard
         uses: ./.github/actions/regression-shard
         with:
           shard-id: ${{ matrix.id }}
-          shard-file: regression/shards/${{ matrix.id }}.txt
-          corpus: private
-          models-ref: ${{ needs.resolve-models.outputs.private_sha }}
-          models-repo: bldrs-ai/test-models-private
-          models-token: ${{ secrets.TEST_MODELS_PRIVATE_TOKEN }}
-          concurrency: ${{ matrix.concurrency }}
+          shard-file: alsocheck/${{ matrix.id }}.txt
+          corpus: ${{ matrix.corpus }}
+          models-ref: ${{ matrix.corpus == 'private' && needs.resolve-models.outputs.private_sha || needs.resolve-models.outputs.public_sha }}
+          models-repo: ${{ matrix.corpus == 'private' && 'bldrs-ai/test-models-private' || 'bldrs-ai/test-models' }}
+          models-token: ${{ matrix.corpus == 'private' && secrets.TEST_MODELS_PRIVATE_TOKEN || '' }}
+          concurrency: '1'
           allow-visual-diff: 'false'
-
+          by-code: ${{ matrix.corpus == 'private' }}
+          require-rows: 'true'
 
   # Required check name. Must stay `run-ifc-regression` — README and any
   # status-check consumers match on it. Tiny: it AND-reduces the shards
   # and merges public visual-diff lists.
   run-ifc-regression:
     name: run-ifc-regression
-    needs: [resolve-models, regression-pack, regression-shard, regression-shard-private]
+    needs: [resolve-models, regression-pack, regression-shard, regression-shard-private, regression-alsocheck]
     if: always() && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -848,7 +1142,17 @@ jobs:
       # BEFORE the AND-reduce below so a red shard still gets its rows
       # quoted on the PR - a crash used to produce no comment at all and
       # you had to open the job log to see WHICH model died.
+      # alsocheck values go through env: they began as PR-body text,
+      # validated or not.
       - name: Build regression comment
+        env:
+          PRIVATE_SCOPE: ${{ needs.resolve-models.outputs.private_scope }}
+          PRIVATE_SELECTED: ${{ needs.resolve-models.outputs.private_selected }}
+          ALSOCHECK_PUBLIC: ${{ needs.resolve-models.outputs.alsocheck_public }}
+          ALSOCHECK_PRIVATE: ${{ needs.resolve-models.outputs.alsocheck_private_requested }}
+          ALSOCHECK_PRIVATE_SKIPPED: ${{ needs.resolve-models.outputs.alsocheck_private_skipped }}
+          PRIVATE_RENDER: ${{ needs.resolve-models.outputs.private_render }}
+          EXTERNAL_PR: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
         run: |
           set -uo pipefail
           # Non-fatal for the same reason as the per-shard fragment: the
@@ -863,7 +1167,21 @@ jobs:
             --run-url "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
             --visual-diff-count "${{ steps.concat.outputs.count }}" \
             --private-reason "${{ needs.resolve-models.outputs.private_expected == 'true' && 'no-token' || 'not-on-prs' }}" \
+            --private-scope "$PRIVATE_SCOPE" \
+            --private-selected "$PRIVATE_SELECTED" \
+            --alsocheck-public "${ALSOCHECK_PUBLIC:-[]}" \
+            --alsocheck-private "${ALSOCHECK_PRIVATE:-[]}" \
+            --alsocheck-private-skipped "$ALSOCHECK_PRIVATE_SKIPPED" \
+            --private-render "${PRIVATE_RENDER:-none}" \
+            --external-pr "$EXTERNAL_PR" \
             || echo "::warning::Could not build the regression comment; the regression-shard-* artifacts still hold every shard's CSVs."
+
+      # The same report in the job summary, so a dispatch (which has no PR
+      # to comment on) still shows it, alsocheck section included. It is
+      # the PR comment's content, so it publishes nothing new.
+      - name: Regression report in the job summary
+        if: ${{ !cancelled() && hashFiles('regression_comment.md') != '' }}
+        run: cat regression_comment.md >> "$GITHUB_STEP_SUMMARY"
 
       # Not on a cancelled run. This job is always(), so a superseding
       # push still starts it after the shards were cancelled, and the
@@ -876,8 +1194,18 @@ jobs:
       # success() is spelled out because naming any status function
       # drops the implicit one, and this step should still not post
       # after an earlier step in this job failed.
+      #
+      # Not on a PR whose head is another repository either: its
+      # GITHUB_TOKEN is read-only whatever `permissions:` says, so the
+      # comment would 403 and turn this required check red on every fork
+      # PR. The report is in the job summary above instead.
+      # !cancelled() alone is not enough: when a superseding push cancels
+      # the run before this always() job starts, the job still runs, sees
+      # cancelled() false, and posted "shards failed before they could
+      # report" for shards that never started (#803, run 46051466997).
+      # Skipping whenever any needed job was cancelled covers that.
       - name: Comment on Pull Request with regression results
-        if: ${{ success() && !cancelled() && github.event_name == 'pull_request' && hashFiles('regression_comment.md') != '' }}
+        if: ${{ success() && !cancelled() && !contains(needs.*.result, 'cancelled') && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && hashFiles('regression_comment.md') != '' }}
         uses: peter-evans/create-or-update-comment@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -886,25 +1214,53 @@ jobs:
 
       # Runs LAST, so a failing shard does not take the comment with it.
       #
-      # regression-shard-private is asserted BOTH ways on purpose. On a
-      # pull_request it must be `skipped` (it is gated off) and on any
-      # other event it must be `success` - so neither a private shard
-      # that quietly stopped running on merge, nor one that started
-      # running on PRs and spending private LFS, can pass unnoticed.
+      # regression-shard-private is asserted BOTH ways on purpose. Where
+      # it was expected - merge, rc, run_private_shards, or a PR whose
+      # alsocheck named a headline code - it must be `success`; anywhere
+      # else (a pull_request that asked for nothing private) it must be
+      # `skipped`. So neither a private shard that quietly stopped running
+      # on merge, nor one that started running on PRs and spending private
+      # LFS, can pass unnoticed. regression-alsocheck is held the same way.
+      #
+      # The job result is no longer enough on its own: under an alsocheck
+      # selection the unselected entries report success having run
+      # nothing, so a selected entry that skipped by mistake would look
+      # identical. `verify-artifacts` closes that at the artifact level:
+      # exactly the expected shards uploaded results - none missing, and
+      # no unselected headline shard spent private LFS.
       - name: All shards passed
+        env:
+          PRIVATE_EXPECTED: ${{ needs.resolve-models.outputs.private_expected }}
+          PRIVATE_SCOPE: ${{ needs.resolve-models.outputs.private_scope }}
+          PRIVATE_SELECTED: ${{ needs.resolve-models.outputs.private_selected }}
+          ALSOCHECK_MATRIX: ${{ needs.resolve-models.outputs.alsocheck_matrix }}
+          RESOLVE_RESULT: ${{ needs.resolve-models.result }}
+          PACK_RESULT: ${{ needs.regression-pack.result }}
+          SHARD_RESULT: ${{ needs.regression-shard.result }}
+          PRIVATE_RESULT: ${{ needs.regression-shard-private.result }}
+          ALSO_RESULT: ${{ needs.regression-alsocheck.result }}
         run: |
-          echo "resolve-models:           ${{ needs.resolve-models.result }}"
-          echo "regression-pack:          ${{ needs.regression-pack.result }}"
-          echo "regression-shard:         ${{ needs.regression-shard.result }}"
-          echo "regression-shard-private: ${{ needs.regression-shard-private.result }} (event: ${{ github.event_name }})"
-          test "${{ needs.resolve-models.result }}" = "success"
-          test "${{ needs.regression-pack.result }}" = "success"
-          test "${{ needs.regression-shard.result }}" = "success"
-          if [ "${{ needs.resolve-models.outputs.private_expected }}" = "true" ]; then
-            test "${{ needs.regression-shard-private.result }}" = "success"
+          set -euo pipefail
+          echo "resolve-models:           $RESOLVE_RESULT"
+          echo "regression-pack:          $PACK_RESULT"
+          echo "regression-shard:         $SHARD_RESULT"
+          echo "regression-shard-private: $PRIVATE_RESULT (event: $GITHUB_EVENT_NAME, scope: ${PRIVATE_SCOPE:-?}, selected: ${PRIVATE_SELECTED:-none})"
+          echo "regression-alsocheck:     $ALSO_RESULT (matrix: ${ALSOCHECK_MATRIX:-?})"
+          test "$RESOLVE_RESULT" = "success"
+          test "$PACK_RESULT" = "success"
+          test "$SHARD_RESULT" = "success"
+          if [ "$PRIVATE_EXPECTED" = "true" ]; then
+            test "$PRIVATE_RESULT" = "success"
           else
-            test "${{ needs.regression-shard-private.result }}" = "skipped"
+            test "$PRIVATE_RESULT" = "skipped"
           fi
+          if [ -n "$ALSOCHECK_MATRIX" ] && [ "$ALSOCHECK_MATRIX" != "[]" ]; then
+            test "$ALSO_RESULT" = "success"
+          else
+            test "$ALSO_RESULT" = "skipped"
+          fi
+          python3 .github/actions/regression-shard/alsocheck.py verify-artifacts \
+            --artifacts shards-in --shard-dir regression/shards
 
   # ---------------------------------------------------------------------------
   # Visual diff: render before/after images for every model whose regression
@@ -919,25 +1275,66 @@ jobs:
   # files; the comment links them by commit SHA so rows stay immutable.
   # ---------------------------------------------------------------------------
   visual-diff:
-    needs: run-ifc-regression
+    needs: [resolve-models, run-ifc-regression]
     # The draft clause is redundant today — a skipped `needs` job skips this
     # one regardless — but it is stated so the draft rule is greppable from
-    # every job it governs, and so this stays correct if visual-diff ever
-    # gains an always()/!cancelled() guard.
+    # every job it governs, and so this stays correct now that the job has
+    # a !cancelled() guard.
+    #
+    # The guard is load-bearing, not tidy. An `if:` with no status
+    # function gets an implicit success(), and GitHub evaluates that over
+    # the WHOLE dependency chain, not just `needs`: "a failure or skip
+    # applies to all jobs in the dependency chain from the point of
+    # failure or skip onwards" (workflow syntax, jobs.<job_id>.needs).
+    # run-ifc-regression needs regression-shard-private, which is
+    # `skipped` on every pull request, so since #707 this job was skipped
+    # on every PR even with digest-changed models to render (bldrs-ai/conway#801,
+    # run 45560353673: visual_diff_count=1, visual-diff skipped). So the
+    # condition names the one result it depends on instead:
+    # run-ifc-regression is the AND-reduce gate, and its success already
+    # means every shard came out as expected (including "skipped where
+    # it should be"). Same shape on every job downstream of it.
+    #
+    # Two lists, two sections. Digest-changed models, on a pull request,
+    # as before. alsocheck PUBLIC models, on a pull request or a dispatch,
+    # rendered whether or not their digest moved. Private alsocheck
+    # models are never rendered here: see visual-diff-private.
+    #
+    # Not for a PR whose head is another repository (a fork, or a
+    # deleted head): its GITHUB_TOKEN is read-only, so it can neither
+    # push the images nor comment, and the job would go red at the
+    # first. The regression comment says the visual diff was not run.
     if: >-
-      github.event_name == 'pull_request' &&
-      github.event.pull_request.draft == false &&
-      needs.run-ifc-regression.outputs.visual_diff_count != '0'
+      !cancelled() &&
+      needs.resolve-models.result == 'success' &&
+      needs.run-ifc-regression.result == 'success' &&
+      ((github.event_name == 'pull_request' &&
+        github.event.pull_request.draft == false &&
+        github.event.pull_request.head.repo.full_name == github.repository &&
+        (needs.run-ifc-regression.outputs.visual_diff_count != '0' ||
+         needs.resolve-models.outputs.alsocheck_public_count != '0')) ||
+       (github.event_name == 'workflow_dispatch' &&
+        needs.resolve-models.outputs.alsocheck_public_count != '0'))
     # Public ubuntu-24.04 is 4 vCPU / 16 GB — more RAM than the paid
     # 8 GB SKU this used to share. The allocation crash that forced the
     # large runner was on the old 2-vCPU/7 GB image. Disk fits because
     # this job never materializes the corpus: skip-smudge clone, then an
-    # LFS pull of changed_models.txt only.
+    # LFS pull of the listed models only.
+    #
+    # 45 minutes: the 30 this job had was sized for --max 24 digest-changed
+    # models; alsocheck adds up to 5 more at the same 180 s export
+    # timeout, which is up to 15 more minutes when every one hangs.
+    # Neither figure is a worst case for all 29 hanging (that is 87
+    # minutes); like the 30 before it, this budgets for a few.
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 45
     permissions:
       contents: write       # push rendered PNGs to visual-diff-assets
       pull-requests: write  # post the before/after comment
+    env:
+      # Digest-changed models are a pull-request section only; a dispatch
+      # renders just what its alsocheck input named.
+      CHANGED_SECTION: ${{ github.event_name == 'pull_request' && needs.run-ifc-regression.outputs.visual_diff_count != '0' }}
     steps:
       - name: Checkout conway (render scripts)
         uses: actions/checkout@v4
@@ -950,46 +1347,52 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Download candidate tarball
-        uses: actions/download-artifact@v4
-        with:
-          name: ${{ needs.run-ifc-regression.outputs.package_tgz }}
-          path: artifacts
-
       - name: Download changed-model list
+        if: env.CHANGED_SECTION == 'true'
         uses: actions/download-artifact@v4
         with:
           name: visual-diff-models-${{ github.run_id }}
 
-      - name: Unpack candidate + fetch base package
+      # Public paths only (resolve-models checked each is a file in the
+      # pinned public corpus); re-validated on the way in, via env. A
+      # model in both lists is rendered once, in the alsocheck section,
+      # where it is never threshold-suppressed.
+      - name: Write alsocheck model list
+        env:
+          ENTRIES: ${{ needs.resolve-models.outputs.alsocheck_public }}
         run: |
-          mkdir -p engines/cand engines/base
-          tar -xzf "artifacts/${{ needs.run-ifc-regression.outputs.package_tgz }}" \
-            -C engines/cand --strip-components=1
-          BASE_TGZ=$(npm pack @bldrs-ai/conway@latest --silent)
-          tar -xzf "$BASE_TGZ" -C engines/base --strip-components=1
-          # npm tarballs ship no node_modules, but the CLIs import runtime
-          # deps (yargs, gl-matrix, three, seedrandom) at startup — without
-          # this every export dies on ERR_MODULE_NOT_FOUND. legacy-peer-deps
-          # because the shipped package.json's devDependencies carry a
-          # typedoc/typescript peer conflict npm would otherwise refuse on
-          # (even with --omit=dev); ignore-scripts skips the husky prepare
-          # hook, which isn't in the tarball.
-          (cd engines/cand && npm install --omit=dev --legacy-peer-deps \
-            --ignore-scripts --no-audit --no-fund --silent)
-          (cd engines/base && npm install --omit=dev --legacy-peer-deps \
-            --ignore-scripts --no-audit --no-fund --silent)
+          set -euo pipefail
+          touch changed_models.txt
+          if [ "$CHANGED_SECTION" != true ]; then : > changed_models.txt; fi
+          if [ -n "$ENTRIES" ] && [ "$ENTRIES" != "[]" ]; then
+            python3 .github/actions/regression-shard/alsocheck.py write-list \
+              --corpus public --out alsocheck_list.txt
+            grep -v '^#' alsocheck_list.txt > also_models.txt
+            # Drop alsocheck models from the changed list (its lines may
+            # carry a `\tnew` marker, so compare the path field only).
+            awk -F'\t' 'NR==FNR { also[$0]=1; next } !($1 in also)' \
+              also_models.txt changed_models.txt > changed_rest.txt
+            mv changed_rest.txt changed_models.txt
+          else
+            : > also_models.txt
+          fi
+          echo "$(wc -l < changed_models.txt) digest-changed, $(wc -l < also_models.txt) alsocheck model(s) to render"
+
+      - name: Engines (candidate + published base)
+        uses: ./.github/actions/visual-diff-engines
+        with:
+          package-tgz: ${{ needs.run-ifc-regression.outputs.package_tgz }}
 
       # No cache to restore: the shards cache `models` keyed on their own
       # list, which is neither this path nor this content. A skip-smudge
       # clone is a few seconds and a few MB, so there is nothing here
       # worth a cache entry - the expensive part is the LFS pull below,
-      # and that is already narrowed to the changed models.
+      # and that is already narrowed to the listed models.
       - name: Checkout Test Models Repo
         env:
           GIT_LFS_SKIP_SMUDGE: '1'
+          SHA: ${{ needs.run-ifc-regression.outputs.test_models_sha }}
         run: |
-          SHA="${{ needs.run-ifc-regression.outputs.test_models_sha }}"
           git init test-models
           git -C test-models remote add origin https://github.com/bldrs-ai/test-models.git
           git -C test-models fetch --depth 1 origin "$SHA"
@@ -1017,19 +1420,20 @@ jobs:
 
           root = Path('test-models')
           rels = []
-          for line in open('changed_models.txt'):
-              rel = line.split('\t', 1)[0].strip()
-              if rel:
-                  rels.append(rel)
+          for listing in ('changed_models.txt', 'also_models.txt'):
+              for line in open(listing):
+                  rel = line.split('\t', 1)[0].strip()
+                  if rel and rel not in rels:
+                      rels.append(rel)
           stubs = []
           for rel in rels:
               p = root / rel
               if not p.is_file():
-                  print(f'::warning::changed model missing: {rel}')
+                  print(f'::warning::listed model missing: {rel}')
                   continue
               if is_stub(p):
                   stubs.append(rel)
-          print(f'{len(rels)} changed models, {len(stubs)} LFS stubs to pull')
+          print(f'{len(rels)} listed models, {len(stubs)} LFS stubs to pull')
           if not stubs:
               raise SystemExit(0)
           subprocess.check_call(['git', 'lfs', 'install', '--local'], cwd=root)
@@ -1046,29 +1450,48 @@ jobs:
       # script's 600 s default. The default exists to preserve this job's
       # historical 10 minutes, but 600 s is not a cap this job can afford:
       # rc has 120 minutes for --max 60, so one hung export costs it ~2.5%
-      # of its budget, while this job has 30 minutes for --max 24, where
+      # of its budget, while this job had 30 minutes for --max 24, where
       # the same hang costs ~45% and two end the job. Same runner class as
       # rc (4 vCPU) with more RAM (16 GB vs 8), the same renderer and the
       # same threshold, so rc's 180 s carries over. conway#792 is the case
       # it guards: a GLB writer that hit bad_alloc and never exited.
+      #
+      # alsocheck models render with --diff-threshold -1, which no pixel
+      # fraction is below: a model a PR asked about is shown even when it
+      # renders identically - "no visible change" is the answer it asked
+      # for. At most five (alsocheck.py's cap), so the 30 minutes holds.
       - name: Render before/after pairs
         run: |
-          sed "s|^|$PWD/test-models/|" changed_models.txt > abs_models.txt
-          node scripts/visual_diff_report.cjs \
-            --models abs_models.txt \
-            --base engines/base --cand engines/cand \
-            --out vdout --max 24 \
-            --diff-threshold 0.0005 \
-            --export-timeout 180
+          set -euo pipefail
+          mkdir -p vdout
+          if [ -s changed_models.txt ]; then
+            sed "s|^|$PWD/test-models/|" changed_models.txt > abs_models.txt
+            node scripts/visual_diff_report.cjs \
+              --models abs_models.txt \
+              --base engines/base --cand engines/cand \
+              --out vdout --max 24 \
+              --diff-threshold 0.0005 \
+              --export-timeout 180
+          fi
+          if [ -s also_models.txt ]; then
+            sed "s|^|$PWD/test-models/|" also_models.txt > abs_also.txt
+            node scripts/visual_diff_report.cjs \
+              --models abs_also.txt \
+              --base engines/base --cand engines/cand \
+              --out vdout/alsocheck --max 5 \
+              --diff-threshold -1 \
+              --export-timeout 180
+          fi
 
       - name: Publish images to assets branch
         id: assets
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # A dispatch has no PR number; its renders go under dispatch/.
+          DEST: ${{ github.event_name == 'pull_request' && format('pr-{0}/{1}', github.event.pull_request.number, github.run_id) || format('dispatch/{0}', github.run_id) }}
         run: |
           set -euo pipefail
           REPO_URL="https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
-          DEST="pr-${{ github.event.pull_request.number }}/${{ github.run_id }}"
           if git clone --depth 1 --branch visual-diff-assets "$REPO_URL" assets 2>/dev/null; then
             cd assets
           else
@@ -1077,12 +1500,13 @@ jobs:
             git init -b visual-diff-assets
             git remote add origin "$REPO_URL"
           fi
-          mkdir -p "$DEST"
+          mkdir -p "$DEST/alsocheck"
           cp ../vdout/*.png "$DEST"/ 2>/dev/null || true
+          cp ../vdout/alsocheck/*.png "$DEST/alsocheck"/ 2>/dev/null || true
           git add -A
           git -c user.name="github-actions[bot]" \
               -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
-              commit -m "Visual diff assets for PR #${{ github.event.pull_request.number }} (run ${{ github.run_id }})" \
+              commit -m "Visual diff assets for ${DEST} (run ${{ github.run_id }})" \
             || true
           # Another PR's visual-diff job can push between our clone and push;
           # rebase (assets commits never conflict — disjoint run-id dirs).
@@ -1097,22 +1521,317 @@ jobs:
       - name: Finalize report
         run: |
           RAW="https://raw.githubusercontent.com/${{ github.repository }}/${{ steps.assets.outputs.sha }}/${{ steps.assets.outputs.dest }}"
-          sed "s|RAW_URL_BASE|$RAW|g" vdout/report.md > report_final.md
           {
-            echo "## Visual Diff (digest-changed & new models)"
+            if [ -f vdout/report.md ]; then
+              echo "## Visual Diff (digest-changed & new models)"
+            else
+              echo "## Visual Diff (alsocheck)"
+            fi
             echo ""
             echo "Base: published \`@bldrs-ai/conway\` (main). Candidate: this PR's build."
             echo "Each row shares one camera framed on the union of both bounds — scale differences are real."
             echo ""
-            cat report_final.md
+            if [ -f vdout/alsocheck/report.md ]; then
+              echo "### alsocheck (public models this PR named; always shown)"
+              echo ""
+              sed "s|RAW_URL_BASE|$RAW/alsocheck|g" vdout/alsocheck/report.md
+              echo ""
+            fi
+            if [ -f vdout/report.md ]; then
+              if [ -f vdout/alsocheck/report.md ]; then
+                echo "### Digest-changed models"
+                echo ""
+              fi
+              sed "s|RAW_URL_BASE|$RAW|g" vdout/report.md
+            fi
           } > comment.md
 
       - name: Comment on Pull Request
+        if: github.event_name == 'pull_request'
         uses: peter-evans/create-or-update-comment@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           issue-number: ${{ github.event.pull_request.number }}
           body-path: comment.md
+
+      # A dispatch has no PR to comment on; the report goes here instead.
+      - name: Report in the job summary
+        if: github.event_name != 'pull_request'
+        run: cat comment.md >> "$GITHUB_STEP_SUMMARY"
+
+  # ---------------------------------------------------------------------------
+  # Visual diff for PRIVATE alsocheck models. Renders never reach anything
+  # public: not this repo's visual-diff-assets branch, not an Actions
+  # artifact (this job uploads none), not the job log (the renderer only
+  # ever sees the models as code-named hard links, so what it prints and
+  # the PNG names say the code, and --quiet-child-stderr keeps the
+  # engines' error text out of the log), and not the PR comment, which
+  # carries codes and links only - no embedded image, no pixel figure.
+  #
+  # The images and the renderer's full report are pushed to the
+  # `visual-diff-assets` branch of bldrs-ai/test-models-private, under
+  # conway/pr-<N>/<run id>/ (conway/dispatch/<run id>/ for a dispatch).
+  # There is no fallback destination: a push that fails (a token without
+  # write access, say) fails the job; no render is ever sent elsewhere.
+  #
+  # The push uses TEST_MODELS_PRIVATE_TOKEN, the same repo secret every
+  # private shard reads with, which must therefore have Contents: read
+  # AND write on test-models-private (maintainer decision, #803: one
+  # token, not a separate write secret). That is an ACCEPTED RISK: a
+  # pull_request run uses the BRANCH's own workflow file, so anyone who
+  # can push a branch here can read the token and so write to
+  # test-models-private; and every job that carries it (each private
+  # shard, which runs PR-built code) carries write access too. Acceptable
+  # only while the people with push access here are the people trusted
+  # with write access there. A ruleset on test-models-private protecting
+  # `main` keeps a leaked token off the corpus and its baselines. To
+  # tighten further, give the push its own token in a GitHub Environment
+  # with required reviewers and add `environment:` to this job.
+  #
+  # Inside this job the token appears in two steps' env only: the corpus
+  # checkout, which runs before any PR code and leaves nothing on disk,
+  # and the last one, which runs only git (absolute /usr/bin/git, an
+  # emptied environment, no global or system config, no hooks) and cp.
+  # Every step that runs PR code (the engines and their npm installs,
+  # the renderer, alsocheck.py) comes between them, without it. That
+  # stops a script from simply reading the token. It is not a sandbox:
+  # an earlier step's code can still poison later steps (GITHUB_ENV,
+  # GITHUB_PATH, sudo, a leftover process), so it narrows the exposure
+  # but does not remove it. The token travels only as a per-process
+  # http.extraheader and is never written to .git/config.
+  #
+  # Not on a fork (no secrets; resolve-models dropped its private
+  # entries) and not on a draft. Like visual-diff, it needs
+  # run-ifc-regression to have passed - named explicitly, with
+  # !cancelled(), for the reason on visual-diff: under an implicit
+  # success() a skipped ancestor (regression-alsocheck on a run with no
+  # public alsocheck entries, say) would skip this job too.
+  # ---------------------------------------------------------------------------
+  visual-diff-private:
+    needs: [resolve-models, run-ifc-regression]
+    if: >-
+      !cancelled() &&
+      needs.resolve-models.result == 'success' &&
+      needs.run-ifc-regression.result == 'success' &&
+      needs.resolve-models.outputs.private_render == 'true' &&
+      needs.resolve-models.outputs.private_sha != '' &&
+      ((github.event_name == 'pull_request' && github.event.pull_request.draft == false) ||
+      github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-24.04
+    # Up to 5 models, the big ones exported one engine at a time with a
+    # 900 s timeout each: 5 x 2 x 15 min is 150 minutes if every export
+    # hangs. Typical is a few minutes per model.
+    timeout-minutes: 160
+    permissions:
+      contents: read
+      pull-requests: write  # post the codes-and-links comment
+    env:
+      WRITE_TOKEN_PRESENT: ${{ secrets.TEST_MODELS_PRIVATE_TOKEN != '' }}
+      PRIVATE_REPO: bldrs-ai/test-models-private
+      ASSETS_BRANCH: visual-diff-assets
+      DEST: ${{ github.event_name == 'pull_request' && format('conway/pr-{0}/{1}', github.event.pull_request.number, github.run_id) || format('conway/dispatch/{0}', github.run_id) }}
+    steps:
+      - name: Checkout conway (render scripts)
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+          fetch-depth: 1
+
+      - name: Write the private model list
+        env:
+          ENTRIES: ${{ needs.resolve-models.outputs.alsocheck_private }}
+        run: |
+          python3 .github/actions/regression-shard/alsocheck.py write-list \
+            --corpus private --out private_render.txt
+
+      - name: Note a missing write token
+        if: env.WRITE_TOKEN_PRESENT != 'true'
+        run: |
+          echo "::warning::TEST_MODELS_PRIVATE_TOKEN is not set; private renders have no destination, so nothing is rendered."
+
+      - name: Setup Node
+        if: env.WRITE_TOKEN_PRESENT == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Engines (candidate + published base)
+        if: env.WRITE_TOKEN_PRESENT == 'true'
+        uses: ./.github/actions/visual-diff-engines
+        with:
+          package-tgz: ${{ needs.run-ifc-regression.outputs.package_tgz }}
+
+      # Read token as a per-process header (see the job comment), then
+      # LFS for the named codes only, then code-named hard links for the
+      # renderer. Not cached, as for every private shard.
+      - name: Checkout private corpus
+        if: env.WRITE_TOKEN_PRESENT == 'true'
+        env:
+          GIT_LFS_SKIP_SMUDGE: '1'
+          TOKEN: ${{ secrets.TEST_MODELS_PRIVATE_TOKEN }}
+          SHA: ${{ needs.resolve-models.outputs.private_sha }}
+        run: |
+          set -euo pipefail
+          B64=$(printf 'x-access-token:%s' "$TOKEN" | base64 -w0)
+          echo "::add-mask::$B64"
+          # An empty extraheader first resets any inherited one - actions/checkout
+          # persists GITHUB_TOKEN as http.https://github.com/.extraheader in the
+          # workspace checkout, and two Authorization headers get a 400. git
+          # honours the reset; git-lfs does not, so token-carrying commands also
+          # run outside that checkout (git -C models, or from $RUNNER_TEMP).
+          export GIT_CONFIG_COUNT=2
+          export GIT_CONFIG_KEY_0="http.https://github.com/.extraheader"
+          export GIT_CONFIG_VALUE_0=""
+          export GIT_CONFIG_KEY_1="http.https://github.com/.extraheader"
+          export GIT_CONFIG_VALUE_1="AUTHORIZATION: basic $B64"
+          git init -q models
+          git -C models remote add origin "https://github.com/${PRIVATE_REPO}.git"
+          git -C models fetch -q --depth 1 origin "$SHA"
+          git -C models checkout -q "$SHA"
+          python3 .github/actions/regression-shard/shard_list.py pull private_render.txt models
+          python3 .github/actions/regression-shard/shard_list.py link \
+            private_render.txt models by-code --out abs_private.txt
+          if grep -rqiE --exclude-dir=objects 'x-access-token|authorization' models/.git; then
+            echo "::error::a credential reached models/.git"; exit 1
+          fi
+
+      # Same engines and threshold as visual-diff's alsocheck section:
+      # always shown, at most five. Sized for the headline models (PSB900
+      # is ~900 MB and peaks at roughly twelve times that): a model over
+      # 300 MB is exported one engine at a time rather than two side by
+      # side on the 16 GB runner, and each export gets 900 s, not 180.
+      # --quiet-child-stderr: the engines' error text describes the
+      # model's internals; it stays in the private report.
+      - name: Render before/after pairs
+        if: env.WRITE_TOKEN_PRESENT == 'true'
+        run: |
+          node scripts/visual_diff_report.cjs \
+            --models abs_private.txt \
+            --base engines/base --cand engines/cand \
+            --out vdout-private --max 5 \
+            --diff-threshold -1 \
+            --export-timeout 900 \
+            --serial-over-mb 300 \
+            --quiet-child-stderr true
+
+      # The payload the push step copies, as plain files. The renderer's
+      # report, with image links made relative, becomes the directory's
+      # README so it renders in the private repo's tree view.
+      - name: Stage the private payload
+        if: env.WRITE_TOKEN_PRESENT == 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p payload
+          cp vdout-private/*.png payload/ 2>/dev/null || true
+          {
+            echo "# conway visual diff (alsocheck, private models)"
+            echo ""
+            echo "Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+            echo ""
+            if [ -f vdout-private/report.md ]; then
+              sed "s|RAW_URL_BASE|.|g" vdout-private/report.md
+            else
+              echo "_The renderer wrote no report; see the run's job log._"
+            fi
+          } > payload/README.md
+
+      # Built before the push, so no PR-branch script runs once the write
+      # token is in the job; it links the branch path, not a commit.
+      - name: Build the codes-and-links comment
+        id: comment
+        if: ${{ !cancelled() }}
+        env:
+          ENTRIES: ${{ needs.resolve-models.outputs.alsocheck_private }}
+        run: |
+          python3 .github/actions/regression-shard/alsocheck.py private-render-comment \
+            --png-dir payload --repo "$PRIVATE_REPO" \
+            --branch "$ASSETS_BRANCH" --dest "$DEST" \
+            --write-token "$WRITE_TOKEN_PRESENT" \
+            --out private_comment.md
+          cat private_comment.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Comment on Pull Request
+        if: ${{ !cancelled() && github.event_name == 'pull_request' && hashFiles('private_comment.md') != '' }}
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          issue-number: ${{ github.event.pull_request.number }}
+          body-path: private_comment.md
+
+      # LAST, and the only step after any PR code that sees the token
+      # (TEST_MODELS_PRIVATE_TOKEN, which needs write here). git and cp
+      # only, through G(): /usr/bin/git in an emptied environment with no
+      # global or system config and hooks off, so neither PATH, a
+      # GITHUB_ENV variable, ~/.gitconfig nor a planted hook can reroute
+      # or capture the push. A fresh clone made here, not one an earlier
+      # step could have touched. Fails after pushing if any requested
+      # code rendered nothing.
+      - name: Push renders to the private repo
+        if: env.WRITE_TOKEN_PRESENT == 'true'
+        env:
+          WRITE_TOKEN: ${{ secrets.TEST_MODELS_PRIVATE_TOKEN }}
+          UNRENDERED: ${{ steps.comment.outputs.unrendered }}
+        run: |
+          set -euo pipefail
+          B64=$(printf 'x-access-token:%s' "$WRITE_TOKEN" | /usr/bin/base64 -w0)
+          echo "::add-mask::$B64"
+          unset WRITE_TOKEN
+          PUSH_HOME=$(/usr/bin/mktemp -d)
+          REPO_DIR="$PUSH_HOME/assets"
+          URL="https://github.com/${PRIVATE_REPO}.git"
+          # From PUSH_HOME (in a subshell, so the step's own cwd is kept),
+          # outside the workspace checkout: git reads the
+          # config of the repo it starts in, emptied environment or not, and
+          # actions/checkout left an Authorization extraheader there.
+          G() {
+            ( cd "$PUSH_HOME" && exec /usr/bin/env -i PATH=/usr/bin:/bin HOME="$PUSH_HOME" \
+              GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 \
+              GIT_TERMINAL_PROMPT=0 GIT_LFS_SKIP_SMUDGE=1 \
+              GIT_AUTHOR_NAME="github-actions[bot]" GIT_COMMITTER_NAME="github-actions[bot]" \
+              GIT_AUTHOR_EMAIL="41898282+github-actions[bot]@users.noreply.github.com" \
+              GIT_COMMITTER_EMAIL="41898282+github-actions[bot]@users.noreply.github.com" \
+              GIT_CONFIG_COUNT=3 \
+              GIT_CONFIG_KEY_0="http.https://github.com/.extraheader" GIT_CONFIG_VALUE_0="" \
+              GIT_CONFIG_KEY_1="http.https://github.com/.extraheader" \
+              GIT_CONFIG_VALUE_1="AUTHORIZATION: basic $B64" \
+              GIT_CONFIG_KEY_2=core.hooksPath GIT_CONFIG_VALUE_2=/dev/null \
+              /usr/bin/git "$@" )
+          }
+          # Missing branch (first private render ever) vs a failed read:
+          # ls-remote errors on the second, and an orphan branch is made
+          # only on the first, so it carries none of the corpus's history
+          # or LFS objects.
+          # A plain assignment, so a failed ls-remote stops the step
+          # under `set -e` instead of reading as "no branch".
+          HEADS=$(G ls-remote --heads "$URL" "$ASSETS_BRANCH")
+          if [ -n "$HEADS" ]; then
+            G clone -q --depth 1 --branch "$ASSETS_BRANCH" "$URL" "$REPO_DIR"
+          else
+            G init -q -b "$ASSETS_BRANCH" "$REPO_DIR"
+          fi
+          /usr/bin/mkdir -p "$REPO_DIR/$DEST"
+          /usr/bin/cp -R payload/. "$REPO_DIR/$DEST/"
+          G -C "$REPO_DIR" add -A
+          G -C "$REPO_DIR" commit -q -m "conway visual diff assets: ${DEST}" || true
+          pushed=false
+          for i in 1 2 3; do
+            if G -C "$REPO_DIR" push -q "$URL" "HEAD:refs/heads/${ASSETS_BRANCH}"; then
+              pushed=true; break
+            fi
+            # Another run pushed first; its files are in another run's
+            # directory, so the rebase cannot conflict.
+            G -C "$REPO_DIR" pull -q --rebase "$URL" "$ASSETS_BRANCH" || true
+            /usr/bin/sleep $((i * 2))
+          done
+          /usr/bin/rm -rf "$PUSH_HOME"
+          if [ "$pushed" != true ]; then
+            echo "::error::Could not push private renders to ${PRIVATE_REPO}@${ASSETS_BRANCH}. Nothing was published anywhere else; the comment's links will not resolve. Check that TEST_MODELS_PRIVATE_TOKEN has Contents: read and write on ${PRIVATE_REPO} (a fine-grained token's permission change may await org approval), and that no ruleset blocks pushes to ${ASSETS_BRANCH}."
+            exit 1
+          fi
+          if [ -n "$UNRENDERED" ]; then
+            echo "::error::Rendered nothing for: ${UNRENDERED}. A requested model with no image cannot pass."
+            exit 1
+          fi
 
   # ---------------------------------------------------------------------------
   # Headless-three perf benchmark (public models).
@@ -1135,7 +1854,17 @@ jobs:
     # run-ifc-regression (ungated) still run on the tag, so the candidate
     # tarball this job benchmarks is produced; auto-publish is
     # main-branch-only and does not fire on a tag ref.
-    if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/rc-')) || (github.event_name == 'workflow_dispatch' && inputs.run_perf)
+    #
+    # !cancelled() and the run-ifc-regression result, for the reason on
+    # visual-diff: without a status function the implicit success() spans
+    # the whole dependency chain, so on a plain dispatch (run_private_shards
+    # off, private shards `skipped`) this job was skipped too - on exactly
+    # the run the dispatch exists for. The outer parentheses keep the rc-tag
+    # arm inside the guard; run_perf (#802) lets a dispatch opt out.
+    if: >-
+      !cancelled() && needs.run-ifc-regression.result == 'success' &&
+      ((github.event_name == 'push' && startsWith(github.ref, 'refs/tags/rc-')) ||
+      (github.event_name == 'workflow_dispatch' && inputs.run_perf))
     runs-on: ubuntu-24.04-4vcpu-8gb-150gbssd
     # Full set locally takes ~10 min; H3 build + clone adds ~5-10 min. Cap at
     # 60 to bound runner-minute cost on a hung benchmark.
@@ -1460,7 +2189,11 @@ jobs:
     # run-ifc-regression (ungated) still run on the tag, so the candidate
     # tarball this job benchmarks is produced; auto-publish is
     # main-branch-only and does not fire on a tag ref.
-    if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/rc-')) || (github.event_name == 'workflow_dispatch' && inputs.run_perf)
+    # Status functions and run_perf as on perf-three-public.
+    if: >-
+      !cancelled() && needs.run-ifc-regression.result == 'success' &&
+      ((github.event_name == 'push' && startsWith(github.ref, 'refs/tags/rc-')) ||
+      (github.event_name == 'workflow_dispatch' && inputs.run_perf))
     runs-on: ubuntu-24.04-4vcpu-8gb-150gbssd
     timeout-minutes: 60
     permissions:
@@ -1849,7 +2582,17 @@ jobs:
   # ---------------------------------------------------------------------------
   auto-publish:
     needs: [build, run-ifc-regression]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    # Both results named, with !cancelled(), rather than the implicit
+    # success() - which spans every ancestor, not just `needs` (see
+    # visual-diff). Today every ancestor runs on a push to main, so this
+    # changes nothing there; it stops a skipped ancestor ever silently
+    # skipping a release. The publish still requires a green build and a
+    # green regression gate, and still never runs on a cancelled run.
+    if: >-
+      !cancelled() &&
+      needs.build.result == 'success' &&
+      needs.run-ifc-regression.result == 'success' &&
+      github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04-4vcpu-8gb-150gbssd
     permissions:
       contents: write    # tag push

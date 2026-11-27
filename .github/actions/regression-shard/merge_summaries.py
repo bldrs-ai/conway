@@ -8,18 +8,26 @@ single-job report used to read.
 
 A shard whose fragment is missing is called out rather than skipped: it
 means the job died before the summary step, which is exactly the case
-a silent omission would hide.
+a silent omission would hide. "Missing" is judged against what this run
+SELECTED: a headline shard that alsocheck did not name, or that a pull
+request never runs, is reported as not selected, not as failed.
+
+Models a PR named on its `alsocheck:` line get their own section ahead
+of the fixed shards, so the reviewer reads the models the fix is for
+first. See alsocheck.py.
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from alsocheck import ALSOCHECK_PRIVATE_ID, ALSOCHECK_PUBLIC_ID  # noqa: E402
 from shard_list import shard_entries  # noqa: E402 - needs the path above
 
 # GitHub rejects an issue-comment body over 65536 characters. Leave room
@@ -51,6 +59,67 @@ def fragment(root: Path, shard: str) -> str | None:
     return None
 
 
+def _json_list(raw: str) -> list[str]:
+    try:
+        value = json.loads(raw or '[]')
+    except json.JSONDecodeError:
+        return []
+    return [v for v in value if isinstance(v, str)] if isinstance(
+        value, list) else []
+
+
+def _alsocheck_section(public: list[str], private: list[str],
+                       headline: list[str],
+                       args: argparse.Namespace) -> list[str]:
+    """The heading and notes of the alsocheck section.
+
+    Public paths are printed (they are public, and resolve-models only
+    passes paths it found in the public corpus); private models appear
+    by code only.
+    """
+    named = ([f'`{c}` (private)' for c in private]
+             + [f'`{p}` (public)' for p in public])
+    lines = ['### alsocheck', '',
+             'Models this PR asked CI to check: ' + ', '.join(named) + '.',
+             '']
+    notes = []
+    if public and args.external_pr == 'true':
+        notes.append(
+            'Public: regression ran; **no visual diff** - a PR from a fork '
+            'cannot publish images or comment with its read-only token.')
+    elif public:
+        notes.append(
+            'Public: rendered before/after unconditionally in the visual '
+            'diff comment, digest change or not.')
+    if private and args.alsocheck_private_skipped:
+        why = ('a pull request from a fork has no access to the private '
+               'corpus' if args.alsocheck_private_skipped == 'fork' else
+               'this run has no `TEST_MODELS_PRIVATE_TOKEN` (a Dependabot '
+               'PR, say)')
+        notes.append(
+            f'Private: **skipped** - {why}, so ' + ', '.join(
+                f'`{c}`' for c in private) + ' did not run. A maintainer can '
+            'run them with a manual dispatch (`alsocheck` input).')
+    elif private:
+        in_headline = [c for c in private if c in headline]
+        if in_headline and args.private_scope == 'all':
+            notes.append(
+                'Private: ' + ', '.join(f'`{c}`' for c in in_headline)
+                + ' also ran as part of the full headline set below.')
+        if args.private_render == 'true':
+            notes.append(
+                'Private renders: `visual-diff-private` pushes them to '
+                '`bldrs-ai/test-models-private` (branch `visual-diff-assets`) '
+                'and links them by code in its own comment; the links open '
+                'only for people with access to that repo. Nothing private '
+                'is published here. That job needs '
+                'the `TEST_MODELS_PRIVATE_TOKEN` repo secret with write '
+                'access there, and its '
+                'comment says so if it is missing.')
+    lines += [f'- {n}' for n in notes] + ([''] if notes else [])
+    return lines
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument('--artifacts', required=True)
@@ -65,6 +134,29 @@ def main() -> None:
         '--private-reason', default='no-token',
         choices=('no-token', 'not-on-prs'),
         help='why the private headline shards did not run, when they did not')
+    parser.add_argument(
+        '--private-scope', default='', choices=('', 'all', 'selected', 'none'),
+        help='resolve-models: all seven headline shards, the alsocheck '
+             'selection, or none. Empty: infer from --private-sha (the '
+             'behaviour before alsocheck).')
+    parser.add_argument('--private-selected', default='',
+                        help='space-separated headline codes alsocheck '
+                             'selected (scope "selected")')
+    parser.add_argument('--alsocheck-public', default='[]',
+                        help='JSON list of public paths alsocheck named')
+    parser.add_argument('--alsocheck-private', default='[]',
+                        help='JSON list of private codes alsocheck named '
+                             '(as requested, before any fork skip)')
+    parser.add_argument('--alsocheck-private-skipped', default='',
+                        choices=('', 'fork', 'no-token'))
+    parser.add_argument(
+        '--private-render', default='none',
+        choices=('none', 'true', 'skipped'),
+        help='what happens to private alsocheck renders this run')
+    parser.add_argument(
+        '--external-pr', default='false', choices=('true', 'false'),
+        help='a PR whose head is not this repo: no visual diff, since its '
+             'token cannot publish images or comment')
     args = parser.parse_args()
 
     root = Path(args.artifacts)
@@ -76,7 +168,9 @@ def main() -> None:
                       f'{args.public_sha}`')
     if args.private_sha:
         header.append(f'**Private models:** `bldrs-ai/test-models-private@'
-                      f'{args.private_sha}`')
+                      f'{args.private_sha}`'
+                      + (' (alsocheck selection only)'
+                         if args.private_scope == 'selected' else ''))
     elif args.private_reason == 'not-on-prs':
         header.append(
             '**Private models:** not run on pull requests. The seven '
@@ -97,7 +191,12 @@ def main() -> None:
         '(`rc-*` tag, see `rc-regression.yml`).',
         '',
     ]
-    if args.visual_diff_count != '0':
+    if args.visual_diff_count != '0' and args.external_pr == 'true':
+        header += [f'**Visual diff:** {args.visual_diff_count} public '
+                   'model(s) changed digests, but `visual-diff` does not run '
+                   'for a PR from a fork: its read-only token cannot publish '
+                   'images or comment.', '']
+    elif args.visual_diff_count != '0':
         header += [f'**Visual diff:** {args.visual_diff_count} public '
                    'model(s) changed digests; see the `visual-diff` job.', '']
     if args.package:
@@ -105,27 +204,68 @@ def main() -> None:
                    + (f' — [this run\'s artifacts]({args.run_url})'
                       if args.run_url else ''), '']
 
-    # A private shard that did not run is the NORMAL case on a pull
-    # request (they are gated to merge/rc) and on a fork (no token).
+    also_public = _json_list(args.alsocheck_public)
+    also_private = _json_list(args.alsocheck_private)
+    selected = set(args.private_selected.split())
+    scope = args.private_scope or ('all' if args.private_sha else 'none')
+    headline = [shard for shard, corpus in shards if corpus == 'private']
+
+    # Which fragments this run must have. A private shard that did not
+    # run is the NORMAL case on a pull request (they are gated to
+    # merge/rc unless alsocheck names one) and on a fork (no token).
     # Reporting either as a failed shard would cry wolf on every PR, so
-    # it is accounted for separately.
-    private_skipped = not args.private_sha
+    # it is accounted for separately - and only a shard that was
+    # expected and is absent is "missing".
+    if scope == 'all':
+        expected_private = set(headline)
+    elif scope == 'selected':
+        expected_private = selected
+    else:
+        expected_private = set()
+
+    # alsocheck section: the headline shards it selected (only when the
+    # run is not running all seven anyway), then its own jobs.
+    also_ids = ([code for code in headline if code in selected]
+                if scope == 'selected' else [])
+    if also_public:
+        also_ids.append(ALSOCHECK_PUBLIC_ID)
+    # Any skip reason (a fork, or a same-repo PR without the read token,
+    # e.g. Dependabot) means no alsocheck-private job was created, so its
+    # absent fragment is the noted skip, not a shard that failed.
+    if [c for c in also_private if c not in headline] and \
+            not args.alsocheck_private_skipped:
+        also_ids.append(ALSOCHECK_PRIVATE_ID)
 
     body: list[str] = []
     missing: list[str] = []
     skipped: list[str] = []
-    for shard, corpus in shards:
+    also_body: list[str] = []
+    for shard in also_ids:
         text = fragment(root, shard)
         if text is None:
-            (skipped if corpus == 'private' and private_skipped
-             else missing).append(shard)
+            missing.append(shard)
+        else:
+            also_body += [text, '']
+    for shard, corpus in shards:
+        if shard in also_ids:
+            continue
+        text = fragment(root, shard)
+        if text is None:
+            if corpus == 'private' and shard not in expected_private:
+                skipped.append(shard)
+            else:
+                missing.append(shard)
             continue
         body += [text, '']
 
     if skipped:
-        why = ('not run on pull requests'
-               if args.private_reason == 'not-on-prs'
-               else 'no private-models token')
+        if scope == 'selected':
+            why = ('not selected - this run\'s alsocheck named only '
+                   + ', '.join(f'`{c}`' for c in sorted(selected)))
+        elif args.private_reason == 'not-on-prs':
+            why = 'not run on pull requests'
+        else:
+            why = 'no private-models token'
         header += [f'_Headline shards ({why}): '
                    + ', '.join(f'`{shard}`' for shard in skipped) + '._', '']
     if missing:
@@ -133,10 +273,18 @@ def main() -> None:
             '> [!WARNING]',
             '> No summary uploaded by: '
             + ', '.join(f'`{shard}`' for shard in missing)
-            + '. Those shards failed before they could report; read their '
-              'job logs.',
+            + '. Those shards were expected to run and failed before they '
+              'could report; read their job logs.',
             '',
         ]
+
+    if also_public or also_private:
+        section = _alsocheck_section(also_public, also_private, headline,
+                                     args)
+        # One element each, like a fragment: the per-fragment truncation
+        # budget below divides by the number of elements.
+        body = (['\n'.join(section).rstrip() + '\n', ''] + also_body
+                + (['### Fixed shards\n', ''] if body else []) + body)
 
     out = '\n'.join(header + body).rstrip() + '\n'
     if len(out) > MAX_BODY:
@@ -160,7 +308,9 @@ def main() -> None:
                + '\n\n_...truncated; full per-shard CSVs are in the '
                  '`regression-shard-*` run artifacts._\n')
     Path(args.out).write_text(out, encoding='utf-8')
-    print(f'{len(shards) - len(missing) - len(skipped)}/{len(shards)} shard '
+    total = len(shards) + len(
+        [i for i in also_ids if i in (ALSOCHECK_PUBLIC_ID, ALSOCHECK_PRIVATE_ID)])
+    print(f'{total - len(missing) - len(skipped)}/{total} shard '
           f'fragment(s), {len(skipped)} not run, {len(missing)} missing, '
           f'{len(out)} char(s) -> {args.out}')
     if github_output := os.environ.get('GITHUB_OUTPUT'):
