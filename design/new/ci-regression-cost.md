@@ -139,7 +139,7 @@ Precise event → jobs (all gates are per-job `if:` in the workflows):
 | pull_request | ✅ | ✅ | if digest changed | — | — | — |
 | push `main` | ✅ | ✅ | — | — | — | ✅ (npm) |
 | push `rc-*` tag | ✅ | ✅ | — | ✅ | ✅ | — |
-| workflow_dispatch | ✅ | ✅ | — | ✅ | ✅ | — |
+| workflow_dispatch | ✅ | ✅ | — | ✅ unless `run_perf` is off | ✅ | — |
 
 `auto-publish` is `push:main` only, so an `rc-*` tag never double-publishes.
 The `perf-three-*` jobs live in `build.yml` but gate on

@@ -74,17 +74,29 @@ on:
     # tagging never triggers this path.
     tags:
       - 'rc-*'
-  # Manual runs from any branch (Actions > CI > Run workflow) so the
-  # perf jobs — normally rc-tag only — can be exercised and debugged on a
-  # branch without cutting a tag. auto-publish stays push:main-only.
+  # Manual runs from any branch (Actions > CI > Run workflow), for two
+  # jobs that otherwise wait for an rc tag or a merge: benchmarking a
+  # branch with perf-three-* without cutting a tag (run_perf, on by
+  # default), and checking the private headline shards before a merge
+  # (run_private_shards, off by default). They are independent, so a
+  # private-shard check can skip perf by turning run_perf off.
+  # auto-publish stays push:main-only.
   workflow_dispatch:
     inputs:
+      run_perf:
+        description: >-
+          Run perf-three-public and perf-three-private once
+          run-ifc-regression passes (~40 paid runner-minutes;
+          perf-three-private clones the private corpus). On by default,
+          since benchmarking a branch is what a dispatch was for. Turn it
+          off for a private-shard check.
+        type: boolean
+        default: true
       run_private_shards:
         description: >-
           Also run the seven private headline shards (~2.6 GB of private
-          LFS, uncached). Off by default: a dispatch is normally for
-          debugging perf-three-* on a branch, which needs none of them.
-          Turn it on to exercise them before a merge.
+          LFS, uncached). Off by default. Turn it on to exercise them
+          before a merge, and usually turn run_perf off with it.
         type: boolean
         default: false
       alsocheck:
@@ -1837,20 +1849,22 @@ jobs:
   perf-three-public:
     needs: run-ifc-regression
     # Extended suite: runs on an `rc-*` release-candidate tag (a manual
-    # prod-blessing) or on-demand via workflow_dispatch — NOT on plain merges
-    # to main. build + run-ifc-regression (ungated) still run on the tag, so
-    # the candidate tarball this job benchmarks is produced; auto-publish is
+    # prod-blessing) or on-demand via workflow_dispatch with run_perf on
+    # (the default) — NOT on plain merges to main. build +
+    # run-ifc-regression (ungated) still run on the tag, so the candidate
+    # tarball this job benchmarks is produced; auto-publish is
     # main-branch-only and does not fire on a tag ref.
     #
     # !cancelled() and the run-ifc-regression result, for the reason on
     # visual-diff: without a status function the implicit success() spans
     # the whole dependency chain, so on a plain dispatch (run_private_shards
     # off, private shards `skipped`) this job was skipped too - on exactly
-    # the run the dispatch exists for.
+    # the run the dispatch exists for. The outer parentheses keep the rc-tag
+    # arm inside the guard; run_perf (#802) lets a dispatch opt out.
     if: >-
       !cancelled() && needs.run-ifc-regression.result == 'success' &&
       ((github.event_name == 'push' && startsWith(github.ref, 'refs/tags/rc-')) ||
-      github.event_name == 'workflow_dispatch')
+      (github.event_name == 'workflow_dispatch' && inputs.run_perf))
     runs-on: ubuntu-24.04-4vcpu-8gb-150gbssd
     # Full set locally takes ~10 min; H3 build + clone adds ~5-10 min. Cap at
     # 60 to bound runner-minute cost on a hung benchmark.
@@ -2170,15 +2184,16 @@ jobs:
   perf-three-private:
     needs: run-ifc-regression
     # Extended suite: runs on an `rc-*` release-candidate tag (a manual
-    # prod-blessing) or on-demand via workflow_dispatch — NOT on plain merges
-    # to main. build + run-ifc-regression (ungated) still run on the tag, so
-    # the candidate tarball this job benchmarks is produced; auto-publish is
+    # prod-blessing) or on-demand via workflow_dispatch with run_perf on
+    # (the default) — NOT on plain merges to main. build +
+    # run-ifc-regression (ungated) still run on the tag, so the candidate
+    # tarball this job benchmarks is produced; auto-publish is
     # main-branch-only and does not fire on a tag ref.
-    # Status functions as on perf-three-public.
+    # Status functions and run_perf as on perf-three-public.
     if: >-
       !cancelled() && needs.run-ifc-regression.result == 'success' &&
       ((github.event_name == 'push' && startsWith(github.ref, 'refs/tags/rc-')) ||
-      github.event_name == 'workflow_dispatch')
+      (github.event_name == 'workflow_dispatch' && inputs.run_perf))
     runs-on: ubuntu-24.04-4vcpu-8gb-150gbssd
     timeout-minutes: 60
     permissions:
