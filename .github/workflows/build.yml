@@ -1180,8 +1180,13 @@ jobs:
       # GITHUB_TOKEN is read-only whatever `permissions:` says, so the
       # comment would 403 and turn this required check red on every fork
       # PR. The report is in the job summary above instead.
+      # !cancelled() alone is not enough: when a superseding push cancels
+      # the run before this always() job starts, the job still runs, sees
+      # cancelled() false, and posted "shards failed before they could
+      # report" for shards that never started (#803, run 46051466997).
+      # Skipping whenever any needed job was cancelled covers that.
       - name: Comment on Pull Request with regression results
-        if: ${{ success() && !cancelled() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && hashFiles('regression_comment.md') != '' }}
+        if: ${{ success() && !cancelled() && !contains(needs.*.result, 'cancelled') && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && hashFiles('regression_comment.md') != '' }}
         uses: peter-evans/create-or-update-comment@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
